@@ -4,7 +4,7 @@ on:
   # Triggered by upstream repo via repository_dispatch
   repository_dispatch:
     types: [upstream-main-updated]
-  # Fallback: run on a schedule in case dispatch isn't configured
+  # Fallback: run on schedule in case dispatch isn't configured
   schedule:
     - cron: '0 */6 * * *'  # every 6 hours
   # Also run when fork's main is pushed directly
@@ -16,25 +16,15 @@ permissions:
   contents: write
   issues: write
 
-concurrency:
-  group: fork-sync
-  cancel-in-progress: true
-
 jobs:
   sync-and-merge:
-    if: github.repository != 'qwibitai/nanoclaw'
+    if: github.repository_owner != 'qwibitai'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -93,9 +83,6 @@ jobs:
       - name: Merge main into skill branches
         id: merge
         run: |
-          # Re-fetch to pick up any changes pushed since job start
-          git fetch origin
-
           FAILED=""
           SUCCEEDED=""
 
