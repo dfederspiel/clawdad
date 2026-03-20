@@ -26,6 +26,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { OneCLI } from '@onecli-sh/sdk';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -270,6 +271,41 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Mount MCP OAuth credentials (read-only) so the agent-runner can
+  // configure HTTP MCP servers (Figma, Atlassian, etc.) with Bearer tokens.
+  const mcpCredsPath = path.join(
+    process.env.HOME || '',
+    '.claude',
+    '.credentials.json',
+  );
+  if (fs.existsSync(mcpCredsPath)) {
+    mounts.push({
+      hostPath: mcpCredsPath,
+      containerPath: '/workspace/mcp-credentials.json',
+      readonly: true,
+    });
+  }
+
+  // Mount stdio MCP server config (token-based auth, no expiry)
+  const mcpStdioPath = path.join(process.cwd(), 'container', 'mcp.json');
+  if (fs.existsSync(mcpStdioPath)) {
+    mounts.push({
+      hostPath: mcpStdioPath,
+      containerPath: '/workspace/mcp.json',
+      readonly: true,
+    });
+  }
+
+  // Mount shared scripts (API wrappers, utilities)
+  const scriptsPath = path.join(process.cwd(), 'container', 'scripts');
+  if (fs.existsSync(scriptsPath)) {
+    mounts.push({
+      hostPath: scriptsPath,
+      containerPath: '/workspace/scripts',
+      readonly: true,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -313,6 +349,22 @@ async function buildContainerArgs(
       { containerName },
       'OneCLI gateway not reachable — container will have no credentials',
     );
+  }
+
+  // Pass through extra environment variables from .env to the container.
+  // These are non-secret service keys the agent needs for API calls (Harness, GitLab, etc.).
+  const PASSTHROUGH_ENV_PREFIXES = ['HARNESS_', 'GITLAB_', 'GITHUB_', 'BLACKDUCK_', 'LAUNCHDARKLY_', 'FIGMA_', 'ATLASSIAN_'];
+  const envVars = readEnvFile(PASSTHROUGH_ENV_PREFIXES.flatMap(prefix => {
+    // Read all keys from .env that match the prefixes
+    try {
+      const envContent = fs.readFileSync(path.join(process.cwd(), '.env'), 'utf-8');
+      return envContent.split('\n')
+        .filter(line => line.startsWith(prefix))
+        .map(line => line.split('=')[0]);
+    } catch { return []; }
+  }));
+  for (const [key, value] of Object.entries(envVars)) {
+    if (value) args.push('-e', `${key}=${value}`);
   }
 
   // Runtime-specific args for host gateway resolution

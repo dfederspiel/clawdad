@@ -373,17 +373,23 @@ async function runAgent(
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
-    }
-
     if (output.status === 'error') {
+      // If the error is a missing session, clear the stale session so the next
+      // attempt starts fresh instead of retrying the same broken session forever.
+      if (output.error?.includes('No conversation found with session ID')) {
+        logger.warn({ group: group.name }, 'Clearing stale session after "not found" error');
+        delete sessions[group.folder];
+      }
       logger.error(
         { group: group.name, error: output.error },
         'Container agent error',
       );
       return 'error';
+    }
+
+    if (output.newSessionId) {
+      sessions[group.folder] = output.newSessionId;
+      setSession(group.folder, output.newSessionId);
     }
 
     return 'success';
