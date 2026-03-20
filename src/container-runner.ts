@@ -353,16 +353,32 @@ async function buildContainerArgs(
 
   // Pass through extra environment variables from .env to the container.
   // These are non-secret service keys the agent needs for API calls (Harness, GitLab, etc.).
-  const PASSTHROUGH_ENV_PREFIXES = ['HARNESS_', 'GITLAB_', 'GITHUB_', 'BLACKDUCK_', 'LAUNCHDARKLY_', 'FIGMA_', 'ATLASSIAN_'];
-  const envVars = readEnvFile(PASSTHROUGH_ENV_PREFIXES.flatMap(prefix => {
-    // Read all keys from .env that match the prefixes
-    try {
-      const envContent = fs.readFileSync(path.join(process.cwd(), '.env'), 'utf-8');
-      return envContent.split('\n')
-        .filter(line => line.startsWith(prefix))
-        .map(line => line.split('=')[0]);
-    } catch { return []; }
-  }));
+  const PASSTHROUGH_ENV_PREFIXES = [
+    'HARNESS_',
+    'GITLAB_',
+    'GITHUB_',
+    'BLACKDUCK_',
+    'LAUNCHDARKLY_',
+    'FIGMA_',
+    'ATLASSIAN_',
+  ];
+  const envVars = readEnvFile(
+    PASSTHROUGH_ENV_PREFIXES.flatMap((prefix) => {
+      // Read all keys from .env that match the prefixes
+      try {
+        const envContent = fs.readFileSync(
+          path.join(process.cwd(), '.env'),
+          'utf-8',
+        );
+        return envContent
+          .split('\n')
+          .filter((line) => line.startsWith(prefix))
+          .map((line) => line.split('=')[0]);
+      } catch {
+        return [];
+      }
+    }),
+  );
   for (const [key, value] of Object.entries(envVars)) {
     if (value) args.push('-e', `${key}=${value}`);
   }

@@ -9,14 +9,20 @@ store/
 data/
 logs/
 
-# Groups - only track base structure and specific CLAUDE.md files
+# Groups - track CLAUDE.md for configured agents, ignore runtime data
 groups/*
 !groups/main/
 !groups/global/
+!groups/discord_deployments/
+!groups/discord_updates/
 groups/main/*
 groups/global/*
+groups/discord_deployments/*
+groups/discord_updates/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
+!groups/discord_deployments/CLAUDE.md
+!groups/discord_updates/CLAUDE.md
 
 # Secrets
 *.keys.json

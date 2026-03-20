@@ -177,9 +177,11 @@ export class DiscordChannel implements Channel {
         // Only handle @Blog if the blog mount path exists on this machine.
         // When multiple NanoClaw instances share the same Discord bot,
         // this ensures only the machine with the blog repo processes it.
-        const blogMountPath = (
-          process.env.HOME || os.homedir()
-        ).replace(/~/, process.env.HOME || os.homedir()) + '/code/procedural';
+        const blogMountPath =
+          (process.env.HOME || os.homedir()).replace(
+            /~/,
+            process.env.HOME || os.homedir(),
+          ) + '/code/procedural';
         if (!fs.existsSync(blogMountPath)) {
           logger.info(
             { blogMountPath },
