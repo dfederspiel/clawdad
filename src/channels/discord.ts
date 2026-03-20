@@ -1,3 +1,6 @@
+import fs from 'fs';
+import os from 'os';
+
 import {
   Client,
   Collection,
@@ -171,6 +174,20 @@ export class DiscordChannel implements Channel {
       const isBlogTrigger = BLOG_TRIGGER.test(content.trim());
 
       if (isBlogTrigger) {
+        // Only handle @Blog if the blog mount path exists on this machine.
+        // When multiple NanoClaw instances share the same Discord bot,
+        // this ensures only the machine with the blog repo processes it.
+        const blogMountPath = (
+          process.env.HOME || os.homedir()
+        ).replace(/~/, process.env.HOME || os.homedir()) + '/code/procedural';
+        if (!fs.existsSync(blogMountPath)) {
+          logger.info(
+            { blogMountPath },
+            '@Blog trigger ignored — blog repo not present on this machine',
+          );
+          return;
+        }
+
         const blogJid = `dc-blog:${channelId}`;
 
         // Auto-register blog virtual JID if not already registered
@@ -190,6 +207,15 @@ export class DiscordChannel implements Channel {
           });
         }
 
+        // Store chat metadata FIRST — messages have a FK on chats(jid)
+        this.opts.onChatMetadata(
+          blogJid,
+          timestamp,
+          chatName,
+          'discord',
+          message.guild !== null,
+        );
+
         // Fetch thread/channel context and inject as stored messages
         const contextMessages = await this.fetchChannelContext(message);
         for (const msg of contextMessages) {
@@ -208,15 +234,6 @@ export class DiscordChannel implements Channel {
           timestamp,
           is_from_me: false,
         });
-
-        // Store chat metadata for the blog virtual JID
-        this.opts.onChatMetadata(
-          blogJid,
-          timestamp,
-          chatName,
-          'discord',
-          message.guild !== null,
-        );
 
         logger.info(
           { blogJid, chatName, contextCount: contextMessages.length },
