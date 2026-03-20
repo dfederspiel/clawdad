@@ -45,9 +45,7 @@ export class DiscordChannel implements Channel {
    * Starts with 15 messages; if the conversation looks incomplete,
    * fetches up to 50.
    */
-  private async fetchChannelContext(
-    message: Message,
-  ): Promise<NewMessage[]> {
+  private async fetchChannelContext(message: Message): Promise<NewMessage[]> {
     const chatJid = `dc:${message.channelId}`;
 
     let fetched: Collection<string, Message>;
@@ -103,9 +101,7 @@ export class DiscordChannel implements Channel {
         chat_jid: chatJid,
         sender: m.author.id,
         sender_name:
-          m.member?.displayName ||
-          m.author.displayName ||
-          m.author.username,
+          m.member?.displayName || m.author.displayName || m.author.username,
         content: m.content,
         timestamp: m.createdAt.toISOString(),
         is_from_me: false,
@@ -214,7 +210,13 @@ export class DiscordChannel implements Channel {
         });
 
         // Store chat metadata for the blog virtual JID
-        this.opts.onChatMetadata(blogJid, timestamp, chatName, 'discord', message.guild !== null);
+        this.opts.onChatMetadata(
+          blogJid,
+          timestamp,
+          chatName,
+          'discord',
+          message.guild !== null,
+        );
 
         logger.info(
           { blogJid, chatName, contextCount: contextMessages.length },
