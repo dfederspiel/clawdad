@@ -24,9 +24,10 @@ groups/discord_updates/*
 !groups/discord_deployments/CLAUDE.md
 !groups/discord_updates/CLAUDE.md
 
-# Secrets
+# Secrets & machine-specific config
 *.keys.json
 .env
+.mcp.json
 
 # Temp files
 .tmp-*
