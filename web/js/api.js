@@ -1,0 +1,64 @@
+// API client + SSE
+
+async function fetchJson(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// SSE
+let eventSource = null;
+const listeners = new Map();
+
+export function connectSSE(clientId) {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource(`/api/events?clientId=${clientId}`);
+  eventSource.onerror = () => console.warn('SSE reconnecting...');
+
+  for (const [event, cbs] of listeners) {
+    eventSource.addEventListener(event, (e) => {
+      const data = JSON.parse(e.data);
+      for (const cb of cbs) cb(data);
+    });
+  }
+}
+
+export function onSSE(event, cb) {
+  if (!listeners.has(event)) listeners.set(event, new Set());
+  listeners.get(event).add(cb);
+  if (eventSource) {
+    eventSource.addEventListener(event, (e) => cb(JSON.parse(e.data)));
+  }
+}
+
+// API methods
+export const getGroups = () => fetchJson('/api/groups');
+
+export const createGroup = (name, folder) =>
+  fetchJson('/api/groups', { method: 'POST', body: { name, folder } });
+
+export const getMessages = (jid, since) =>
+  fetchJson(`/api/messages/${encodeURIComponent(jid)}${since ? `?since=${since}` : ''}`);
+
+export const sendMessage = (jid, content, sender) =>
+  fetchJson('/api/send', { method: 'POST', body: { jid, content, sender } });
+
+// Status & telemetry
+export const getStatus = () => fetchJson('/api/status');
+export const getTasks = () => fetchJson('/api/tasks');
+export const getTaskLogs = (taskId, limit = 20) =>
+  fetchJson(`/api/tasks/${encodeURIComponent(taskId)}/logs?limit=${limit}`);
+export const pauseTask = (taskId) =>
+  fetchJson(`/api/tasks/${encodeURIComponent(taskId)}/pause`, { method: 'POST' });
+export const resumeTask = (taskId) =>
+  fetchJson(`/api/tasks/${encodeURIComponent(taskId)}/resume`, { method: 'POST' });
+export const cancelTask = (taskId) =>
+  fetchJson(`/api/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+export const getTelemetry = () => fetchJson('/api/telemetry');

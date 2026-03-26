@@ -5,6 +5,9 @@
 
 // gmail
 
+// web (local UI)
+import './web.js';
+
 // slack
 
 // telegram

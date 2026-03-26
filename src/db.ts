@@ -355,24 +355,30 @@ export function getMessagesSince(
   sinceTimestamp: string,
   botPrefix: string,
   limit: number = 200,
+  includeBotMessages: boolean = false,
 ): NewMessage[] {
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
   // Subquery takes the N most recent, outer query re-sorts chronologically.
+  // When includeBotMessages is true (e.g. web channel history), return all messages.
+  const botFilter = includeBotMessages
+    ? ''
+    : 'AND is_bot_message = 0 AND content NOT LIKE ?';
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
-        AND is_bot_message = 0 AND content NOT LIKE ?
+        ${botFilter}
         AND content != '' AND content IS NOT NULL
       ORDER BY timestamp DESC
       LIMIT ?
     ) ORDER BY timestamp
   `;
-  return db
-    .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
+  const params = includeBotMessages
+    ? [chatJid, sinceTimestamp, limit]
+    : [chatJid, sinceTimestamp, `${botPrefix}:%`, limit];
+  return db.prepare(sql).all(...params) as NewMessage[];
 }
 
 export function createTask(
@@ -518,6 +524,118 @@ export function logTaskRun(log: TaskRunLog): void {
   );
 }
 
+// --- Task run logs ---
+
+export function getTaskRunLogs(
+  taskId: string,
+  limit: number = 20,
+): Array<{
+  task_id: string;
+  run_at: string;
+  duration_ms: number;
+  status: string;
+  result: string;
+  error: string;
+}> {
+  return db
+    .prepare(
+      'SELECT * FROM task_run_logs WHERE task_id = ? ORDER BY run_at DESC LIMIT ?',
+    )
+    .all(taskId, limit) as Array<{
+    task_id: string;
+    run_at: string;
+    duration_ms: number;
+    status: string;
+    result: string;
+    error: string;
+  }>;
+}
+
+// --- Telemetry ---
+
+export function getTelemetryStats(): {
+  messages24h: number;
+  messages7d: number;
+  messagesPerGroup: Array<{ chat_jid: string; count: number }>;
+  taskCounts: { active: number; paused: number; completed: number };
+  taskSuccessRate: number;
+  taskAvgDurationMs: number;
+  totalTaskRuns: number;
+} {
+  const now = new Date();
+  const h24 = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const d7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const messages24h =
+    (
+      db
+        .prepare(
+          'SELECT COUNT(*) as c FROM messages WHERE timestamp > ? AND is_bot_message = 0',
+        )
+        .get(h24) as { c: number }
+    ).c;
+
+  const messages7d =
+    (
+      db
+        .prepare(
+          'SELECT COUNT(*) as c FROM messages WHERE timestamp > ? AND is_bot_message = 0',
+        )
+        .get(d7) as { c: number }
+    ).c;
+
+  const messagesPerGroup = db
+    .prepare(
+      `SELECT chat_jid, COUNT(*) as count FROM messages
+       WHERE timestamp > ? AND is_bot_message = 0
+       GROUP BY chat_jid ORDER BY count DESC LIMIT 20`,
+    )
+    .all(h24) as Array<{ chat_jid: string; count: number }>;
+
+  const taskCounts = db
+    .prepare(
+      `SELECT
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+        SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END) as paused,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+       FROM scheduled_tasks`,
+    )
+    .get() as { active: number; paused: number; completed: number } || {
+    active: 0,
+    paused: 0,
+    completed: 0,
+  };
+
+  const taskStats = db
+    .prepare(
+      `SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successes,
+        AVG(duration_ms) as avg_duration
+       FROM task_run_logs WHERE run_at > ?`,
+    )
+    .get(d7) as {
+    total: number;
+    successes: number;
+    avg_duration: number | null;
+  } || { total: 0, successes: 0, avg_duration: null };
+
+  return {
+    messages24h,
+    messages7d,
+    messagesPerGroup,
+    taskCounts: {
+      active: taskCounts.active || 0,
+      paused: taskCounts.paused || 0,
+      completed: taskCounts.completed || 0,
+    },
+    taskSuccessRate:
+      taskStats.total > 0 ? taskStats.successes / taskStats.total : 1,
+    taskAvgDurationMs: taskStats.avg_duration || 0,
+    totalTaskRuns: taskStats.total || 0,
+  };
+}
+
 // --- Router state accessors ---
 
 export function getRouterState(key: string): string | undefined {
@@ -546,6 +664,10 @@ export function setSession(groupFolder: string, sessionId: string): void {
   db.prepare(
     'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
   ).run(groupFolder, sessionId);
+}
+
+export function deleteSession(groupFolder: string): void {
+  db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
 }
 
 export function getAllSessions(): Record<string, string> {
