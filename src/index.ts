@@ -39,6 +39,7 @@ import {
   initDatabase,
   setRegisteredGroup,
   setRouterState,
+  deleteSession,
   setSession,
   storeChatMetadata,
   storeMessage,
@@ -373,17 +374,27 @@ async function runAgent(
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
-    }
-
     if (output.status === 'error') {
+      // If the error is a missing session, clear the stale session so the next
+      // attempt starts fresh instead of retrying the same broken session forever.
+      if (output.error?.includes('No conversation found with session ID')) {
+        logger.warn(
+          { group: group.name },
+          'Clearing stale session after "not found" error',
+        );
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+      }
       logger.error(
         { group: group.name, error: output.error },
         'Container agent error',
       );
       return 'error';
+    }
+
+    if (output.newSessionId) {
+      sessions[group.folder] = output.newSessionId;
+      setSession(group.folder, output.newSessionId);
     }
 
     return 'success';
@@ -586,6 +597,9 @@ async function main(): Promise<void> {
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
+    onRegisterGroup: (jid: string, group: RegisteredGroup) => {
+      registerGroup(jid, group);
+    },
     onMessage: (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
@@ -622,6 +636,10 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    getStatus: () => ({
+      containers: queue.getSnapshot(),
+      uptime: process.uptime(),
+    }),
   };
 
   // Create and connect all registered channels.
