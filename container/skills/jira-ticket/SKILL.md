@@ -19,11 +19,16 @@ description: Create and manage Jira tickets in the POLUIG (Central UI Engineerin
 ```
 
 ### Search issues (JQL):
+
+**NOTE**: `/rest/api/3/search` is deprecated (returns 410). Use the new POST endpoint:
+
 ```bash
-/workspace/scripts/atlassian-api.sh GET "/rest/api/3/search" \
-  --data-urlencode "jql=YOUR_JQL_HERE" \
-  --data-urlencode "fields=summary,status,assignee,priority" \
-  --data-urlencode "maxResults=20"
+/workspace/scripts/atlassian-api.sh POST "/rest/api/3/search/jql" \
+  -d '{
+    "jql": "YOUR_JQL_HERE",
+    "fields": ["summary","status","assignee","priority"],
+    "maxResults": 20
+  }'
 ```
 
 ### Get issue:
@@ -157,8 +162,7 @@ Sprint format: `"customfield_10020": 25144` — plain integer. Using `{"id": 251
 
 ```bash
 # Find active sprint via JQL
-curl -s -G "https://blackduck.atlassian.net/rest/api/3/search" \
-  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" \
+/workspace/scripts/atlassian-api.sh GET "/rest/api/3/search" \
   --data-urlencode "jql=project = POLUIG AND sprint in openSprints()" \
   --data-urlencode "fields=customfield_10020" \
   --data-urlencode "maxResults=1" | python3 -c "
@@ -263,9 +267,8 @@ For headings, bullets, code blocks, see: https://developer.atlassian.com/cloud/j
 ## Complete Create Example
 
 ```bash
-curl -s -X POST "https://blackduck.atlassian.net/rest/api/3/issue" \
+/workspace/scripts/atlassian-api.sh POST "/rest/api/3/issue" \
   -H "Content-Type: application/json" \
-  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" \
   -d '{
   "fields": {
     "project": {"key": "POLUIG"},

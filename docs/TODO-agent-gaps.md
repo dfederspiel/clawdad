@@ -11,6 +11,9 @@ Captured 2026-03-20. Review and update as items are completed.
 - [x] **Black Duck version accuracy** — always search for exact version, never fall back to different version
 - [x] **Stale data rule** — always re-query live APIs when asked for status
 - [x] **Connectivity failure alerting** — consecutive failure counter with escalation rules (stop after 3+, report to user)
+- [x] **Webb deployment monitoring API** — discovered and documented `/api/runs`, `/api/tests`, `/api/products` endpoints with full field reference
+- [x] **Proactive BD Hub vuln check** — agent checks Black Duck Hub immediately after `new_pop_blackduck` completes, before Harness starts
+- [x] **Proactive Webb test monitoring** — agent polls Webb during Harness cdev stage for early failure detection (~5-10 min earlier than waiting for Harness)
 - [ ] **Migrate `/deploy-status` and `/check-flag` to use `api.sh` wrapper** — both skills still use raw `curl`. Errors from these won't appear in `/api-errors` logs.
 - [ ] **Black Duck vulnerability remediation APIs** — learn the BD API for marking vulns as "Known not affected" programmatically. Currently manual. User feedback: "The APIs should allow us to collect this information as well."
 - [ ] **Kong dev portal GitHub source details** — versioning chain for Kong is less documented than polaris-ui. Needed for accurate `/version-check` verdicts.

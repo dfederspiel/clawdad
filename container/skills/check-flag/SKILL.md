@@ -16,8 +16,9 @@ Check the state of a feature flag across environments. Deterministic — always 
 
 ```bash
 FLAG_KEY="$1"
-curl -sf -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" \
-  "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen/${FLAG_KEY}" > /tmp/flag.json
+/workspace/scripts/api.sh launchdarkly GET \
+  "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen/${FLAG_KEY}" \
+  -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" > /tmp/flag.json
 
 if [ $? -ne 0 ]; then
   echo "ERROR: Flag '${FLAG_KEY}' not found in polaris-nextgen"
@@ -118,8 +119,9 @@ python3 /tmp/check_flag.py "$2" 2>/dev/null
 Post the output directly. If the flag was not found, search for similar flags:
 
 ```bash
-curl -sf -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" \
-  "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen?filter=query%20equals%20%22${FLAG_KEY}%22&limit=5" | \
+/workspace/scripts/api.sh launchdarkly GET \
+  "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen?filter=query%20equals%20%22${FLAG_KEY}%22&limit=5" \
+  -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" | \
   python3 -c "
 import sys, json
 data = json.load(sys.stdin)

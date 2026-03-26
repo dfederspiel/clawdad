@@ -39,6 +39,7 @@ import {
   initDatabase,
   setRegisteredGroup,
   setRouterState,
+  deleteSession,
   setSession,
   storeChatMetadata,
   storeMessage,
@@ -382,6 +383,7 @@ async function runAgent(
           'Clearing stale session after "not found" error',
         );
         delete sessions[group.folder];
+        deleteSession(group.folder);
       }
       logger.error(
         { group: group.name, error: output.error },
@@ -634,6 +636,10 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    getStatus: () => ({
+      containers: queue.getSnapshot(),
+      uptime: process.uptime(),
+    }),
   };
 
   // Create and connect all registered channels.

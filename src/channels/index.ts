@@ -7,6 +7,9 @@ import './discord.js';
 // gmail
 import './gmail.js';
 
+// web (local UI)
+import './web.js';
+
 // slack
 
 // telegram

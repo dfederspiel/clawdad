@@ -37,8 +37,8 @@ if [ -z "$SERVICE" ] || [ "$SERVICE" = "kong" ]; then
   echo "## Kong Dev Portal"
   echo ""
   echo "### GitLab Tags"
-  curl -sf -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-    "$GITLAB_URL/api/v4/projects/7087/repository/tags?per_page=3" | \
+  /workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/7087/repository/tags?per_page=3" \
+    -H "PRIVATE-TOKEN: $GITLAB_TOKEN" | \
     python3 -c "
 import sys, json
 tags = json.load(sys.stdin)
@@ -56,8 +56,8 @@ fi
 ```bash
 if [ -z "$SERVICE" ] || [ "$SERVICE" = "polaris-ui" ]; then
   echo "### GitLab Pipeline (polaris-ui, project 9634)"
-  curl -sf -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-    "$GITLAB_URL/api/v4/projects/9634/pipelines?per_page=3" | \
+  /workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/9634/pipelines?per_page=3" \
+    -H "PRIVATE-TOKEN: $GITLAB_TOKEN" | \
     python3 -c "
 import sys, json
 pipelines = json.load(sys.stdin)
@@ -70,8 +70,8 @@ fi
 
 if [ -z "$SERVICE" ] || [ "$SERVICE" = "kong" ]; then
   echo "### GitLab Pipeline (kong-dev-portal, project 7087)"
-  curl -sf -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-    "$GITLAB_URL/api/v4/projects/7087/pipelines?per_page=3" | \
+  /workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/7087/pipelines?per_page=3" \
+    -H "PRIVATE-TOKEN: $GITLAB_TOKEN" | \
     python3 -c "
 import sys, json
 pipelines = json.load(sys.stdin)
@@ -88,9 +88,10 @@ fi
 ```bash
 if [ -z "$SERVICE" ] || [ "$SERVICE" = "polaris-ui" ]; then
   echo "### Harness Executions (polaris-ui)"
-  curl -sf -H "x-api-key: $HARNESS_API_KEY" \
-    -H "Content-Type: application/json" \
+  /workspace/scripts/api.sh harness POST \
     "https://app.harness.io/pipeline/api/pipelines/execution/v2/summary?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&page=0&size=5" \
+    -H "x-api-key: $HARNESS_API_KEY" \
+    -H "Content-Type: application/json" \
     -d '{"filterType":"PipelineExecution","pipelineIdentifiers":["imDomainMainApp","devCentralMainApp","productionAltairMainApp"]}' | \
     python3 -c "
 import sys, json
@@ -114,9 +115,10 @@ fi
 
 if [ -z "$SERVICE" ] || [ "$SERVICE" = "kong" ]; then
   echo "### Harness Executions (kong-dev-portal)"
-  curl -sf -H "x-api-key: $HARNESS_API_KEY" \
-    -H "Content-Type: application/json" \
+  /workspace/scripts/api.sh harness POST \
     "https://app.harness.io/pipeline/api/pipelines/execution/v2/summary?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&page=0&size=5" \
+    -H "x-api-key: $HARNESS_API_KEY" \
+    -H "Content-Type: application/json" \
     -d '{"filterType":"PipelineExecution","pipelineIdentifiers":["productionaltairkongdevportallatest","devCentralKongDevPortal"]}' | \
     python3 -c "
 import sys, json
@@ -142,68 +144,89 @@ fi
 ## Step 4: Black Duck — Security Gate
 
 ```bash
-BEARER=$(curl -sf -X POST "$BLACKDUCK_URL/api/tokens/authenticate" \
+BEARER=$(/workspace/scripts/api.sh blackduck POST "$BLACKDUCK_URL/api/tokens/authenticate" \
   -H "Authorization: token $BLACKDUCK_API_TOKEN" \
   -H "Accept: application/vnd.blackducksoftware.user-4+json" | \
   python3 -c "import sys,json; print(json.load(sys.stdin)['bearerToken'])")
 
 if [ -z "$SERVICE" ] || [ "$SERVICE" = "polaris-ui" ]; then
   echo "### Black Duck (polaris-ui)"
-  curl -sf "$BLACKDUCK_URL/api/projects/ae23af31-0d1f-4da9-82a9-e7182933a083/versions?limit=1&sort=releasedon%20desc" \
+  VERSION_JSON=$(/workspace/scripts/api.sh blackduck GET \
+    "$BLACKDUCK_URL/api/projects/ae23af31-0d1f-4da9-82a9-e7182933a083/versions?limit=1&sort=releasedon%20desc" \
     -H "Authorization: Bearer $BEARER" \
-    -H "Accept: application/vnd.blackducksoftware.project-detail-5+json" | \
-    python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for v in data.get('items', []):
-    name = v.get('versionName', '?')
-    href = v.get('_meta', {}).get('href', '')
-    print(f'  Latest: {name}')
-    # Fetch policy status
-    import urllib.request
-    req = urllib.request.Request(href + '/policy-status',
-        headers={'Authorization': 'Bearer $BEARER',
-                 'Accept': 'application/vnd.blackducksoftware.bill-of-materials-6+json'})
-    try:
-        resp = urllib.request.urlopen(req)
-        ps = json.loads(resp.read())
-        status = ps.get('overallStatus', '?')
-        emoji = '✅' if status == 'NOT_IN_VIOLATION' else '🚫'
-        print(f'  Policy: {emoji} {status}')
-    except Exception as e:
-        print(f'  Policy: could not fetch ({e})')
-"
+    -H "Accept: application/vnd.blackducksoftware.project-detail-5+json")
+  VERSION_HREF=$(echo "$VERSION_JSON" | python3 -c "import sys,json; v=json.load(sys.stdin)['items'][0]; print(v['versionName']); print(v['_meta']['href'])" 2>/dev/null)
+  VERSION_NAME=$(echo "$VERSION_HREF" | head -1)
+  HREF=$(echo "$VERSION_HREF" | tail -1)
+  echo "  Latest: $VERSION_NAME"
+  POLICY=$(/workspace/scripts/api.sh blackduck GET "${HREF}/policy-status" \
+    -H "Authorization: Bearer $BEARER" \
+    -H "Accept: application/vnd.blackducksoftware.bill-of-materials-6+json" 2>/dev/null) && \
+    echo "$POLICY" | python3 -c "
+import sys,json
+ps=json.load(sys.stdin)
+status=ps.get('overallStatus','?')
+emoji='✅' if status=='NOT_IN_VIOLATION' else '🚫'
+print(f'  Policy: {emoji} {status}')
+" || echo "  Policy: could not fetch"
   echo ""
 fi
 
 if [ -z "$SERVICE" ] || [ "$SERVICE" = "kong" ]; then
   echo "### Black Duck (kong-dev-portal)"
-  curl -sf "$BLACKDUCK_URL/api/projects/1d0ea9ea-491a-4014-b234-fbe43aa0fabc/versions?limit=1&sort=releasedon%20desc" \
+  VERSION_JSON=$(/workspace/scripts/api.sh blackduck GET \
+    "$BLACKDUCK_URL/api/projects/1d0ea9ea-491a-4014-b234-fbe43aa0fabc/versions?limit=1&sort=releasedon%20desc" \
     -H "Authorization: Bearer $BEARER" \
-    -H "Accept: application/vnd.blackducksoftware.project-detail-5+json" | \
-    python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for v in data.get('items', []):
-    name = v.get('versionName', '?')
-    href = v.get('_meta', {}).get('href', '')
-    print(f'  Latest: {name}')
-    import urllib.request
-    req = urllib.request.Request(href + '/policy-status',
-        headers={'Authorization': 'Bearer $BEARER',
-                 'Accept': 'application/vnd.blackducksoftware.bill-of-materials-6+json'})
-    try:
-        resp = urllib.request.urlopen(req)
-        ps = json.loads(resp.read())
-        status = ps.get('overallStatus', '?')
-        emoji = '✅' if status == 'NOT_IN_VIOLATION' else '🚫'
-        print(f'  Policy: {emoji} {status}')
-    except Exception as e:
-        print(f'  Policy: could not fetch ({e})')
-"
+    -H "Accept: application/vnd.blackducksoftware.project-detail-5+json")
+  VERSION_HREF=$(echo "$VERSION_JSON" | python3 -c "import sys,json; v=json.load(sys.stdin)['items'][0]; print(v['versionName']); print(v['_meta']['href'])" 2>/dev/null)
+  VERSION_NAME=$(echo "$VERSION_HREF" | head -1)
+  HREF=$(echo "$VERSION_HREF" | tail -1)
+  echo "  Latest: $VERSION_NAME"
+  POLICY=$(/workspace/scripts/api.sh blackduck GET "${HREF}/policy-status" \
+    -H "Authorization: Bearer $BEARER" \
+    -H "Accept: application/vnd.blackducksoftware.bill-of-materials-6+json" 2>/dev/null) && \
+    echo "$POLICY" | python3 -c "
+import sys,json
+ps=json.load(sys.stdin)
+status=ps.get('overallStatus','?')
+emoji='✅' if status=='NOT_IN_VIOLATION' else '🚫'
+print(f'  Policy: {emoji} {status}')
+" || echo "  Policy: could not fetch"
   echo ""
 fi
 ```
+
+## Step 5: Harness Gate Readiness (all-services.json)
+
+Check the GCS file that Harness actually reads for deployment gate decisions:
+
+```bash
+echo "### Harness Gate Readiness (all-services.json)"
+/workspace/scripts/api.sh harness GET \
+  "https://storage.googleapis.com/test-altair-dev/all-services.json" | \
+  python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+ts = data.get('generation_timestamp', '?')
+print(f'  Generated: {ts}')
+print()
+for svc in ['altair-main-app', 'kong-dev-portal']:
+    label = 'Polaris UI' if 'main-app' in svc else 'Kong Dev Portal'
+    versions = data.get('versions', {}).get(svc, [])
+    if not versions:
+        print(f'  {label}: no versions in gate file')
+        continue
+    for v in versions[:2]:
+        emoji = '✅' if v.get('deployable') else '🚫'
+        print(f'  {emoji} {label} {v[\"version\"]}: deployable={v[\"deployable\"]}')
+        if not v.get('deployable'):
+            msg = v.get('deployable_message', 'unknown')[:200]
+            print(f'     Reason: {msg}')
+print()
+"
+```
+
+This is the source of truth for Harness service-check gates — NOT BD Hub directly. If BD Hub shows green but this shows red, the dashboard update hasn't propagated yet (~10 min delay).
 
 ## Notes
 
@@ -211,3 +234,4 @@ fi
 - Kong dev portal's Harness pipeline auto-triggers on GitLab helm chart publish — do NOT manually trigger unless explicitly asked
 - When reporting, include clickable links to GitLab pipelines and Harness executions
 - If a pipeline is at an approval gate, mention it prominently
+- If `all-services.json` shows `deployable: false`, warn the user BEFORE triggering or approving — the gate WILL block

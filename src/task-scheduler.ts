@@ -222,22 +222,31 @@ async function runTask(
 
   const durationMs = Date.now() - startTime;
 
-  logTaskRun({
-    task_id: task.id,
-    run_at: new Date().toISOString(),
-    duration_ms: durationMs,
-    status: error ? 'error' : 'success',
-    result,
-    error,
-  });
+  try {
+    logTaskRun({
+      task_id: task.id,
+      run_at: new Date().toISOString(),
+      duration_ms: durationMs,
+      status: error ? 'error' : 'success',
+      result,
+      error,
+    });
+  } catch (err) {
+    // Task may have been deleted via IPC while running — FK constraint fails
+    logger.debug({ taskId: task.id, err }, 'Could not log task run (task may have been deleted)');
+  }
 
-  const nextRun = computeNextRun(task);
-  const resultSummary = error
-    ? `Error: ${error}`
-    : result
-      ? result.slice(0, 200)
-      : 'Completed';
-  updateTaskAfterRun(task.id, nextRun, resultSummary);
+  try {
+    const nextRun = computeNextRun(task);
+    const resultSummary = error
+      ? `Error: ${error}`
+      : result
+        ? result.slice(0, 200)
+        : 'Completed';
+    updateTaskAfterRun(task.id, nextRun, resultSummary);
+  } catch (err) {
+    logger.debug({ taskId: task.id, err }, 'Could not update task after run (task may have been deleted)');
+  }
 }
 
 let schedulerRunning = false;

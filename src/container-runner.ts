@@ -27,6 +27,28 @@ import {
 } from './container-runtime.js';
 import { OneCLI } from '@onecli-sh/sdk';
 import { readEnvFile } from './env.js';
+
+/** Append a structured event to a group's event-log.jsonl */
+function logContainerEvent(
+  groupFolder: string,
+  event: string,
+  fields: Record<string, unknown>,
+): void {
+  try {
+    const logPath = path.join(
+      resolveGroupFolderPath(groupFolder),
+      'event-log.jsonl',
+    );
+    const entry = JSON.stringify({
+      ts: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      event,
+      ...fields,
+    });
+    fs.appendFileSync(logPath, entry + '\n');
+  } catch {
+    // Best-effort — don't break container lifecycle on logging failure
+  }
+}
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -354,6 +376,7 @@ async function buildContainerArgs(
   // Pass through extra environment variables from .env to the container.
   // These are non-secret service keys the agent needs for API calls (Harness, GitLab, etc.).
   const PASSTHROUGH_ENV_PREFIXES = [
+    'ANTHROPIC_BASE_URL', // Custom API endpoint (not the secret — just the URL)
     'HARNESS_',
     'GITLAB_',
     'GITHUB_',
@@ -472,6 +495,12 @@ export async function runContainerAgent(
     });
 
     onProcess(container, containerName);
+
+    logContainerEvent(group.folder, 'container_started', {
+      group: group.name,
+      container_name: containerName,
+      is_main: input.isMain,
+    });
 
     let stdout = '';
     let stderr = '';
@@ -595,6 +624,24 @@ export async function runContainerAgent(
     container.on('close', (code) => {
       clearTimeout(timeout);
       const duration = Date.now() - startTime;
+
+      logContainerEvent(group.folder, 'container_completed', {
+        group: group.name,
+        container_name: containerName,
+        is_main: input.isMain,
+        exit_code: code,
+        duration_ms: duration,
+        timed_out: timedOut,
+        had_output: hadStreamingOutput,
+        outcome:
+          timedOut && hadStreamingOutput
+            ? 'idle_cleanup'
+            : timedOut
+              ? 'timeout'
+              : code === 0
+                ? 'success'
+                : 'error',
+      });
 
       if (timedOut) {
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
