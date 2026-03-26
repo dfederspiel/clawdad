@@ -41,8 +41,8 @@ export function onSSE(event, cb) {
 // API methods
 export const getGroups = () => fetchJson('/api/groups');
 
-export const createGroup = (name, folder) =>
-  fetchJson('/api/groups', { method: 'POST', body: { name, folder } });
+export const createGroup = (name, folder, template) =>
+  fetchJson('/api/groups', { method: 'POST', body: { name, folder, template } });
 
 export const getMessages = (jid, since) =>
   fetchJson(`/api/messages/${encodeURIComponent(jid)}${since ? `?since=${since}` : ''}`);

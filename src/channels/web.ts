@@ -143,21 +143,27 @@ export class WebChannel implements Channel {
       const allGroups = this.opts.registeredGroups();
       const webGroups = Object.entries(allGroups)
         .filter(([jid]) => jid.startsWith('web:'))
-        .map(([jid, g]) => ({ jid, name: g.name, folder: g.folder, isMain: g.isMain }));
+        .map(([jid, g]) => ({
+          jid,
+          name: g.name,
+          folder: g.folder,
+          isMain: g.isMain,
+        }));
       return this.json(res, 200, { groups: webGroups });
     }
 
     // POST /api/groups — register a new web group
     if (method === 'POST' && url.pathname === '/api/groups') {
       const body = await this.readBody(req);
-      const { name, folder } = body;
+      const { name, folder, template } = body;
       if (!name || !folder) {
         return this.json(res, 400, { error: 'name and folder are required' });
       }
       // Validate folder name (alphanumeric, underscores, dashes)
       if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(folder)) {
         return this.json(res, 400, {
-          error: 'folder must be alphanumeric with underscores/dashes, max 64 chars',
+          error:
+            'folder must be alphanumeric with underscores/dashes, max 64 chars',
         });
       }
       const jid = `web:${folder}`;
@@ -173,8 +179,34 @@ export class WebChannel implements Channel {
         requiresTrigger: false, // Web groups don't need @mention
       };
       this.opts.onRegisterGroup?.(jid, group);
+
+      // Copy template files into the group workspace if a template was specified
+      if (template && /^[a-z0-9-]+$/.test(template)) {
+        const templateDir = path.resolve(
+          process.cwd(),
+          'templates',
+          template,
+        );
+        const groupDir = path.resolve(process.cwd(), 'groups', group.folder);
+        if (fs.existsSync(templateDir)) {
+          fs.mkdirSync(groupDir, { recursive: true });
+          for (const file of fs.readdirSync(templateDir)) {
+            const src = path.join(templateDir, file);
+            const dst = path.join(groupDir, file);
+            if (fs.statSync(src).isFile() && !fs.existsSync(dst)) {
+              fs.copyFileSync(src, dst);
+            }
+          }
+        }
+      }
       // Store chat metadata
-      this.opts.onChatMetadata(jid, new Date().toISOString(), name, 'web', true);
+      this.opts.onChatMetadata(
+        jid,
+        new Date().toISOString(),
+        name,
+        'web',
+        true,
+      );
       return this.json(res, 201, { jid, group });
     }
 
@@ -184,7 +216,13 @@ export class WebChannel implements Channel {
       const jid = decodeURIComponent(messagesMatch[1]);
       const since = url.searchParams.get('since') || '1970-01-01T00:00:00.000Z';
       const limit = parseInt(url.searchParams.get('limit') || '100', 10);
-      const messages = getMessagesSince(jid, since, ASSISTANT_NAME, limit, true);
+      const messages = getMessagesSince(
+        jid,
+        since,
+        ASSISTANT_NAME,
+        limit,
+        true,
+      );
       return this.json(res, 200, { messages });
     }
 
@@ -196,7 +234,9 @@ export class WebChannel implements Channel {
         return this.json(res, 400, { error: 'jid and content are required' });
       }
       if (content.length > 8000) {
-        return this.json(res, 400, { error: 'Message too long (max 8000 chars)' });
+        return this.json(res, 400, {
+          error: 'Message too long (max 8000 chars)',
+        });
       }
       if (!jid.startsWith('web:')) {
         return this.json(res, 400, { error: 'jid must start with web:' });
@@ -341,7 +381,9 @@ export class WebChannel implements Channel {
     try {
       const content = fs.readFileSync(filePath);
       const ext = path.extname(filePath);
-      res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+      res.writeHead(200, {
+        'Content-Type': MIME[ext] || 'application/octet-stream',
+      });
       res.end(content);
     } catch {
       this.json(res, 404, { error: 'Not found' });

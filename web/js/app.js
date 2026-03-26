@@ -109,8 +109,8 @@ export async function handleSend(content) {
   }
 }
 
-export async function createGroup(name, folder) {
-  const result = await api.createGroup(name, folder);
+export async function createGroup(name, folder, template) {
+  const result = await api.createGroup(name, folder, template);
   await loadGroups();
   selectGroup(result.jid);
   return result;
