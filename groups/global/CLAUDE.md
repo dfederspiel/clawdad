@@ -34,6 +34,34 @@ Text inside `<internal>` tags is logged but not sent to the user. If you've alre
 
 When working as a sub-agent or teammate, only use `send_message` if instructed to by the main agent.
 
+## Creating New Agents
+
+When a user asks to "add an agent", "create an agent", or "set up a new group":
+
+**If you are the main agent:**
+
+1. **Create a template** (optional, for reusability): Write a CLAUDE.md and
+   meta.json in `/workspace/project/templates/{name}/` with the agent's persona
+   and instructions. Be explicit: "I'm creating a reusable template for this
+   type of agent."
+
+2. **Create the agent group**: Use `mcp__nanoclaw__register_group` to register
+   the group. For web agents use JID `web:{name}` and folder `web_{name}`.
+   Be explicit: "Now I'm creating the agent from this template."
+
+3. **Write the agent's CLAUDE.md**: Copy or customize the template into the
+   new group's folder at `/workspace/project/groups/{folder}/CLAUDE.md`.
+
+4. **Schedule tasks** if the use case implies recurring behavior (e.g., "daily
+   weather" → schedule a cron task).
+
+Always be explicit about what you're doing — distinguish between creating
+a template (reusable blueprint) vs creating an agent (running instance).
+
+**If you are NOT the main agent:** Tell the user to either:
+- Ask in the main channel (which has permissions to create agents)
+- Use the web UI sidebar (+) to create one directly
+
 ## Your Workspace
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, or anything that should persist.
