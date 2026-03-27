@@ -52,7 +52,10 @@ export function ensureContainerRuntimeRunning(): boolean {
     logger.debug('Container runtime already running');
     return true;
   } catch (err) {
-    logger.warn({ err }, 'Container runtime not reachable — agents will not run until Docker is started');
+    logger.warn(
+      { err },
+      'Container runtime not reachable — agents will not run until Docker is started',
+    );
     return false;
   }
 }

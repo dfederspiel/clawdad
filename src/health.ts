@@ -31,11 +31,14 @@ export interface HealthStatus {
 
 function checkDocker(): HealthStatus['docker'] {
   try {
-    const output = execSync(`${CONTAINER_RUNTIME_BIN} info --format '{{.ServerVersion}}'`, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-      timeout: 10000,
-    });
+    const output = execSync(
+      `${CONTAINER_RUNTIME_BIN} info --format '{{.ServerVersion}}'`,
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        encoding: 'utf-8',
+        timeout: 10000,
+      },
+    );
     return { status: 'running', version: output.trim() };
   } catch {
     // Docker exists but isn't running vs not installed at all
@@ -78,17 +81,17 @@ function checkAnthropic(): HealthStatus['anthropic'] {
     });
     const secrets = JSON.parse(output);
     // Look for a secret with hostPattern matching anthropic
-    const anthropicHost =
-      process.env.ANTHROPIC_BASE_URL
-        ? new URL(process.env.ANTHROPIC_BASE_URL).hostname
-        : 'api.anthropic.com';
-    const found = Array.isArray(secrets) && secrets.some(
-      (s: { hostPattern?: string }) =>
-        s.hostPattern && (
-          s.hostPattern.includes('anthropic.com') ||
-          s.hostPattern.includes(anthropicHost)
-        ),
-    );
+    const anthropicHost = process.env.ANTHROPIC_BASE_URL
+      ? new URL(process.env.ANTHROPIC_BASE_URL).hostname
+      : 'api.anthropic.com';
+    const found =
+      Array.isArray(secrets) &&
+      secrets.some(
+        (s: { hostPattern?: string }) =>
+          s.hostPattern &&
+          (s.hostPattern.includes('anthropic.com') ||
+            s.hostPattern.includes(anthropicHost)),
+      );
     return { status: found ? 'configured' : 'missing' };
   } catch {
     return { status: 'missing' };

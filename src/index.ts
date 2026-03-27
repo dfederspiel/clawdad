@@ -533,7 +533,9 @@ function ensureContainerSystemRunning(): boolean {
 async function main(): Promise<void> {
   const containerReady = ensureContainerSystemRunning();
   if (!containerReady) {
-    logger.warn('Starting without container runtime — agents will not run until Docker is available');
+    logger.warn(
+      'Starting without container runtime — agents will not run until Docker is available',
+    );
   }
   initDatabase();
   logger.info('Database initialized');
