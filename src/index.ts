@@ -194,9 +194,7 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
 function unregisterGroup(jid: string, group: RegisteredGroup): void {
   // Stop any running container for this group
   const snapshot = queue.getSnapshot();
-  const active = snapshot.groups?.find(
-    (g) => g.jid === jid && g.containerName,
-  );
+  const active = snapshot.groups?.find((g) => g.jid === jid && g.containerName);
   if (active?.containerName) {
     try {
       stopContainer(active.containerName);
@@ -223,10 +221,7 @@ function unregisterGroup(jid: string, group: RegisteredGroup): void {
     }
   }
 
-  logger.info(
-    { jid, name: group.name, folder: group.folder },
-    'Group deleted',
-  );
+  logger.info({ jid, name: group.name, folder: group.folder }, 'Group deleted');
 }
 
 /**

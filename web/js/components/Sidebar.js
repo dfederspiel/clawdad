@@ -89,7 +89,7 @@ export function Sidebar() {
       </div>
       <${StatusPanel} />
       <${NewGroupDialog} open=${dialogOpen} onClose=${() => setDialogOpen(false)} />
-      <${DeleteConfirmDialog} group=${deleteTarget} onClose=${() => setDeleteTarget(null)} />
+      <${DeleteConfirmDialog} key=${deleteTarget?.jid} group=${deleteTarget} onClose=${() => setDeleteTarget(null)} />
     </aside>
   `;
 }

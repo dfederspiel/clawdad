@@ -84,7 +84,8 @@ function checkAnthropic(): HealthStatus['anthropic'] {
     // Look for a secret with hostPattern matching anthropic.
     // Read ANTHROPIC_BASE_URL from .env since launchd/systemd won't have it in process.env.
     const envVars = readEnvFile(['ANTHROPIC_BASE_URL']);
-    const baseUrl = process.env.ANTHROPIC_BASE_URL || envVars.ANTHROPIC_BASE_URL;
+    const baseUrl =
+      process.env.ANTHROPIC_BASE_URL || envVars.ANTHROPIC_BASE_URL;
     const anthropicHost = baseUrl
       ? new URL(baseUrl).hostname
       : 'api.anthropic.com';
