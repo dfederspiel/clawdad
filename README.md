@@ -85,6 +85,18 @@ onecli secrets create --name Anthropic \
 
 **LiteLLM proxy:** If your team uses a LiteLLM proxy, set `ANTHROPIC_BASE_URL` in `.env` and use the proxy hostname as the OneCLI `--host-pattern`. Setup guides you through this.
 
+## Updating
+
+To pull the latest code and restart your running instance:
+
+```bash
+cd bd-nanoclaw
+claude
+# Then say "update" or /update
+```
+
+Claude pulls the latest code, rebuilds if needed, and restarts your service. Web UI changes (HTML/CSS/JS) take effect on browser refresh without a restart.
+
 ## Development Workflows
 
 ### Testing the onboarding flow
