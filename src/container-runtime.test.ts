@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'fs';
 
 // Mock logger
 vi.mock('./logger.js', () => ({
@@ -24,6 +25,17 @@ import {
   cleanupOrphans,
 } from './container-runtime.js';
 import { logger } from './logger.js';
+
+// Get actual group folder names so tests use containers that match real folders
+const groupFolders = fs
+  .readdirSync('groups', { withFileTypes: true })
+  .filter((d) => d.isDirectory())
+  .map((d) => d.name);
+
+/** Build a container name from a group folder name (reverse of the parsing in cleanupOrphans). */
+function containerName(folder: string, ts = '111'): string {
+  return `nanoclaw-${folder.replace(/_/g, '-')}-${ts}`;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -62,42 +74,51 @@ describe('stopContainer', () => {
 // --- ensureContainerRuntimeRunning ---
 
 describe('ensureContainerRuntimeRunning', () => {
-  it('does nothing when runtime is already running', () => {
+  it('returns true when runtime is already running', () => {
     mockExecSync.mockReturnValueOnce('');
 
-    ensureContainerRuntimeRunning();
+    const result = ensureContainerRuntimeRunning();
 
+    expect(result).toBe(true);
     expect(mockExecSync).toHaveBeenCalledTimes(1);
-    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} info`, {
-      stdio: 'pipe',
-      timeout: 10000,
-    });
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} info`,
+      {
+        stdio: 'pipe',
+        timeout: 10000,
+      },
+    );
     expect(logger.debug).toHaveBeenCalledWith(
       'Container runtime already running',
     );
   });
 
-  it('throws when docker info fails', () => {
+  it('returns false when docker info fails', () => {
     mockExecSync.mockImplementationOnce(() => {
       throw new Error('Cannot connect to the Docker daemon');
     });
 
-    expect(() => ensureContainerRuntimeRunning()).toThrow(
-      'Container runtime is required but failed to start',
+    const result = ensureContainerRuntimeRunning();
+
+    expect(result).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      'Container runtime not reachable — agents will not run until Docker is started',
     );
-    expect(logger.error).toHaveBeenCalled();
   });
 });
 
 // --- cleanupOrphans ---
 
 describe('cleanupOrphans', () => {
+  // Use real group folder names so existsSync returns true and containers are treated as orphans
+  const folder1 = groupFolders[0] || 'main';
+  const folder2 = groupFolders[1] || 'global';
+  const cn1 = containerName(folder1, '111');
+  const cn2 = containerName(folder2, '222');
+
   it('stops orphaned nanoclaw containers', () => {
-    // docker ps returns container names, one per line
-    mockExecSync.mockReturnValueOnce(
-      'nanoclaw-group1-111\nnanoclaw-group2-222\n',
-    );
-    // stop calls succeed
+    mockExecSync.mockReturnValueOnce(`${cn1}\n${cn2}\n`);
     mockExecSync.mockReturnValue('');
 
     cleanupOrphans();
@@ -106,16 +127,16 @@ describe('cleanupOrphans', () => {
     expect(mockExecSync).toHaveBeenCalledTimes(3);
     expect(mockExecSync).toHaveBeenNthCalledWith(
       2,
-      `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-group1-111`,
+      `${CONTAINER_RUNTIME_BIN} stop -t 1 ${cn1}`,
       { stdio: 'pipe' },
     );
     expect(mockExecSync).toHaveBeenNthCalledWith(
       3,
-      `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-group2-222`,
+      `${CONTAINER_RUNTIME_BIN} stop -t 1 ${cn2}`,
       { stdio: 'pipe' },
     );
     expect(logger.info).toHaveBeenCalledWith(
-      { count: 2, names: ['nanoclaw-group1-111', 'nanoclaw-group2-222'] },
+      { count: 2, names: [cn1, cn2] },
       'Stopped orphaned containers',
     );
   });
@@ -143,7 +164,7 @@ describe('cleanupOrphans', () => {
   });
 
   it('continues stopping remaining containers when one stop fails', () => {
-    mockExecSync.mockReturnValueOnce('nanoclaw-a-1\nnanoclaw-b-2\n');
+    mockExecSync.mockReturnValueOnce(`${cn1}\n${cn2}\n`);
     // First stop fails
     mockExecSync.mockImplementationOnce(() => {
       throw new Error('already stopped');
@@ -155,7 +176,24 @@ describe('cleanupOrphans', () => {
 
     expect(mockExecSync).toHaveBeenCalledTimes(3);
     expect(logger.info).toHaveBeenCalledWith(
-      { count: 2, names: ['nanoclaw-a-1', 'nanoclaw-b-2'] },
+      { count: 2, names: [cn1, cn2] },
+      'Stopped orphaned containers',
+    );
+  });
+
+  it('skips containers whose group folder does not exist', () => {
+    // One real folder, one fake folder
+    const realCn = containerName(folder1, '1');
+    const fakeCn = 'nanoclaw-nonexistent-folder-xyz-2';
+    mockExecSync.mockReturnValueOnce(`${realCn}\n${fakeCn}\n`);
+    mockExecSync.mockReturnValue('');
+
+    cleanupOrphans();
+
+    // ps + 1 stop (only real folder)
+    expect(mockExecSync).toHaveBeenCalledTimes(2);
+    expect(logger.info).toHaveBeenCalledWith(
+      { count: 1, names: [realCn] },
       'Stopped orphaned containers',
     );
   });
