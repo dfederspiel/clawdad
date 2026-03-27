@@ -171,7 +171,9 @@ export function startIpcWatcher(deps: IpcDeps): void {
               // Don't move to errors dir — may contain secrets. Just delete.
               try {
                 fs.unlinkSync(filePath);
-              } catch { /* already gone */ }
+              } catch {
+                /* already gone */
+              }
             }
           }
         }
@@ -565,17 +567,24 @@ async function processCredentialIpc(
 
   if (!service || !value) {
     logger.warn({ sourceGroup }, 'Credential IPC missing service or value');
-    writeCredentialResult(credentialsDir, service, false, 'Missing service or value');
+    writeCredentialResult(
+      credentialsDir,
+      service,
+      false,
+      'Missing service or value',
+    );
     return;
   }
 
   const serviceConfig = CREDENTIAL_SERVICES[service];
   if (!serviceConfig) {
-    logger.warn(
-      { service, sourceGroup },
-      'Unknown credential service',
+    logger.warn({ service, sourceGroup }, 'Unknown credential service');
+    writeCredentialResult(
+      credentialsDir,
+      service,
+      false,
+      `Unknown service: ${service}`,
     );
-    writeCredentialResult(credentialsDir, service, false, `Unknown service: ${service}`);
     return;
   }
 
@@ -595,13 +604,20 @@ async function processCredentialIpc(
   try {
     // Use onecli CLI to register the secret
     const args = [
-      'secrets', 'create',
-      '--name', secretName,
-      '--type', serviceConfig.type,
-      '--value', secretValue,
-      '--host-pattern', host,
-      '--header-name', serviceConfig.headerName,
-      '--value-format', valueFormat,
+      'secrets',
+      'create',
+      '--name',
+      secretName,
+      '--type',
+      serviceConfig.type,
+      '--value',
+      secretValue,
+      '--host-pattern',
+      host,
+      '--header-name',
+      serviceConfig.headerName,
+      '--value-format',
+      valueFormat,
     ];
 
     const { stdout, stderr } = await execAsync(
@@ -613,22 +629,41 @@ async function processCredentialIpc(
       { service, sourceGroup, host, secretName },
       'Credential registered via IPC',
     );
-    writeCredentialResult(credentialsDir, service, true, 'Credential registered successfully');
+    writeCredentialResult(
+      credentialsDir,
+      service,
+      true,
+      'Credential registered successfully',
+    );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     // Check if it's a duplicate — that's OK, just update
-    if (message.includes('409') || message.includes('already exists') || message.includes('conflict')) {
+    if (
+      message.includes('409') ||
+      message.includes('already exists') ||
+      message.includes('conflict')
+    ) {
       logger.info(
         { service, sourceGroup },
         'Credential already exists in vault — skipping (use onecli secrets update to change)',
       );
-      writeCredentialResult(credentialsDir, service, true, 'Credential already registered');
+      writeCredentialResult(
+        credentialsDir,
+        service,
+        true,
+        'Credential already registered',
+      );
     } else {
       logger.error(
         { service, sourceGroup, err: message },
         'Failed to register credential via OneCLI',
       );
-      writeCredentialResult(credentialsDir, service, false, `Registration failed: ${message}`);
+      writeCredentialResult(
+        credentialsDir,
+        service,
+        false,
+        `Registration failed: ${message}`,
+      );
     }
   }
 }
