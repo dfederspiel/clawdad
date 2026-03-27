@@ -5,6 +5,7 @@ import { Sidebar } from './Sidebar.js';
 import { ChatView } from './ChatView.js';
 import { OnboardingGuide } from './OnboardingGuide.js';
 import { NewGroupDialog } from './NewGroupDialog.js';
+import { AchievementToast } from './blocks/AchievementToast.js';
 
 export function App() {
   const group = selectedGroup.value;
@@ -42,6 +43,7 @@ export function App() {
         open=${dialogOpen}
         onClose=${() => setDialogOpen(false)}
       />
+      <${AchievementToast} />
     </div>
   `;
 }

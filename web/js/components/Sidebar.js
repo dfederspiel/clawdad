@@ -4,6 +4,7 @@ import { groups, selectedJid, deleteGroup } from '../app.js';
 import { GroupItem } from './GroupItem.js';
 import { NewGroupDialog } from './NewGroupDialog.js';
 import { StatusPanel } from './StatusPanel.js';
+import { GameHud } from './GameHud.js';
 
 function DeleteConfirmDialog({ group, onClose }) {
   const [deleting, setDeleting] = useState(false);
@@ -69,6 +70,7 @@ export function Sidebar() {
           +
         </button>
       </div>
+      <${GameHud} />
       <div class="flex-1 overflow-y-auto py-1">
         ${list.length === 0
           ? html`
