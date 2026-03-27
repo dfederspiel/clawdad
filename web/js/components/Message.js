@@ -1,5 +1,6 @@
 import { html } from 'htm/preact';
-import { md } from '../markdown.js';
+import { parseBlocks } from '../block-parser.js';
+import { BlockRenderer } from './blocks/BlockRenderer.js';
 
 function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -17,13 +18,17 @@ export function Message({ role, content, timestamp, senderName, isError }) {
 
   const errorClass = isError ? 'border-err/30' : '';
 
+  const blocks = isAssistant ? parseBlocks(content) : null;
+
   return html`
     <div class="px-4 py-3 text-sm leading-relaxed ${bubbleClass} ${errorClass}">
-      ${isAssistant
-        ? html`<div class="prose" dangerouslySetInnerHTML=${{ __html: md(content) }} />`
+      ${blocks
+        ? html`<div class="block-container">
+            ${blocks.map((block, i) => html`<${BlockRenderer} key=${i} block=${block} />`)}
+          </div>`
         : html`<div>${esc(content)}</div>`}
       <div class="text-[11px] text-txt-muted mt-1.5">
-        ${senderName ? `${senderName} · ${time}` : time}
+        ${senderName ? `${senderName} \u00B7 ${time}` : time}
       </div>
     </div>
   `;

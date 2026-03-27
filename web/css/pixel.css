@@ -1,0 +1,123 @@
+/* Pixel / 8-bit design tokens and utility classes */
+
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+:root {
+  --pixel-gold: #f0c040;
+  --pixel-green: #40c848;
+  --pixel-blue: #4090f0;
+  --pixel-red: #f04040;
+  --pixel-purple: #a050e0;
+  --pixel-cyan: #40d8d8;
+  --pixel-orange: #f09030;
+}
+
+.pixel-border {
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset -1px -1px 0 rgba(0, 0, 0, 0.3),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.pixel-badge {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+/* Game HUD */
+.game-hud {
+  padding: 12px 16px;
+  border-bottom: 1px solid #2a2d3e;
+}
+
+.game-hud-level {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
+  color: var(--pixel-gold);
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
+}
+
+.game-hud-xp-track {
+  height: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.game-hud-xp-fill {
+  height: 100%;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--pixel-gold) 0px,
+    var(--pixel-gold) 4px,
+    rgba(0, 0, 0, 0.15) 4px,
+    rgba(0, 0, 0, 0.15) 6px
+  );
+  transition: width 0.5s ease;
+}
+
+.game-hud-stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: #8b8fa3;
+}
+
+.game-hud-streak {
+  color: var(--pixel-orange);
+}
+
+/* Achievement toast */
+.achievement-toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #1e2130;
+  border: 2px solid var(--pixel-gold);
+  box-shadow:
+    0 0 20px rgba(240, 192, 64, 0.2),
+    inset -1px -1px 0 rgba(0, 0, 0, 0.3),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.06);
+  animation: toast-in 0.4s ease-out, toast-out 0.4s ease-in 3.6s forwards;
+}
+
+.achievement-toast-icon {
+  font-size: 24px;
+}
+
+.achievement-toast-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.achievement-toast-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  color: var(--pixel-gold);
+  text-transform: uppercase;
+}
+
+.achievement-toast-desc {
+  font-size: 12px;
+  color: #8b8fa3;
+}
+
+@keyframes toast-in {
+  from { transform: translateX(120%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes toast-out {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(120%); opacity: 0; }
+}

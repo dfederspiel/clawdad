@@ -48,6 +48,9 @@ export const saveConfig = (data) =>
 export const createGroup = (name, folder, template) =>
   fetchJson('/api/groups', { method: 'POST', body: { name, folder, template } });
 
+export const deleteGroup = (folder) =>
+  fetchJson(`/api/groups/${encodeURIComponent(folder)}`, { method: 'DELETE' });
+
 export const getMessages = (jid, since) =>
   fetchJson(`/api/messages/${encodeURIComponent(jid)}${since ? `?since=${since}` : ''}`);
 

@@ -190,6 +190,30 @@ export class WebChannel implements Channel {
       return this.json(res, 201, { jid, group });
     }
 
+    // DELETE /api/groups/:folder — delete a web group
+    const deleteGroupMatch = url.pathname.match(
+      /^\/api\/groups\/([A-Za-z0-9_-]+)$/,
+    );
+    if (method === 'DELETE' && deleteGroupMatch) {
+      const folder = decodeURIComponent(deleteGroupMatch[1]);
+      const jid = `web:${folder}`;
+      const allGroups = this.opts.registeredGroups();
+      const group = allGroups[jid];
+      if (!group) {
+        return this.json(res, 404, { error: 'Group not found' });
+      }
+      // Block deletion of system groups
+      if (
+        group.folder === 'main' ||
+        group.folder === 'global' ||
+        group.folder === 'web_general'
+      ) {
+        return this.json(res, 403, { error: 'Cannot delete system groups' });
+      }
+      this.opts.onDeleteGroup?.(jid, group);
+      return this.json(res, 200, { ok: true });
+    }
+
     // GET /api/messages/:jid — message history
     const messagesMatch = url.pathname.match(/^\/api\/messages\/(.+)$/);
     if (method === 'GET' && messagesMatch) {

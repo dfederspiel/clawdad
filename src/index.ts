@@ -5,6 +5,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 
 import {
   ASSISTANT_NAME,
+  DATA_DIR,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
@@ -27,8 +28,10 @@ import {
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
+  stopContainer,
 } from './container-runtime.js';
 import {
+  deleteGroupData,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
@@ -162,6 +165,44 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   logger.info(
     { jid, name: group.name, folder: group.folder },
     'Group registered',
+  );
+}
+
+function unregisterGroup(jid: string, group: RegisteredGroup): void {
+  // Stop any running container for this group
+  const snapshot = queue.getSnapshot();
+  const active = snapshot.groups?.find(
+    (g) => g.jid === jid && g.containerName,
+  );
+  if (active?.containerName) {
+    try {
+      stopContainer(active.containerName);
+    } catch (err) {
+      logger.warn({ err, jid }, 'Failed to stop container during group delete');
+    }
+  }
+
+  // Clean up in-memory state
+  delete registeredGroups[jid];
+  delete sessions[group.folder];
+  delete lastAgentTimestamp[jid];
+
+  // Clean up database
+  deleteGroupData(jid, group.folder);
+
+  // Clean up filesystem
+  const groupDir = path.join(GROUPS_DIR, group.folder);
+  const sessionDir = path.join(DATA_DIR, 'sessions', group.folder);
+  const ipcDir = path.join(DATA_DIR, 'ipc', group.folder);
+  for (const dir of [groupDir, sessionDir, ipcDir]) {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  logger.info(
+    { jid, name: group.name, folder: group.folder },
+    'Group deleted',
   );
 }
 
@@ -599,6 +640,9 @@ async function main(): Promise<void> {
   const channelOpts = {
     onRegisterGroup: (jid: string, group: RegisteredGroup) => {
       registerGroup(jid, group);
+    },
+    onDeleteGroup: (jid: string, group: RegisteredGroup) => {
+      unregisterGroup(jid, group);
     },
     onMessage: (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage

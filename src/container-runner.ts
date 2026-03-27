@@ -602,7 +602,7 @@ export async function runContainerAgent(
         { group: group.name, containerName },
         'Container timeout, stopping gracefully',
       );
-      exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
+      exec(`${CONTAINER_RUNTIME_BIN} stop -t 10 ${containerName}`, { timeout: 15000 }, (err: unknown) => {
         if (err) {
           logger.warn(
             { group: group.name, containerName, err },

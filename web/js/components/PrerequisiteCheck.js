@@ -4,12 +4,12 @@ import * as api from '../api.js';
 
 function StatusIcon({ status }) {
   if (status === 'ok') {
-    return html`<span class="text-green-400 text-lg">&#10003;</span>`;
+    return html`<span class="text-green-400 text-lg">✓</span>`;
   }
   if (status === 'loading') {
-    return html`<span class="text-txt-muted text-lg animate-pulse">&#8230;</span>`;
+    return html`<span class="text-txt-muted text-lg animate-pulse">…</span>`;
   }
-  return html`<span class="text-red-400 text-lg">&#10007;</span>`;
+  return html`<span class="text-red-400 text-lg">✗</span>`;
 }
 
 function StatusCard({ title, status, detail, children }) {

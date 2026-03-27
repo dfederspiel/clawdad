@@ -381,6 +381,19 @@ export function getMessagesSince(
   return db.prepare(sql).all(...params) as NewMessage[];
 }
 
+export function getLastBotMessageTimestamp(
+  chatJid: string,
+  botPrefix: string,
+): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT MAX(timestamp) as ts FROM messages
+       WHERE chat_jid = ? AND (is_bot_message = 1 OR content LIKE ?)`,
+    )
+    .get(chatJid, `${botPrefix}:%`) as { ts: string | null } | undefined;
+  return row?.ts ?? undefined;
+}
+
 export function createTask(
   task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
 ): void {
@@ -561,6 +574,9 @@ export function getTelemetryStats(): {
   taskSuccessRate: number;
   taskAvgDurationMs: number;
   totalTaskRuns: number;
+  totalMessages: number;
+  totalTasksCompleted: number;
+  currentStreak: number;
 } {
   const now = new Date();
   const h24 = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
@@ -618,6 +634,47 @@ export function getTelemetryStats(): {
     avg_duration: number | null;
   }) || { total: 0, successes: 0, avg_duration: null };
 
+  // Gamification: all-time totals
+  const totalMessages = (
+    db
+      .prepare('SELECT COUNT(*) as c FROM messages WHERE is_bot_message = 0')
+      .get() as { c: number }
+  ).c;
+
+  const totalTasksCompleted = (
+    db
+      .prepare(
+        "SELECT COUNT(*) as c FROM task_run_logs WHERE status = 'success'",
+      )
+      .get() as { c: number }
+  ).c;
+
+  // Streak: consecutive days (including today) with at least one user message
+  let currentStreak = 0;
+  const streakRows = db
+    .prepare(
+      `SELECT DISTINCT DATE(timestamp) as d FROM messages
+       WHERE is_bot_message = 0
+       ORDER BY d DESC LIMIT 60`,
+    )
+    .all() as Array<{ d: string }>;
+
+  if (streakRows.length > 0) {
+    const today = new Date().toISOString().slice(0, 10);
+    let checkDate = today;
+    for (const row of streakRows) {
+      if (row.d === checkDate) {
+        currentStreak++;
+        // Move to previous day
+        const prev = new Date(checkDate + 'T00:00:00');
+        prev.setDate(prev.getDate() - 1);
+        checkDate = prev.toISOString().slice(0, 10);
+      } else {
+        break;
+      }
+    }
+  }
+
   return {
     messages24h,
     messages7d,
@@ -631,6 +688,9 @@ export function getTelemetryStats(): {
       taskStats.total > 0 ? taskStats.successes / taskStats.total : 1,
     taskAvgDurationMs: taskStats.avg_duration || 0,
     totalTaskRuns: taskStats.total || 0,
+    totalMessages,
+    totalTasksCompleted,
+    currentStreak,
   };
 }
 
@@ -738,6 +798,23 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
   );
+}
+
+export function deleteGroupData(jid: string, folder: string): void {
+  const txn = db.transaction(() => {
+    // Delete task run logs for all tasks in this group
+    db.prepare(
+      `DELETE FROM task_run_logs WHERE task_id IN (SELECT id FROM scheduled_tasks WHERE group_folder = ?)`,
+    ).run(folder);
+    db.prepare('DELETE FROM scheduled_tasks WHERE group_folder = ?').run(
+      folder,
+    );
+    db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(folder);
+    db.prepare('DELETE FROM messages WHERE chat_jid = ?').run(jid);
+    db.prepare('DELETE FROM chats WHERE jid = ?').run(jid);
+    db.prepare('DELETE FROM registered_groups WHERE jid = ?').run(jid);
+  });
+  txn();
 }
 
 export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
