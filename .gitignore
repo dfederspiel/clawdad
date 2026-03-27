@@ -32,6 +32,12 @@ groups/discord_updates/*
 # Temp files
 .tmp-*
 
+# Runtime artifacts
+*.db
+*.png
+.playwright-mcp/
+.claude/plans/
+
 # OS
 .DS_Store
 

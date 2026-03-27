@@ -41,6 +41,9 @@ export function onSSE(event, cb) {
 // API methods
 export const getGroups = () => fetchJson('/api/groups');
 export const getTemplates = () => fetchJson('/api/templates');
+export const getConfig = () => fetchJson('/api/config');
+export const saveConfig = (data) =>
+  fetchJson('/api/config', { method: 'POST', body: data });
 
 export const createGroup = (name, folder, template) =>
   fetchJson('/api/groups', { method: 'POST', body: { name, folder, template } });
@@ -50,6 +53,14 @@ export const getMessages = (jid, since) =>
 
 export const sendMessage = (jid, content, sender) =>
   fetchJson('/api/send', { method: 'POST', body: { jid, content, sender } });
+
+// Health & onboarding
+export const getHealth = () => fetchJson('/api/health');
+export const registerAnthropic = (key, customEndpoint) =>
+  fetchJson('/api/register-anthropic', {
+    method: 'POST',
+    body: { key, customEndpoint },
+  });
 
 // Status & telemetry
 export const getStatus = () => fetchJson('/api/status');
