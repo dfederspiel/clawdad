@@ -157,28 +157,48 @@ Run `npx tsx setup/index.ts --step environment` and parse the status block.
 
 Run `npx tsx setup/index.ts --step timezone`. If NEEDS_USER_INPUT=true, AskUserQuestion for timezone.
 
-### Web UI
+### Web UI & Port Selection
 
 Ensure `.env` has web UI enabled:
 ```bash
 grep -q 'WEB_UI_ENABLED=true' .env || echo 'WEB_UI_ENABLED=true' >> .env
-grep -q 'WEB_UI_PORT' .env || echo 'WEB_UI_PORT=3456' >> .env
 ```
+
+**Always check for other running ClawDad/NanoClaw instances before assigning a port.** Scan the default port range to detect existing instances and pick the next free port:
+
+```bash
+# Find all nanoclaw processes and their ports
+OTHER_PORTS=$(lsof -iTCP -sTCP:LISTEN -P 2>/dev/null | grep node | grep -oE ':(345[0-9]|346[0-9])' | tr -d ':' | sort -u)
+echo "Ports in use by other instances: ${OTHER_PORTS:-none}"
+
+# Check candidate ports starting at 3456
+for PORT in 3456 3457 3458 3459 3460; do
+  lsof -i :$PORT >/dev/null 2>&1 || { echo "FREE_PORT=$PORT"; break; }
+done
+```
+
+- **If 3456 is free and no other instances detected:** Use 3456 (the default). Set in `.env`:
+  ```bash
+  grep -q 'WEB_UI_PORT' .env || echo 'WEB_UI_PORT=3456' >> .env
+  ```
+
+- **If other instances are detected:** Tell the user what you found, e.g. "I found another ClawDad instance running on port 3456." Then AskUserQuestion: "I'll use port <FREE_PORT> for this instance. Sound good?"
+  - **Yes (recommended)** — description: "Use port <FREE_PORT>. You'll access this instance at http://localhost:<FREE_PORT>."
+  - **Different port** — description: "Choose a custom port number."
+
+  Update `.env` with the chosen port:
+  ```bash
+  grep -q 'WEB_UI_PORT' .env && sed -i '' "s/WEB_UI_PORT=.*/WEB_UI_PORT=<PORT>/" .env || echo "WEB_UI_PORT=<PORT>" >> .env
+  ```
+
+Tell the user their web UI URL so they know which instance is which: "This instance will run at http://localhost:<PORT>".
 
 ## 6. Start
 
 AskUserQuestion: How do you want to run ClawDad?
 
-1. **Development mode (recommended for now)** — description: "Runs in the foreground with hot reload. Best for getting started and making changes."
-2. **Background service** — description: "Registers as a system service that runs on boot. Best for always-on operation."
-
-### Development mode
-
-```bash
-npm run build && npm run start
-```
-
-Tell user: "ClawDad is running. Open http://localhost:3456 in your browser."
+1. **Background service (recommended)** — description: "Registers as a system service that starts on boot. Best for always-on operation."
+2. **Development mode** — description: "Runs in the foreground with hot reload. Best for making code changes."
 
 ### Background service
 
@@ -189,7 +209,15 @@ Run `npx tsx setup/index.ts --step service` and parse status block.
 
 Handle errors per the diagnostics in the service step output.
 
-Tell user: "ClawDad is running as a background service. Open http://localhost:3456 in your browser."
+Tell user: "ClawDad is running as a background service. Open http://localhost:PORT in your browser."
+
+### Development mode
+
+```bash
+npm run build && npm run start
+```
+
+Tell user: "ClawDad is running. Open http://localhost:PORT in your browser."
 
 ## 7. Verify
 
