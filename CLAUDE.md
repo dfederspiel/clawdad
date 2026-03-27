@@ -68,6 +68,7 @@ Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) f
 | Skill | When to Use |
 |-------|-------------|
 | `/setup` | First-time installation, authentication, service configuration |
+| `/update` | Pull latest code, rebuild, restart service |
 | `/customize` | Adding channels, integrations, changing behavior |
 | `/debug` | Container issues, logs, troubleshooting |
 | `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |

@@ -20,6 +20,7 @@ import {
   hasSystemd,
   isRoot,
 } from './platform.js';
+import { serviceLabel } from './service.js';
 import { emitStatus } from './status.js';
 
 export async function run(_args: string[]): Promise<void> {
@@ -33,12 +34,14 @@ export async function run(_args: string[]): Promise<void> {
   let service = 'not_found';
   const mgr = getServiceManager();
 
+  const label = serviceLabel(projectRoot);
+
   if (mgr === 'launchd') {
     try {
       const output = execSync('launchctl list', { encoding: 'utf-8' });
-      if (output.includes('com.nanoclaw')) {
+      if (output.includes(label)) {
         // Check if it has a PID (actually running)
-        const line = output.split('\n').find((l) => l.includes('com.nanoclaw'));
+        const line = output.split('\n').find((l) => l.includes(label));
         if (line) {
           const pidField = line.trim().split(/\s+/)[0];
           service = pidField !== '-' && pidField ? 'running' : 'stopped';
@@ -49,15 +52,16 @@ export async function run(_args: string[]): Promise<void> {
     }
   } else if (mgr === 'systemd') {
     const prefix = isRoot() ? 'systemctl' : 'systemctl --user';
+    const unitName = label.replace(/\./g, '-');
     try {
-      execSync(`${prefix} is-active nanoclaw`, { stdio: 'ignore' });
+      execSync(`${prefix} is-active ${unitName}`, { stdio: 'ignore' });
       service = 'running';
     } catch {
       try {
         const output = execSync(`${prefix} list-unit-files`, {
           encoding: 'utf-8',
         });
-        if (output.includes('nanoclaw')) {
+        if (output.includes(unitName)) {
           service = 'stopped';
         }
       } catch {
