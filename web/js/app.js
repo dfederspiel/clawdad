@@ -3,6 +3,7 @@ import { signal, computed } from 'preact/signals';
 import { html } from 'htm/preact';
 import * as api from './api.js';
 import { App } from './components/App.js';
+import { checkAchievements } from './components/blocks/AchievementToast.js';
 
 // --- Global State (signals) ---
 
@@ -174,6 +175,7 @@ async function pollTasks() {
 async function pollTelemetry() {
   try {
     telemetry.value = await api.getTelemetry();
+    checkAchievements(telemetry.value);
   } catch { /* ignore */ }
 }
 
