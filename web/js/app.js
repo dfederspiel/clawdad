@@ -18,10 +18,11 @@ export const selectedGroup = computed(() =>
   groups.value.find((g) => g.jid === selectedJid.value) || null,
 );
 
-// Status, tasks, and telemetry (polled)
+// Status, tasks, telemetry (polled), and triggers (for @-mention autocomplete)
 export const status = signal(null);
 export const tasks = signal([]);
 export const telemetry = signal(null);
+export const triggers = signal([]);
 
 // --- SSE ---
 
@@ -113,11 +114,22 @@ export async function handleSend(content) {
   }
 }
 
-export async function createGroup(name, folder, template) {
-  const result = await api.createGroup(name, folder, template);
+export async function createGroup(name, folder, template, opts = {}) {
+  const result = await api.createGroup(name, folder, template, opts);
   await loadGroups();
-  selectGroup(result.jid);
+  await loadTriggers();
+  // Only auto-select standalone agents (triggered agents have no sidebar chat)
+  if (!opts.triggerScope) {
+    selectGroup(result.jid);
+  }
   return result;
+}
+
+export async function loadTriggers() {
+  try {
+    const data = await api.getTriggers();
+    triggers.value = data.triggers;
+  } catch { /* ignore */ }
 }
 
 export async function deleteGroup(folder, jid) {
@@ -209,4 +221,5 @@ setInterval(pollTelemetry, 30000);
 // --- Render ---
 
 loadGroups();
+loadTriggers();
 render(html`<${App} />`, document.getElementById('app'));

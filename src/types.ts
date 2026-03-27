@@ -41,6 +41,8 @@ export interface RegisteredGroup {
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
   isSystem?: boolean; // True for system/utility groups (e.g. General) — don't suppress onboarding
+  description?: string; // Human-readable description shown in @-mention autocomplete
+  triggerScope?: 'own' | 'web-all'; // 'web-all' = scan ALL web messages for trigger matches
 }
 
 export interface NewMessage {
