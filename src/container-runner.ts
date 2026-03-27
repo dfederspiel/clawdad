@@ -465,15 +465,19 @@ export async function runContainerAgent(
         { group: group.name, containerName },
         'Container timeout, stopping gracefully',
       );
-      exec(`${CONTAINER_RUNTIME_BIN} stop -t 1 ${containerName}`, { timeout: 15000 }, (err: Error | null) => {
-        if (err) {
-          logger.warn(
-            { group: group.name, containerName, err },
-            'Graceful stop failed, force killing',
-          );
-          container.kill('SIGKILL');
-        }
-      });
+      exec(
+        `${CONTAINER_RUNTIME_BIN} stop -t 1 ${containerName}`,
+        { timeout: 15000 },
+        (err: Error | null) => {
+          if (err) {
+            logger.warn(
+              { group: group.name, containerName, err },
+              'Graceful stop failed, force killing',
+            );
+            container.kill('SIGKILL');
+          }
+        },
+      );
     };
 
     let timeout = setTimeout(killOnTimeout, timeoutMs);
