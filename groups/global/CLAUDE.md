@@ -68,12 +68,61 @@ Files you create are saved in `/workspace/group/`. Use this for notes, research,
 
 ## Memory
 
-The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
+You have persistent memory that survives between sessions. Use it so the user never has to repeat themselves.
 
-When you learn something important:
-- Create files for structured data (e.g., `customers.md`, `preferences.md`)
-- Split files larger than 500 lines into folders
-- Keep an index in your memory for the files you create
+### How it works
+
+Your memory lives in `/workspace/group/memory/`. It has two parts:
+
+1. **`MEMORY.md`** — an index of all memory files. This is loaded automatically, so keep it concise (links + one-line descriptions).
+2. **Individual memory files** — one per topic, stored alongside the index.
+
+### What to remember
+
+| Type | What to save | Example |
+|------|-------------|---------|
+| **user** | Who they are, preferences, role, expertise | "Senior engineer, prefers terse answers, uses dark mode" |
+| **feedback** | Corrections to your behavior | "Don't summarize at the end — user reads the diff" |
+| **project** | Ongoing work, decisions, context | "Auth rewrite driven by compliance, not tech debt" |
+| **reference** | Where to find things externally | "Bug tracker is Linear project INGEST" |
+
+### When to save
+
+- **Immediately** when the user explicitly asks you to remember something
+- **Proactively** when you learn preferences, get corrected, or discover project context
+- **Never** save things derivable from files, git history, or the current conversation
+
+### How to save
+
+**Step 1** — Write the memory file:
+
+```markdown
+# memory/user_preferences.md
+---
+type: user
+---
+Prefers bullet points over paragraphs. Timezone: PST.
+```
+
+**Step 2** — Add a pointer to `memory/MEMORY.md`:
+
+```markdown
+- [user_preferences.md](user_preferences.md) — Communication style and timezone
+```
+
+### When to recall
+
+At the **start of every session**, read `memory/MEMORY.md` if it exists. Load specific memory files when they're relevant to the current task. If the user says "remember" or "recall", always check memory first.
+
+### Conversation history
+
+The `conversations/` folder contains searchable markdown snapshots of past sessions. Use these to recall specifics from previous conversations — search by date or grep for keywords.
+
+### Maintenance
+
+- Update memories when information changes — don't create duplicates
+- Remove memories that are no longer true
+- Keep `MEMORY.md` under 50 lines — if it grows, consolidate
 
 ## Message Formatting
 
