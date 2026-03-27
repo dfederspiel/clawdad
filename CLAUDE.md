@@ -23,7 +23,28 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 
 ## Secrets / Credentials / Proxy (OneCLI)
 
-API keys, secret keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway — which handles secret injection into containers at request time, so no keys or tokens are ever passed to containers directly. Run `onecli --help`.
+API keys, OAuth tokens, and auth credentials are managed by the **OneCLI Agent Vault** — a local gateway that intercepts outbound HTTPS requests from containers and injects credentials at request time. Agents never see raw keys. See [docs/CREDENTIALS.md](docs/CREDENTIALS.md) for the full reference.
+
+**Quick reference:**
+
+```bash
+onecli gateway start                    # Start the credential gateway
+onecli secrets list                     # List registered secrets
+onecli secrets create --name NAME \     # Register a new credential
+  --type anthropic|generic \
+  --value TOKEN \
+  --host-pattern api.example.com \
+  --header-name Authorization           # (required for --type generic)
+curl -sf http://127.0.0.1:10254/health  # Verify gateway is running
+```
+
+**Config vs secrets:** Non-secret values (URLs, account IDs) pass to containers as env vars via `PASSTHROUGH_ENV_PREFIXES` in `container-runner.ts`. Secrets flow through the gateway only.
+
+**Custom Anthropic endpoint:** Set `ANTHROPIC_BASE_URL` in `.env` AND match the OneCLI host pattern — both are required or you'll get silent "Invalid API key" errors.
+
+## Reset
+
+Run `./scripts/reset.sh` to wipe all runtime state and return to a clean template. This removes the database, IPC state, logs, and user-created groups while preserving `.env`, template groups (`main/`, `global/`), and OneCLI vault credentials. Use `--yes` to skip confirmation.
 
 ## Skills
 

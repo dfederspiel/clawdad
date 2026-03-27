@@ -26,6 +26,7 @@ import {
 } from './container-runtime.js';
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
+import { readEnvFile } from './env.js';
 import { RegisteredGroup } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
@@ -170,6 +171,7 @@ function buildVolumeMounts(
   const groupIpcDir = resolveGroupIpcPath(group.folder);
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'credentials'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
   mounts.push({
     hostPath: groupIpcDir,
@@ -246,6 +248,38 @@ async function buildContainerArgs(
       { containerName },
       'OneCLI gateway not reachable — container will have no credentials',
     );
+  }
+
+  // Pass through extra environment variables from .env to the container.
+  // These are non-secret service keys the agent needs for API calls.
+  const PASSTHROUGH_ENV_PREFIXES = [
+    'ANTHROPIC_BASE_URL', // Custom API endpoint (not the secret — just the URL)
+    'HARNESS_',
+    'GITLAB_',
+    'GITHUB_',
+    'BLACKDUCK_',
+    'LAUNCHDARKLY_',
+    'FIGMA_',
+    'ATLASSIAN_',
+  ];
+  const envVars = readEnvFile(
+    PASSTHROUGH_ENV_PREFIXES.flatMap((prefix) => {
+      try {
+        const envContent = fs.readFileSync(
+          path.join(process.cwd(), '.env'),
+          'utf-8',
+        );
+        return envContent
+          .split('\n')
+          .filter((line) => line.startsWith(prefix))
+          .map((line) => line.split('=')[0]);
+      } catch {
+        return [];
+      }
+    }),
+  );
+  for (const [key, value] of Object.entries(envVars)) {
+    if (value) args.push('-e', `${key}=${value}`);
   }
 
   // Runtime-specific args for host gateway resolution

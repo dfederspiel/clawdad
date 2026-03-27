@@ -11,6 +11,7 @@ const envConfig = readEnvFile([
   'ONECLI_URL',
   'TZ',
   'WEB_UI_ENABLED',
+  'WEB_UI_PORT',
 ]);
 
 export const ASSISTANT_NAME =
@@ -81,7 +82,7 @@ export const TRIGGER_PATTERN = buildTriggerPattern(DEFAULT_TRIGGER);
 // Web UI channel
 export const WEB_UI_ENABLED =
   (process.env.WEB_UI_ENABLED || envConfig.WEB_UI_ENABLED) === 'true';
-export const WEB_UI_PORT = parseInt(process.env.WEB_UI_PORT || '3456', 10);
+export const WEB_UI_PORT = parseInt(process.env.WEB_UI_PORT || envConfig.WEB_UI_PORT || '3456', 10);
 
 // Timezone for scheduled tasks, message formatting, etc.
 // Validates each candidate is a real IANA identifier before accepting.

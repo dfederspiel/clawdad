@@ -40,6 +40,10 @@ export function onSSE(event, cb) {
 
 // API methods
 export const getGroups = () => fetchJson('/api/groups');
+export const getTemplates = () => fetchJson('/api/templates');
+export const getConfig = () => fetchJson('/api/config');
+export const saveConfig = (data) =>
+  fetchJson('/api/config', { method: 'POST', body: data });
 
 export const createGroup = (name, folder, template) =>
   fetchJson('/api/groups', { method: 'POST', body: { name, folder, template } });

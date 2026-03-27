@@ -77,6 +77,78 @@ Standard Markdown works: `**bold**`, `*italic*`, `[links](url)`, `# headings`.
 
 ---
 
+## Credential Registration
+
+If you need API credentials for a service (Atlassian, GitLab, GitHub, Harness, LaunchDarkly), you can register them securely via IPC. The token is stored in the host's credential vault and injected into API requests automatically — it's never saved to a config file.
+
+```bash
+# Atlassian (requires --email for basic auth)
+/workspace/scripts/register-credential.sh atlassian "TOKEN" --email "user@co.com" --wait
+
+# GitLab
+/workspace/scripts/register-credential.sh gitlab "glpat-xxxx" --host-pattern "gitlab.example.com" --wait
+
+# GitHub
+/workspace/scripts/register-credential.sh github "ghp_xxxx" --wait
+
+# Harness
+/workspace/scripts/register-credential.sh harness "pat.xxxx" --wait
+
+# LaunchDarkly
+/workspace/scripts/register-credential.sh launchdarkly "api-xxxx" --wait
+```
+
+**Security rules:**
+- Ask the user for the token in chat — never guess or fabricate credentials
+- Call `register-credential.sh` immediately — never store the token in a file, variable, or config
+- Never echo, log, or print the token value after registration
+- The `--wait` flag confirms success (up to 30s)
+
+## Event Logging
+
+**Every agent MUST log domain events using `/workspace/scripts/event-log.sh`.** This builds the structured audit trail that enables time-range reports, summaries, and reflective analysis without re-querying external systems.
+
+### Why this matters
+
+Agent conversations are ephemeral — they disappear when the container stops. API responses are transient. The only durable record of what happened is what you explicitly log. Without event logging, the user loses visibility into agent activity between conversations.
+
+### How to use event-log.sh
+
+```bash
+/workspace/scripts/event-log.sh <event_type> key1=value1 key2=value2 ...
+```
+
+- Writes one JSON line to `/workspace/group/event-log.jsonl`
+- Auto-adds `timestamp` and `event` fields
+- Accepts any key=value pairs — omit fields you don't have
+- Numeric values are auto-coerced (no quotes needed for numbers)
+
+### Universal principles
+
+1. **Log what you observe, when you observe it.** Don't batch events for later or summarize at the end.
+2. **Log domain events, not mechanics.** Log "deployment completed" or "bug triaged", not "I called an API" or "I read a file."
+3. **Omit fields you don't have** — skip unknown fields rather than passing empty strings.
+4. **Use consistent event names** so reports can aggregate across runs. Each template defines its own event types (see your template's CLAUDE.md).
+5. **Don't log container lifecycle** — the host already tracks `container_started`/`container_completed`.
+6. **Don't log raw API errors** — `api.sh` captures those in `api-logs/`. Only log a `failure` event when you've confirmed a domain-level failure.
+
+### Reporting from the event log
+
+When asked for summaries, reports, or "what happened" questions — read `event-log.jsonl` directly:
+
+```bash
+# Count events by type
+jq -r '.event' /workspace/group/event-log.jsonl | sort | uniq -c | sort -rn
+
+# Events in a date range
+jq -r 'select(.timestamp >= "2026-03-20" and .timestamp < "2026-03-28")' /workspace/group/event-log.jsonl
+
+# Filter by event type
+jq -r 'select(.event == "deploy_completed")' /workspace/group/event-log.jsonl
+```
+
+This is the source of truth for agent activity. Always prefer reading the event log over re-querying external APIs for historical data.
+
 ## Task Scripts
 
 For any recurring task, use `schedule_task`. Frequent agent invocations — especially multiple times a day — consume API credits and can risk account restrictions. If a simple check can determine whether action is needed, add a `script` — it runs first, and the agent is only called when the check passes. This keeps invocations to a minimum.

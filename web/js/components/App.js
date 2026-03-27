@@ -9,6 +9,7 @@ import { NewGroupDialog } from './NewGroupDialog.js';
 export function App() {
   const group = selectedGroup.value;
   const hasGroups = groups.value.length > 0;
+  const hasTemplateGroups = groups.value.some((g) => !g.isSystem);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   return html`
@@ -17,7 +18,7 @@ export function App() {
       <main class="flex-1 flex flex-col min-w-0">
         ${group
           ? html`<${ChatView} />`
-          : hasGroups
+          : hasTemplateGroups
             ? html`<div class="flex-1 flex items-center justify-center">
                 <div class="text-center text-txt-2 px-6">
                   <p class="text-base mb-2">Select a group to start chatting.</p>

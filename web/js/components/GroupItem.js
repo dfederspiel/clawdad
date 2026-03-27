@@ -23,7 +23,10 @@ export function GroupItem({ group, isActive }) {
     <div class="${base} ${active}" onClick=${() => selectGroup(group.jid)}>
       <span class="w-2 h-2 rounded-full flex-shrink-0 ${dotClass}" />
       <span class="flex-1 truncate">${esc(group.name)}</span>
-      ${group.isMain && html`
+      ${group.isSystem && html`
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-bg-3 text-txt-muted font-medium">system</span>
+      `}
+      ${group.isMain && !group.isSystem && html`
         <span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent font-medium">main</span>
       `}
       ${count > 0 && html`

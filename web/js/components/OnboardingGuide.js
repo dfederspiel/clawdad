@@ -1,30 +1,8 @@
 import { html } from 'htm/preact';
-import { useState } from 'preact/hooks';
-import { createGroup } from '../app.js';
-
-const TEMPLATES = [
-  {
-    id: 'deployments',
-    name: 'Deployment Agent',
-    description:
-      'Monitor CI/CD pipelines, trigger deployments, investigate failures, and track security gates.',
-    folder: 'deployments',
-  },
-  {
-    id: 'updates',
-    name: 'Updates Agent',
-    description:
-      'Daily check-ins, weekly status reports, Jira activity tracking, and Confluence integration.',
-    folder: 'updates',
-  },
-  {
-    id: 'bug-triage',
-    name: 'Bug Triage Agent',
-    description:
-      'Auto-triage Jira bugs, investigate code, propose fixes, and create pull requests.',
-    folder: 'bug-triage',
-  },
-];
+import { useState, useEffect } from 'preact/hooks';
+import { createGroup, handleSend } from '../app.js';
+import * as api from '../api.js';
+import { SetupWizard } from './SetupWizard.js';
 
 function TemplateCard({ template, onSelect, creating }) {
   return html`
@@ -45,14 +23,30 @@ function TemplateCard({ template, onSelect, creating }) {
 }
 
 export function OnboardingGuide({ onCustom }) {
+  const [templates, setTemplates] = useState([]);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [hasConfig, setHasConfig] = useState(false);
+
+  useEffect(() => {
+    // Check if global config exists before showing templates
+    api.getConfig().then((config) => {
+      setHasConfig(config && Object.keys(config).length > 0);
+      setConfigLoaded(true);
+    }).catch(() => {
+      setConfigLoaded(true);
+    });
+    api.getTemplates().then((data) => setTemplates(data.templates)).catch(() => {});
+  }, []);
 
   async function handleSelect(template) {
     setCreating(true);
     setError('');
     try {
-      await createGroup(template.name, template.folder, template.id);
+      await createGroup(template.name, template.id, template.id);
+      // Kickstart the agent — triggers its first-run setup flow
+      await handleSend('Hello! Help me get set up.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -60,30 +54,54 @@ export function OnboardingGuide({ onCustom }) {
     }
   }
 
+  // Still loading config check
+  if (!configLoaded) {
+    return html`
+      <div class="flex-1 flex items-center justify-center">
+        <p class="text-sm text-txt-muted">Loading...</p>
+      </div>
+    `;
+  }
+
+  // No config yet — show setup wizard first
+  if (!hasConfig) {
+    return html`<${SetupWizard} onComplete=${() => setHasConfig(true)} />`;
+  }
+
+  // Config exists — show template picker
   return html`
     <div class="flex-1 flex items-center justify-center p-8">
       <div class="max-w-2xl w-full">
         <div class="text-center mb-8">
-          <h2 class="text-xl font-semibold text-txt mb-2">
-            Welcome to NanoClaw
+          <h2 class="text-2xl font-bold text-txt mb-1">
+            ClawDad
           </h2>
+          <p class="text-xs text-txt-muted mb-3">NanoClaw Agent Orchestrator</p>
           <p class="text-sm text-txt-2">
-            Get started by creating an agent group from a template, or create a
-            custom one.
+            Pick a template to create your first agent. Each runs isolated with
+            its own workspace — the agent will walk you through setup in chat.
           </p>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-          ${TEMPLATES.map(
-            (t) =>
-              html`<${TemplateCard}
-                key=${t.id}
-                template=${t}
-                onSelect=${handleSelect}
-                creating=${creating}
-              />`,
-          )}
-        </div>
+        ${templates.length > 0
+          ? html`
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                ${templates.map(
+                  (t) =>
+                    html`<${TemplateCard}
+                      key=${t.id}
+                      template=${t}
+                      onSelect=${handleSelect}
+                      creating=${creating}
+                    />`,
+                )}
+              </div>
+            `
+          : html`
+              <div class="text-center text-txt-muted text-sm py-8">
+                Loading templates...
+              </div>
+            `}
 
         <div class="text-center">
           <button
@@ -95,12 +113,6 @@ export function OnboardingGuide({ onCustom }) {
         </div>
 
         ${error && html`<p class="text-sm text-err text-center mt-4">${error}</p>`}
-
-        <p class="text-xs text-txt-muted text-center mt-6">
-          Each group runs an isolated Claude agent with its own workspace and
-          memory. Templates include a guided setup that configures the agent on
-          first message.
-        </p>
       </div>
     </div>
   `;

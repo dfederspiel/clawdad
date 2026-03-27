@@ -61,10 +61,13 @@ export async function loadGroups() {
   const data = await api.getGroups();
   groups.value = data.groups;
 
-  // Auto-select main group (or first) if nothing is selected
-  if (!selectedJid.value && data.groups.length > 0) {
-    const main = data.groups.find((g) => g.isMain);
-    selectGroup(main ? main.jid : data.groups[0].jid);
+  // Auto-select main group (or first) if nothing is selected.
+  // Don't auto-select if only system groups exist — show onboarding instead.
+  const hasTemplateGroups = data.groups.some((g) => !g.isSystem);
+  if (!selectedJid.value && data.groups.length > 0 && hasTemplateGroups) {
+    const main = data.groups.find((g) => g.isMain && !g.isSystem)
+      || data.groups.find((g) => !g.isSystem);
+    if (main) selectGroup(main.jid);
   }
 }
 
@@ -123,8 +126,9 @@ async function pollStatus() {
     const data = await api.getStatus();
     status.value = data;
 
-    // Sync typing state with active containers — handles page reload
-    // AND clears stale typing for containers that have stopped
+    // Clear stale typing for containers that have stopped.
+    // Typing is SET only by SSE 'typing' events (actual generation),
+    // not by container being active (it may be idle between messages).
     if (data?.containers?.groups) {
       const activeJids = new Set(
         data.containers.groups
@@ -132,16 +136,11 @@ async function pollStatus() {
           .map((g) => g.jid),
       );
       const newTyping = {};
-      // Set typing for active containers
-      for (const jid of activeJids) {
-        newTyping[jid] = true;
-      }
-      // Preserve SSE-driven typing only if container is still active
       for (const [jid, val] of Object.entries(typingGroups.value)) {
         if (val && activeJids.has(jid)) {
           newTyping[jid] = true;
         }
-        // If container is no longer active, typing gets dropped (not carried over)
+        // If container is no longer active, typing gets dropped
       }
       typingGroups.value = newTyping;
     }

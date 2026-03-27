@@ -362,7 +362,11 @@ export class GroupQueue {
   } {
     const groups: ReturnType<GroupQueue['getSnapshot']>['groups'] = [];
     for (const [jid, state] of this.groups) {
-      if (state.active || state.pendingMessages || state.pendingTasks.length > 0) {
+      if (
+        state.active ||
+        state.pendingMessages ||
+        state.pendingTasks.length > 0
+      ) {
         groups.push({
           jid,
           active: state.active,
