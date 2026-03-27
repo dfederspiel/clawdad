@@ -119,6 +119,23 @@ export async function createGroup(name, folder, template) {
   return result;
 }
 
+export async function deleteGroup(folder, jid) {
+  await api.deleteGroup(folder);
+
+  // Clear unread for deleted group
+  const cur = { ...unread.value };
+  delete cur[jid];
+  unread.value = cur;
+
+  // If the deleted group was selected, clear selection
+  if (selectedJid.value === jid) {
+    selectedJid.value = null;
+    messages.value = [];
+  }
+
+  await loadGroups();
+}
+
 // --- Status/Task/Telemetry polling ---
 
 async function pollStatus() {
