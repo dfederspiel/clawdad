@@ -3,7 +3,12 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 
-import { GROUPS_DIR, WEB_UI_PORT, WEB_UI_ENABLED, ASSISTANT_NAME } from '../config.js';
+import {
+  GROUPS_DIR,
+  WEB_UI_PORT,
+  WEB_UI_ENABLED,
+  ASSISTANT_NAME,
+} from '../config.js';
 import {
   getMessagesSince,
   storeMessageDirect,
@@ -67,7 +72,9 @@ export class WebChannel implements Channel {
   /** Register a default web:general group as main if no web groups exist. */
   private ensureDefaultGroup(): void {
     const groups = this.opts.registeredGroups();
-    const hasWebGroup = Object.keys(groups).some((jid) => jid.startsWith('web:'));
+    const hasWebGroup = Object.keys(groups).some((jid) =>
+      jid.startsWith('web:'),
+    );
     if (hasWebGroup) return;
 
     const jid = 'web:general';
@@ -81,7 +88,13 @@ export class WebChannel implements Channel {
       isSystem: true,
     };
     this.opts.onRegisterGroup?.(jid, group);
-    this.opts.onChatMetadata(jid, new Date().toISOString(), 'General', 'web', true);
+    this.opts.onChatMetadata(
+      jid,
+      new Date().toISOString(),
+      'General',
+      'web',
+      true,
+    );
     logger.info('Auto-registered default web group (web:general) as main');
   }
 
@@ -183,7 +196,9 @@ export class WebChannel implements Channel {
       const templatesDir = path.resolve(process.cwd(), 'templates');
       const templates: { id: string; name: string; description: string }[] = [];
       if (fs.existsSync(templatesDir)) {
-        for (const entry of fs.readdirSync(templatesDir, { withFileTypes: true })) {
+        for (const entry of fs.readdirSync(templatesDir, {
+          withFileTypes: true,
+        })) {
           if (!entry.isDirectory()) continue;
           const metaPath = path.join(templatesDir, entry.name, 'meta.json');
           let name = entry.name;
@@ -193,7 +208,9 @@ export class WebChannel implements Channel {
               const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
               name = meta.name || name;
               description = meta.description || '';
-            } catch { /* use defaults */ }
+            } catch {
+              /* use defaults */
+            }
           }
           templates.push({ id: entry.name, name, description });
         }
@@ -271,10 +288,16 @@ export class WebChannel implements Channel {
       }
 
       // Pre-fill agent-config.json with global user config (shared fields)
-      const globalConfigPath = path.join(GROUPS_DIR, 'global', 'user-config.json');
+      const globalConfigPath = path.join(
+        GROUPS_DIR,
+        'global',
+        'user-config.json',
+      );
       if (fs.existsSync(globalConfigPath)) {
         try {
-          const globalConfig = JSON.parse(fs.readFileSync(globalConfigPath, 'utf-8'));
+          const globalConfig = JSON.parse(
+            fs.readFileSync(globalConfigPath, 'utf-8'),
+          );
           const groupDir = path.resolve(process.cwd(), 'groups', group.folder);
           fs.mkdirSync(groupDir, { recursive: true });
           const agentConfigPath = path.join(groupDir, 'agent-config.json');
@@ -283,24 +306,42 @@ export class WebChannel implements Channel {
           let agentConfig: Record<string, unknown> = {};
           if (fs.existsSync(agentConfigPath)) {
             try {
-              agentConfig = JSON.parse(fs.readFileSync(agentConfigPath, 'utf-8'));
-            } catch { /* start fresh */ }
+              agentConfig = JSON.parse(
+                fs.readFileSync(agentConfigPath, 'utf-8'),
+              );
+            } catch {
+              /* start fresh */
+            }
           }
 
           // Map global fields into agent-config fields used by templates
-          if (globalConfig.user_name) agentConfig.user_name = globalConfig.user_name;
-          if (globalConfig.user_role) agentConfig.user_role = globalConfig.user_role;
+          if (globalConfig.user_name)
+            agentConfig.user_name = globalConfig.user_name;
+          if (globalConfig.user_role)
+            agentConfig.user_role = globalConfig.user_role;
           if (globalConfig.team) agentConfig.team_name = globalConfig.team;
-          if (globalConfig.organization) agentConfig.organization = globalConfig.organization;
-          if (globalConfig.atlassian_instance) agentConfig.atlassian_instance = globalConfig.atlassian_instance;
-          if (globalConfig.atlassian_email) agentConfig.atlassian_email = globalConfig.atlassian_email;
-          if (globalConfig.jira_project_key) agentConfig.jira_project_key = globalConfig.jira_project_key;
-          if (globalConfig.github_org) agentConfig.github_org = globalConfig.github_org;
-          if (globalConfig.gitlab_url) agentConfig.gitlab_url = globalConfig.gitlab_url;
+          if (globalConfig.organization)
+            agentConfig.organization = globalConfig.organization;
+          if (globalConfig.atlassian_instance)
+            agentConfig.atlassian_instance = globalConfig.atlassian_instance;
+          if (globalConfig.atlassian_email)
+            agentConfig.atlassian_email = globalConfig.atlassian_email;
+          if (globalConfig.jira_project_key)
+            agentConfig.jira_project_key = globalConfig.jira_project_key;
+          if (globalConfig.github_org)
+            agentConfig.github_org = globalConfig.github_org;
+          if (globalConfig.gitlab_url)
+            agentConfig.gitlab_url = globalConfig.gitlab_url;
 
-          fs.writeFileSync(agentConfigPath, JSON.stringify(agentConfig, null, 2) + '\n');
+          fs.writeFileSync(
+            agentConfigPath,
+            JSON.stringify(agentConfig, null, 2) + '\n',
+          );
         } catch (err) {
-          logger.warn({ err }, 'Failed to pre-fill agent config from global config');
+          logger.warn(
+            { err },
+            'Failed to pre-fill agent config from global config',
+          );
         }
       }
 
