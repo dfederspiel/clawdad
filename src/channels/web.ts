@@ -17,13 +17,15 @@ import {
   getAllTasks,
   getTaskById,
   getTaskRunLogs,
+  createTask,
   updateTask,
   deleteTask,
   getTelemetryStats,
 } from '../db.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
-import { Channel, NewMessage, RegisteredGroup } from '../types.js';
+import { Channel, NewMessage, RegisteredGroup, ScheduledTask } from '../types.js';
+import { computeNextRun } from '../task-scheduler.js';
 
 // MIME types for static file serving
 const MIME: Record<string, string> = {
@@ -451,6 +453,38 @@ export class WebChannel implements Channel {
     // GET /api/tasks — all scheduled tasks
     if (method === 'GET' && url.pathname === '/api/tasks') {
       return this.json(res, 200, { tasks: getAllTasks() });
+    }
+
+    // POST /api/tasks — create a scheduled task
+    if (method === 'POST' && url.pathname === '/api/tasks') {
+      const body = await this.readBody(req);
+      const { group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, script } = body;
+      if (!group_folder || !chat_jid || !prompt || !schedule_type || !schedule_value) {
+        return this.json(res, 400, {
+          error: 'group_folder, chat_jid, prompt, schedule_type, and schedule_value are required',
+        });
+      }
+      if (!['cron', 'interval', 'once'].includes(schedule_type)) {
+        return this.json(res, 400, { error: 'schedule_type must be cron, interval, or once' });
+      }
+      const task: Omit<ScheduledTask, 'last_run' | 'last_result'> = {
+        id: randomUUID(),
+        group_folder,
+        chat_jid,
+        prompt,
+        script: script || null,
+        schedule_type: schedule_type as ScheduledTask['schedule_type'],
+        schedule_value,
+        context_mode: (context_mode as ScheduledTask['context_mode']) || 'isolated',
+        next_run: null,
+        status: 'active',
+        created_at: new Date().toISOString(),
+      };
+      // Compute first next_run
+      const fullTask = { ...task, last_run: null, last_result: null } as ScheduledTask;
+      task.next_run = computeNextRun(fullTask);
+      createTask(task);
+      return this.json(res, 201, { task: { ...task, last_run: null, last_result: null } });
     }
 
     // GET /api/tasks/:id/logs — execution history for a task
