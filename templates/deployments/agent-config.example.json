@@ -1,0 +1,51 @@
+{
+  "_comment": "Deployment agent configuration. The agent will walk you through filling this in on first message.",
+
+  "product_name": "My Product",
+
+  "github_repos": [
+    { "org": "my-org", "repo": "repo-name", "branch": "main" }
+  ],
+
+  "gitlab_url": "https://gitlab.example.com",
+  "gitlab_projects": [
+    { "id": "1234", "name": "my-project", "branch": "main" }
+  ],
+
+  "harness_account_id": "",
+  "harness_org": "my-org",
+  "harness_project": "my-project",
+  "harness_services": [
+    { "identifier": "myService", "name": "my-service", "gitlab_project_id": "1234" }
+  ],
+  "harness_environments": [
+    { "identifier": "dev", "type": "PreProduction", "description": "Development" },
+    { "identifier": "stg", "type": "PreProduction", "description": "Staging" },
+    { "identifier": "prd", "type": "Production", "description": "Production" }
+  ],
+  "harness_pipelines": [
+    { "identifier": "deployToDev", "description": "Deploy to dev", "is_default": true },
+    { "identifier": "deployToProd", "description": "Deploy to production" }
+  ],
+
+  "blackduck_url": "https://your-blackduck-instance.example.com",
+  "blackduck_projects": [
+    { "name": "my-project", "id": "uuid-here" }
+  ],
+
+  "launchdarkly_project": "my-project",
+  "launchdarkly_environments": [
+    { "key": "test", "name": "Development", "critical": false },
+    { "key": "production", "name": "Production", "critical": true }
+  ],
+
+  "e2e_test_host": "https://test-runner.example.com",
+  "e2e_test_project_id": "",
+
+  "deployment_order": ["dev", "staging", "production"],
+  "deployment_window": "Mon-Thu",
+  "approval_policy": {
+    "auto_proceed": ["dev", "staging"],
+    "require_approval": ["production"]
+  }
+}

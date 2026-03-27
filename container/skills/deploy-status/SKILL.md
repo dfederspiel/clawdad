@@ -319,6 +319,7 @@ Log an event whenever you observe a meaningful state change — not speculativel
 - **Don't log container lifecycle** — the host already handles `container_started`/`container_completed`.
 - **Don't log raw API errors** — `api.sh` already captures those in `api-logs/`. Only log `failure` when you've confirmed a domain-level failure (stage failed, deploy aborted, etc.).
 
+
 ## Notes
 
 - Always query live APIs — never report status from memory

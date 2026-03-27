@@ -253,6 +253,7 @@ function buildVolumeMounts(
   const groupIpcDir = resolveGroupIpcPath(group.folder);
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'credentials'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
   mounts.push({
     hostPath: groupIpcDir,
@@ -374,7 +375,7 @@ async function buildContainerArgs(
   }
 
   // Pass through extra environment variables from .env to the container.
-  // These are non-secret service keys the agent needs for API calls (Harness, GitLab, etc.).
+  // These are non-secret service keys the agent needs for API calls.
   const PASSTHROUGH_ENV_PREFIXES = [
     'ANTHROPIC_BASE_URL', // Custom API endpoint (not the secret — just the URL)
     'HARNESS_',
@@ -387,7 +388,6 @@ async function buildContainerArgs(
   ];
   const envVars = readEnvFile(
     PASSTHROUGH_ENV_PREFIXES.flatMap((prefix) => {
-      // Read all keys from .env that match the prefixes
       try {
         const envContent = fs.readFileSync(
           path.join(process.cwd(), '.env'),
@@ -603,9 +603,9 @@ export async function runContainerAgent(
         'Container timeout, stopping gracefully',
       );
       exec(
-        `${CONTAINER_RUNTIME_BIN} stop -t 10 ${containerName}`,
+        `${CONTAINER_RUNTIME_BIN} stop -t 1 ${containerName}`,
         { timeout: 15000 },
-        (err: unknown) => {
+        (err: Error | null) => {
           if (err) {
             logger.warn(
               { group: group.name, containerName, err },

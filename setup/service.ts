@@ -20,6 +20,112 @@ import {
 } from './platform.js';
 import { emitStatus } from './status.js';
 
+/**
+ * Derive a unique service label from the project directory.
+ * e.g. /Users/alice/code/bd-nanoclaw → "com.nanoclaw.bd-nanoclaw"
+ *      /tmp/test-clawdad            → "com.nanoclaw.test-clawdad"
+ *
+ * Exported so verify.ts and tests can use the same logic.
+ */
+export function serviceLabel(projectRoot: string): string {
+  const dirName = path.basename(projectRoot).replace(/[^a-zA-Z0-9_-]/g, '-');
+  return `com.nanoclaw.${dirName}`;
+}
+
+/**
+ * Find and remove stale service configs that point to directories which no longer exist.
+ * Prevents orphaned services from accumulating when test clones are deleted.
+ */
+function cleanupStaleServices(homeDir: string): void {
+  const platform = getPlatform();
+
+  if (platform === 'macos') {
+    const agentDir = path.join(homeDir, 'Library', 'LaunchAgents');
+    if (!fs.existsSync(agentDir)) return;
+
+    for (const file of fs.readdirSync(agentDir)) {
+      if (!file.startsWith('com.nanoclaw.') || !file.endsWith('.plist'))
+        continue;
+      const plistPath = path.join(agentDir, file);
+      try {
+        const content = fs.readFileSync(plistPath, 'utf-8');
+        const match = content.match(
+          /<key>WorkingDirectory<\/key>\s*<string>([^<]+)<\/string>/,
+        );
+        if (match && !fs.existsSync(match[1])) {
+          const label = file.replace('.plist', '');
+          logger.info(
+            { label, directory: match[1] },
+            'Removing stale service — directory no longer exists',
+          );
+          try {
+            execSync(
+              `launchctl bootout gui/$(id -u) ${JSON.stringify(plistPath)}`,
+              { stdio: 'ignore' },
+            );
+          } catch {
+            // May not be loaded
+            try {
+              execSync(`launchctl unload ${JSON.stringify(plistPath)}`, {
+                stdio: 'ignore',
+              });
+            } catch {
+              // Already unloaded
+            }
+          }
+          fs.unlinkSync(plistPath);
+          logger.info({ plistPath }, 'Deleted stale plist');
+        }
+      } catch {
+        // Skip files we can't read
+      }
+    }
+  } else if (platform === 'linux') {
+    const unitDir = path.join(homeDir, '.config', 'systemd', 'user');
+    if (!fs.existsSync(unitDir)) return;
+
+    for (const file of fs.readdirSync(unitDir)) {
+      if (!file.startsWith('nanoclaw-') || !file.endsWith('.service'))
+        continue;
+      const unitPath = path.join(unitDir, file);
+      try {
+        const content = fs.readFileSync(unitPath, 'utf-8');
+        const match = content.match(/WorkingDirectory=(.+)/);
+        if (match && !fs.existsSync(match[1])) {
+          const unitName = file.replace('.service', '');
+          logger.info(
+            { unitName, directory: match[1] },
+            'Removing stale service — directory no longer exists',
+          );
+          try {
+            execSync(`systemctl --user stop ${unitName}`, {
+              stdio: 'ignore',
+            });
+          } catch {
+            // May not be running
+          }
+          try {
+            execSync(`systemctl --user disable ${unitName}`, {
+              stdio: 'ignore',
+            });
+          } catch {
+            // May not be enabled
+          }
+          fs.unlinkSync(unitPath);
+          try {
+            execSync('systemctl --user daemon-reload', { stdio: 'ignore' });
+          } catch {
+            // best effort
+          }
+          logger.info({ unitPath }, 'Deleted stale unit');
+        }
+      } catch {
+        // Skip files we can't read
+      }
+    }
+  }
+}
+
 export async function run(_args: string[]): Promise<void> {
   const projectRoot = process.cwd();
   const platform = getPlatform();
@@ -27,6 +133,9 @@ export async function run(_args: string[]): Promise<void> {
   const homeDir = os.homedir();
 
   logger.info({ platform, nodePath, projectRoot }, 'Setting up service');
+
+  // Clean up stale services from deleted directories before creating new ones
+  cleanupStaleServices(homeDir);
 
   // Build first
   logger.info('Building TypeScript');
@@ -73,20 +182,31 @@ function setupLaunchd(
   nodePath: string,
   homeDir: string,
 ): void {
+  const label = serviceLabel(projectRoot);
   const plistPath = path.join(
     homeDir,
     'Library',
     'LaunchAgents',
-    'com.nanoclaw.plist',
+    `${label}.plist`,
   );
   fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+
+  // If this instance already has a running service, unload it first so we can reload cleanly
+  try {
+    execSync(
+      `launchctl bootout gui/$(id -u) ${JSON.stringify(plistPath)} 2>/dev/null`,
+      { stdio: 'ignore' },
+    );
+  } catch {
+    // Not loaded — fine
+  }
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.nanoclaw</string>
+    <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
         <string>${nodePath}</string>
@@ -113,7 +233,7 @@ function setupLaunchd(
 </plist>`;
 
   fs.writeFileSync(plistPath, plist);
-  logger.info({ plistPath }, 'Wrote launchd plist');
+  logger.info({ plistPath, label }, 'Wrote launchd plist');
 
   try {
     execSync(`launchctl load ${JSON.stringify(plistPath)}`, {
@@ -128,13 +248,14 @@ function setupLaunchd(
   let serviceLoaded = false;
   try {
     const output = execSync('launchctl list', { encoding: 'utf-8' });
-    serviceLoaded = output.includes('com.nanoclaw');
+    serviceLoaded = output.includes(label);
   } catch {
     // launchctl list failed
   }
 
   emitStatus('SETUP_SERVICE', {
     SERVICE_TYPE: 'launchd',
+    SERVICE_LABEL: label,
     NODE_PATH: nodePath,
     PROJECT_PATH: projectRoot,
     PLIST_PATH: plistPath,
@@ -207,13 +328,16 @@ function setupSystemd(
   homeDir: string,
 ): void {
   const runningAsRoot = isRoot();
+  const label = serviceLabel(projectRoot);
+  // systemd unit names use the label with dots replaced by dashes
+  const unitName = label.replace(/\./g, '-');
 
   // Root uses system-level service, non-root uses user-level
   let unitPath: string;
   let systemctlPrefix: string;
 
   if (runningAsRoot) {
-    unitPath = '/etc/systemd/system/nanoclaw.service';
+    unitPath = `/etc/systemd/system/${unitName}.service`;
     systemctlPrefix = 'systemctl';
     logger.info('Running as root — installing system-level systemd unit');
   } else {
@@ -229,7 +353,7 @@ function setupSystemd(
     }
     const unitDir = path.join(homeDir, '.config', 'systemd', 'user');
     fs.mkdirSync(unitDir, { recursive: true });
-    unitPath = path.join(unitDir, 'nanoclaw.service');
+    unitPath = path.join(unitDir, `${unitName}.service`);
     systemctlPrefix = 'systemctl --user';
   }
 
@@ -288,13 +412,13 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
   }
 
   try {
-    execSync(`${systemctlPrefix} enable nanoclaw`, { stdio: 'ignore' });
+    execSync(`${systemctlPrefix} enable ${unitName}`, { stdio: 'ignore' });
   } catch (err) {
     logger.error({ err }, 'systemctl enable failed');
   }
 
   try {
-    execSync(`${systemctlPrefix} start nanoclaw`, { stdio: 'ignore' });
+    execSync(`${systemctlPrefix} start ${unitName}`, { stdio: 'ignore' });
   } catch (err) {
     logger.error({ err }, 'systemctl start failed');
   }
@@ -302,7 +426,7 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
   // Verify
   let serviceLoaded = false;
   try {
-    execSync(`${systemctlPrefix} is-active nanoclaw`, { stdio: 'ignore' });
+    execSync(`${systemctlPrefix} is-active ${unitName}`, { stdio: 'ignore' });
     serviceLoaded = true;
   } catch {
     // Not active
@@ -310,6 +434,7 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
 
   emitStatus('SETUP_SERVICE', {
     SERVICE_TYPE: runningAsRoot ? 'systemd-system' : 'systemd-user',
+    SERVICE_LABEL: label,
     NODE_PATH: nodePath,
     PROJECT_PATH: projectRoot,
     UNIT_PATH: unitPath,

@@ -1,10 +1,18 @@
-# NanoClaw
+# ClawDad (bd-nanoclaw)
 
-Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
+Agent orchestrator running Claude in isolated containers. Web UI is the primary interface. Based on [NanoClaw](https://github.com/qwibitai/nanoclaw).
+
+## Getting Started
+
+New users should run `claude` in the terminal and say "help me get set up" (or `/setup`). Claude walks through everything: Node.js, OneCLI, Docker, LiteLLM/Anthropic credentials, container build, and web UI start. No manual `npm install` needed.
+
+The web UI runs at `http://localhost:3456`. Most users interact through:
+- **Web UI** — chat with agents, create from templates, review tasks
+- **Claude Code** — add templates, tune agent behavior, debug issues
 
 ## Quick Context
 
-Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
+Single Node.js process with web UI channel (always-on) and optional messaging channels. Agents run via Claude Agent SDK in Docker containers. Each group has isolated filesystem and memory. Credentials flow through OneCLI Agent Vault — agents never see raw API keys.
 
 ## Key Files
 
@@ -16,6 +24,8 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/config.ts` | Trigger pattern, paths, intervals |
 | `src/container-runner.ts` | Spawns agent containers with mounts |
+| `src/health.ts` | Prerequisite checks (Docker, OneCLI, Anthropic, container image) |
+| `src/channels/web.ts` | Web UI channel, API endpoints, health/register routes |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
@@ -23,7 +33,29 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 
 ## Secrets / Credentials / Proxy (OneCLI)
 
-API keys, secret keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway — which handles secret injection into containers at request time, so no keys or tokens are ever passed to containers directly. Run `onecli --help`.
+API keys, OAuth tokens, and auth credentials are managed by the **OneCLI Agent Vault** — a local gateway that intercepts outbound HTTPS requests from containers and injects credentials at request time. Agents never see raw keys. See [docs/CREDENTIALS.md](docs/CREDENTIALS.md) for the full reference.
+
+The gateway starts automatically when agents run (via the OneCLI SDK's `applyContainerConfig`). You don't need to start it manually.
+
+**Quick reference:**
+
+```bash
+onecli secrets list                     # List registered secrets
+onecli secrets create --name NAME \     # Register a new credential
+  --type anthropic|generic \
+  --value TOKEN \
+  --host-pattern api.example.com \
+  --header-name Authorization           # (required for --type generic)
+curl -sf http://127.0.0.1:10254/health  # Verify gateway is running (after an agent starts)
+```
+
+**Config vs secrets:** Non-secret values (URLs, account IDs) pass to containers as env vars via `PASSTHROUGH_ENV_PREFIXES` in `container-runner.ts`. Secrets flow through the gateway only.
+
+**Custom Anthropic endpoint:** Set `ANTHROPIC_BASE_URL` in `.env` AND match the OneCLI host pattern — both are required or you'll get silent "Invalid API key" errors.
+
+## Reset
+
+Run `./scripts/reset.sh` to wipe all runtime state and return to a clean template. This removes the database, IPC state, logs, and user-created groups while preserving `.env`, template groups (`main/`, `global/`), and OneCLI vault credentials. Use `--yes` to skip confirmation.
 
 ## Skills
 
@@ -37,6 +69,7 @@ Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) f
 | Skill | When to Use |
 |-------|-------------|
 | `/setup` | First-time installation, authentication, service configuration |
+| `/update` | Pull latest code, rebuild, restart service |
 | `/customize` | Adding channels, integrations, changing behavior |
 | `/debug` | Container issues, logs, troubleshooting |
 | `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |

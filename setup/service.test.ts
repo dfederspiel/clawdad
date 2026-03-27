@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import path from 'path';
 
+import { serviceLabel } from './service.js';
+
 /**
  * Tests for service configuration generation.
  *
@@ -14,12 +16,13 @@ function generatePlist(
   projectRoot: string,
   homeDir: string,
 ): string {
+  const label = serviceLabel(projectRoot);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.nanoclaw</string>
+    <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
         <string>${nodePath}</string>
@@ -72,14 +75,34 @@ StandardError=append:${projectRoot}/logs/nanoclaw.error.log
 WantedBy=${isSystem ? 'multi-user.target' : 'default.target'}`;
 }
 
+describe('serviceLabel', () => {
+  it('derives label from directory name', () => {
+    expect(serviceLabel('/home/user/bd-nanoclaw')).toBe(
+      'com.nanoclaw.bd-nanoclaw',
+    );
+  });
+
+  it('handles nested paths', () => {
+    expect(serviceLabel('/tmp/test-clawdad')).toBe(
+      'com.nanoclaw.test-clawdad',
+    );
+  });
+
+  it('sanitizes special characters', () => {
+    expect(serviceLabel('/home/user/my project (1)')).toBe(
+      'com.nanoclaw.my-project--1-',
+    );
+  });
+});
+
 describe('plist generation', () => {
-  it('contains the correct label', () => {
+  it('contains a directory-specific label', () => {
     const plist = generatePlist(
       '/usr/local/bin/node',
       '/home/user/nanoclaw',
       '/home/user',
     );
-    expect(plist).toContain('<string>com.nanoclaw</string>');
+    expect(plist).toContain('<string>com.nanoclaw.nanoclaw</string>');
   });
 
   it('uses the correct node path', () => {

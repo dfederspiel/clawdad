@@ -11,6 +11,7 @@ const envConfig = readEnvFile([
   'ONECLI_URL',
   'TZ',
   'WEB_UI_ENABLED',
+  'WEB_UI_PORT',
 ]);
 
 export const ASSISTANT_NAME =
@@ -54,6 +55,10 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
 ); // 10MB default
 export const ONECLI_URL =
   process.env.ONECLI_URL || envConfig.ONECLI_URL || 'http://localhost:10254';
+export const MAX_MESSAGES_PER_PROMPT = Math.max(
+  1,
+  parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,
+);
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
@@ -81,7 +86,10 @@ export const TRIGGER_PATTERN = buildTriggerPattern(DEFAULT_TRIGGER);
 // Web UI channel
 export const WEB_UI_ENABLED =
   (process.env.WEB_UI_ENABLED || envConfig.WEB_UI_ENABLED || 'true') === 'true';
-export const WEB_UI_PORT = parseInt(process.env.WEB_UI_PORT || '3456', 10);
+export const WEB_UI_PORT = parseInt(
+  process.env.WEB_UI_PORT || envConfig.WEB_UI_PORT || '3456',
+  10,
+);
 
 // Timezone for scheduled tasks, message formatting, etc.
 // Validates each candidate is a real IANA identifier before accepting.
