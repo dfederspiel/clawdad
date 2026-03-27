@@ -8,6 +8,7 @@ import http from 'http';
 
 import { CONTAINER_IMAGE, ONECLI_URL } from './config.js';
 import { CONTAINER_RUNTIME_BIN } from './container-runtime.js';
+import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
 
 export interface HealthStatus {
@@ -74,15 +75,18 @@ function checkOneCLI(): Promise<HealthStatus['onecli']> {
 
 function checkAnthropic(): HealthStatus['anthropic'] {
   try {
-    const output = execSync('onecli secrets list --json', {
+    const output = execSync('onecli secrets list', {
       stdio: ['pipe', 'pipe', 'pipe'],
       encoding: 'utf-8',
       timeout: 5000,
     });
     const secrets = JSON.parse(output);
-    // Look for a secret with hostPattern matching anthropic
-    const anthropicHost = process.env.ANTHROPIC_BASE_URL
-      ? new URL(process.env.ANTHROPIC_BASE_URL).hostname
+    // Look for a secret with hostPattern matching anthropic.
+    // Read ANTHROPIC_BASE_URL from .env since launchd/systemd won't have it in process.env.
+    const envVars = readEnvFile(['ANTHROPIC_BASE_URL']);
+    const baseUrl = process.env.ANTHROPIC_BASE_URL || envVars.ANTHROPIC_BASE_URL;
+    const anthropicHost = baseUrl
+      ? new URL(baseUrl).hostname
       : 'api.anthropic.com';
     const found =
       Array.isArray(secrets) &&
