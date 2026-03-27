@@ -85,7 +85,24 @@ onecli secrets create --name Anthropic \
 
 **LiteLLM proxy:** If your team uses a LiteLLM proxy, set `ANTHROPIC_BASE_URL` in `.env` and use the proxy hostname as the OneCLI `--host-pattern`. Setup guides you through this.
 
-## For Developers
+## Development Workflows
+
+### Testing the onboarding flow
+
+To test what a new user experiences, clone a fresh copy and run through setup:
+
+```bash
+git clone git@github.com:bd-polaris/bd-nanoclaw.git /tmp/test-clawdad
+cd /tmp/test-clawdad
+claude
+# Then say "help me get set up" or /setup
+```
+
+Delete `/tmp/test-clawdad` and re-clone to start over. Multiple instances can run in parallel — setup auto-detects port conflicts and assigns the next free port.
+
+### Developing ClawDad
+
+For working on the orchestrator, templates, skills, or container runtime:
 
 ```bash
 npm run dev          # Run with hot reload
@@ -95,6 +112,26 @@ npm test             # Run tests
 ```
 
 Key files: `src/index.ts` (orchestrator), `src/container-runner.ts` (container spawning), `src/channels/web.ts` (web UI + API), `src/health.ts` (prerequisite checks), `templates/` (agent templates).
+
+### Developing the web UI
+
+The web UI lives in `web/` and uses Preact + HTM (no build step). Edit files and refresh the browser — changes are immediate.
+
+```
+web/
+├── js/
+│   ├── app.js              # Main app shell and routing
+│   ├── api.js              # API client functions
+│   └── components/         # Preact components
+│       ├── OnboardingGuide.js   # First-boot flow
+│       ├── PrerequisiteCheck.js # Health check cards
+│       ├── SetupWizard.js       # Configuration wizard
+│       └── ...
+├── css/                    # Stylesheets
+└── index.html              # Entry point
+```
+
+The web UI talks to the orchestrator via REST endpoints defined in `src/channels/web.ts`. To add a new API endpoint, add a route handler there and a corresponding function in `web/js/api.js`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for skill types, PR guidelines, and the contribution model.
 
