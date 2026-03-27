@@ -7,7 +7,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { STORE_DIR } from '../src/config.ts';
+import { STORE_DIR, WEB_UI_PORT } from '../src/config.ts';
 import { initDatabase, setRegisteredGroup } from '../src/db.ts';
 import { isValidGroupFolder } from '../src/group-folder.ts';
 import { logger } from '../src/logger.ts';
@@ -68,6 +68,34 @@ function parseArgs(args: string[]): RegisterArgs {
   return result;
 }
 
+/**
+ * Attempt to register the group via the running service's web API.
+ * Returns true if successful, false if the service is unreachable.
+ */
+async function tryApiRegister(parsed: RegisterArgs): Promise<boolean> {
+  // The web API uses web: prefix JIDs and handles folder creation, template
+  // copying, config merge, OneCLI agent, and memory sync automatically.
+  // For non-web channels, the orchestrator's registerGroup callback handles
+  // all the same setup via onRegisterGroup.
+  try {
+    const url = `http://localhost:${WEB_UI_PORT}/api/groups`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: parsed.name,
+        folder: parsed.folder,
+      }),
+      signal: AbortSignal.timeout(3000),
+    });
+    // 409 = already exists, which is fine for idempotent registration
+    return res.ok || res.status === 409;
+  } catch {
+    // Service not running or not reachable
+    return false;
+  }
+}
+
 export async function run(args: string[]): Promise<void> {
   const projectRoot = process.cwd();
   const parsed = parseArgs(args);
@@ -92,51 +120,58 @@ export async function run(args: string[]): Promise<void> {
 
   logger.info(parsed, 'Registering channel');
 
-  // Ensure data and store directories exist (store/ may not exist on
-  // fresh installs that skip WhatsApp auth, which normally creates it)
-  fs.mkdirSync(path.join(projectRoot, 'data'), { recursive: true });
-  fs.mkdirSync(STORE_DIR, { recursive: true });
+  // Try the running service's API first — this updates both the in-memory
+  // cache and the database, so the group is immediately visible without a
+  // restart.  Falls back to direct DB write if the service isn't running.
+  const apiRegistered = await tryApiRegister(parsed);
+  if (apiRegistered) {
+    logger.info('Group registered via running service API (memory + DB synced)');
+  } else {
+    // Fallback: direct DB + filesystem (requires service restart for memory sync)
+    logger.info('Service not reachable, falling back to direct DB registration');
 
-  // Initialize database (creates schema + runs migrations)
-  initDatabase();
+    // Ensure data and store directories exist (store/ may not exist on
+    // fresh installs that skip WhatsApp auth, which normally creates it)
+    fs.mkdirSync(path.join(projectRoot, 'data'), { recursive: true });
+    fs.mkdirSync(STORE_DIR, { recursive: true });
 
-  setRegisteredGroup(parsed.jid, {
-    name: parsed.name,
-    folder: parsed.folder,
-    trigger: parsed.trigger,
-    added_at: new Date().toISOString(),
-    requiresTrigger: parsed.requiresTrigger,
-    isMain: parsed.isMain,
-  });
+    // Initialize database (creates schema + runs migrations)
+    initDatabase();
 
-  logger.info('Wrote registration to SQLite');
+    setRegisteredGroup(parsed.jid, {
+      name: parsed.name,
+      folder: parsed.folder,
+      trigger: parsed.trigger,
+      added_at: new Date().toISOString(),
+      requiresTrigger: parsed.requiresTrigger,
+      isMain: parsed.isMain,
+    });
 
-  // Create group folders
-  fs.mkdirSync(path.join(projectRoot, 'groups', parsed.folder, 'logs'), {
-    recursive: true,
-  });
+    logger.info('Wrote registration to SQLite');
 
-  // Create CLAUDE.md in the new group folder from template if it doesn't exist.
-  // The agent runs with CWD=/workspace/group and loads CLAUDE.md from there.
-  // Never overwrite an existing CLAUDE.md — users customize these extensively
-  // (persona, workspace structure, communication rules, family context, etc.)
-  // and a stock template replacement would destroy that work.
-  const groupClaudeMdPath = path.join(
-    projectRoot,
-    'groups',
-    parsed.folder,
-    'CLAUDE.md',
-  );
-  if (!fs.existsSync(groupClaudeMdPath)) {
-    const templatePath = parsed.isMain
-      ? path.join(projectRoot, 'groups', 'main', 'CLAUDE.md')
-      : path.join(projectRoot, 'groups', 'global', 'CLAUDE.md');
-    if (fs.existsSync(templatePath)) {
-      fs.copyFileSync(templatePath, groupClaudeMdPath);
-      logger.info(
-        { file: groupClaudeMdPath, template: templatePath },
-        'Created CLAUDE.md from template',
-      );
+    // Create group folders
+    fs.mkdirSync(path.join(projectRoot, 'groups', parsed.folder, 'logs'), {
+      recursive: true,
+    });
+
+    // Create CLAUDE.md in the new group folder from template if it doesn't exist.
+    const groupClaudeMdPath = path.join(
+      projectRoot,
+      'groups',
+      parsed.folder,
+      'CLAUDE.md',
+    );
+    if (!fs.existsSync(groupClaudeMdPath)) {
+      const templatePath = parsed.isMain
+        ? path.join(projectRoot, 'groups', 'main', 'CLAUDE.md')
+        : path.join(projectRoot, 'groups', 'global', 'CLAUDE.md');
+      if (fs.existsSync(templatePath)) {
+        fs.copyFileSync(templatePath, groupClaudeMdPath);
+        logger.info(
+          { file: groupClaudeMdPath, template: templatePath },
+          'Created CLAUDE.md from template',
+        );
+      }
     }
   }
 

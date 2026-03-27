@@ -69,21 +69,10 @@ export function TaskItem({ task }) {
 
   return html`
     <div class="px-4 py-2 hover:bg-bg-hover/50 transition-colors">
-      <div class="flex items-start gap-2">
-        <span class="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${statusColor} ${!isPaused && !isCompleted ? 'bg-green-400' : isPaused ? 'bg-yellow-400' : 'bg-txt-muted'}" />
-        <div class="flex-1 min-w-0">
-          <div class="text-xs text-txt truncate cursor-pointer" onClick=${toggleLogs} title=${task.prompt}>
-            ${truncate(task.prompt)}
-          </div>
-          <div class="flex items-center gap-2 mt-0.5 text-[10px] text-txt-muted">
-            <span>${task.schedule_type}${task.schedule_type === 'cron' ? ` ${task.schedule_value}` : ''}</span>
-            <span>·</span>
-            <span>last: ${relativeTime(task.last_run)}</span>
-            ${task.next_run && html`
-              <span>·</span>
-              <span>next: ${untilTime(task.next_run)}</span>
-            `}
-          </div>
+      <div class="flex items-center gap-2">
+        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 ${statusColor} ${!isPaused && !isCompleted ? 'bg-green-400' : isPaused ? 'bg-yellow-400' : 'bg-txt-muted'}" />
+        <div class="text-xs text-txt truncate flex-1 min-w-0 cursor-pointer" onClick=${toggleLogs} title=${task.prompt}>
+          ${truncate(task.prompt)}
         </div>
         <div class="flex items-center gap-1 flex-shrink-0">
           ${!isCompleted && html`
@@ -104,6 +93,16 @@ export function TaskItem({ task }) {
           >
             delete
           </button>
+        </div>
+      </div>
+      <div class="mt-1 text-[10px] text-txt-muted space-y-0.5">
+        <div class="font-mono">${task.schedule_type}${task.schedule_type === 'cron' ? `: ${task.schedule_value}` : ''}</div>
+        <div class="flex items-center gap-2">
+          <span>last: ${relativeTime(task.last_run)}</span>
+          ${task.next_run && html`
+            <span>·</span>
+            <span>next: ${untilTime(task.next_run)}</span>
+          `}
         </div>
       </div>
 
