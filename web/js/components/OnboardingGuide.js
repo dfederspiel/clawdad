@@ -2,6 +2,7 @@ import { html } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
 import { createGroup, handleSend } from '../app.js';
 import * as api from '../api.js';
+import { PrerequisiteCheck } from './PrerequisiteCheck.js';
 import { SetupWizard } from './SetupWizard.js';
 
 function TemplateCard({ template, onSelect, creating }) {
@@ -28,9 +29,19 @@ export function OnboardingGuide({ onCustom }) {
   const [error, setError] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
   const [hasConfig, setHasConfig] = useState(false);
+  const [healthReady, setHealthReady] = useState(null); // null=loading, false=needs_setup, true=ready
+  const [userPath, setUserPath] = useState(null); // 'user' | 'developer'
 
   useEffect(() => {
-    // Check if global config exists before showing templates
+    // Step 1: Check prerequisites
+    api.getHealth().then((health) => {
+      setHealthReady(health.overall === 'ready');
+    }).catch(() => {
+      // If health endpoint fails, skip prerequisite check (backwards compat)
+      setHealthReady(true);
+    });
+
+    // Pre-fetch config and templates in parallel
     api.getConfig().then((config) => {
       setHasConfig(config && Object.keys(config).length > 0);
       setConfigLoaded(true);
@@ -54,7 +65,25 @@ export function OnboardingGuide({ onCustom }) {
     }
   }
 
-  // Still loading config check
+  // Step 1: Prerequisites — show check while loading or if not ready
+  if (healthReady === null) {
+    return html`
+      <div class="flex-1 flex items-center justify-center">
+        <p class="text-sm text-txt-muted">Checking prerequisites...</p>
+      </div>
+    `;
+  }
+
+  if (healthReady === false || (healthReady === true && !userPath)) {
+    // Show prerequisite check (with path selector when all green)
+    if (healthReady === false) {
+      return html`<${PrerequisiteCheck} onReady=${(path) => { setHealthReady(true); setUserPath(path); }} />`;
+    }
+    // Health is ready but no path chosen yet — show path selector via PrerequisiteCheck
+    return html`<${PrerequisiteCheck} onReady=${(path) => setUserPath(path)} />`;
+  }
+
+  // Step 2: Still loading config check
   if (!configLoaded) {
     return html`
       <div class="flex-1 flex items-center justify-center">
@@ -63,9 +92,9 @@ export function OnboardingGuide({ onCustom }) {
     `;
   }
 
-  // No config yet — show setup wizard first
+  // Step 3: No config yet — show setup wizard
   if (!hasConfig) {
-    return html`<${SetupWizard} onComplete=${() => setHasConfig(true)} />`;
+    return html`<${SetupWizard} userPath=${userPath} onComplete=${() => setHasConfig(true)} />`;
   }
 
   // Config exists — show template picker

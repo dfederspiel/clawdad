@@ -524,13 +524,17 @@ function recoverPendingMessages(): void {
   }
 }
 
-function ensureContainerSystemRunning(): void {
-  ensureContainerRuntimeRunning();
-  cleanupOrphans();
+function ensureContainerSystemRunning(): boolean {
+  const ready = ensureContainerRuntimeRunning();
+  if (ready) cleanupOrphans();
+  return ready;
 }
 
 async function main(): Promise<void> {
-  ensureContainerSystemRunning();
+  const containerReady = ensureContainerSystemRunning();
+  if (!containerReady) {
+    logger.warn('Starting without container runtime — agents will not run until Docker is available');
+  }
   initDatabase();
   logger.info('Database initialized');
   loadState();

@@ -54,6 +54,14 @@ export const getMessages = (jid, since) =>
 export const sendMessage = (jid, content, sender) =>
   fetchJson('/api/send', { method: 'POST', body: { jid, content, sender } });
 
+// Health & onboarding
+export const getHealth = () => fetchJson('/api/health');
+export const registerAnthropic = (key, customEndpoint) =>
+  fetchJson('/api/register-anthropic', {
+    method: 'POST',
+    body: { key, customEndpoint },
+  });
+
 // Status & telemetry
 export const getStatus = () => fetchJson('/api/status');
 export const getTasks = () => fetchJson('/api/tasks');
