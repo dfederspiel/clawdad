@@ -190,6 +190,7 @@ export class WebChannel implements Channel {
       const allGroups = this.opts.registeredGroups();
       const webGroups = Object.entries(allGroups)
         .filter(([jid]) => jid.startsWith('web:'))
+        .filter(([, g]) => g.triggerScope !== 'web-all') // Exclude triggered agents from sidebar
         .map(([jid, g]) => ({
           jid,
           name: g.name,
@@ -198,6 +199,22 @@ export class WebChannel implements Channel {
           isSystem: g.isSystem || false,
         }));
       return this.json(res, 200, { groups: webGroups });
+    }
+
+    // GET /api/triggers — list triggered agents for @-mention autocomplete
+    if (method === 'GET' && url.pathname === '/api/triggers') {
+      const allGroups = this.opts.registeredGroups();
+      const triggers = Object.entries(allGroups)
+        .filter(
+          ([jid, g]) => jid.startsWith('web:') && g.triggerScope === 'web-all',
+        )
+        .map(([jid, g]) => ({
+          jid,
+          name: g.name,
+          trigger: g.trigger,
+          description: g.description || '',
+        }));
+      return this.json(res, 200, { triggers });
     }
 
     // GET /api/templates — list available group templates
@@ -255,7 +272,8 @@ export class WebChannel implements Channel {
     // POST /api/groups — register a new web group
     if (method === 'POST' && url.pathname === '/api/groups') {
       const body = await this.readBody(req);
-      const { name, folder, template } = body;
+      const { name, folder, template, description, triggerScope, trigger } =
+        body;
       if (!name || !folder) {
         return this.json(res, 400, { error: 'name and folder are required' });
       }
@@ -271,12 +289,15 @@ export class WebChannel implements Channel {
       if (existing[jid]) {
         return this.json(res, 409, { error: 'Group already exists', jid });
       }
+      const isTriggerAgent = triggerScope === 'web-all';
       const group: RegisteredGroup = {
         name,
         folder: `web_${folder}`,
-        trigger: `@${ASSISTANT_NAME}`,
+        trigger: trigger || `@${name}`,
         added_at: new Date().toISOString(),
-        requiresTrigger: false, // Web groups don't need @mention
+        requiresTrigger: isTriggerAgent ? true : false,
+        description: description || undefined,
+        triggerScope: isTriggerAgent ? 'web-all' : undefined,
       };
 
       // Copy template files BEFORE registration so the template CLAUDE.md
