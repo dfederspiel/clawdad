@@ -15,9 +15,9 @@
 # everything else → string. Use quotes for values with spaces.
 #
 # Examples:
-#   event-log.sh deploy_triggered execution_id=abc123 pipeline=myapp version=v2.1.0
+#   event-log.sh deploy_triggered execution_id=abc123 pipeline=devCentralMainApp version=v2.453.0
 #   event-log.sh failure execution_id=abc123 stage=e2e error_type=test_failure error_message="3 tests failed"
-#   event-log.sh scanned ticket=PROJ-1234 query_tier=2 summary="Null check missing"
+#   event-log.sh scanned ticket=POLUIG-1234 query_tier=2 summary="Null check missing"
 #   event-log.sh gate_resolved execution_id=abc123 gate_type=approval outcome=approved wait_s=3600
 
 set -euo pipefail

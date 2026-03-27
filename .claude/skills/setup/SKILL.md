@@ -181,13 +181,39 @@ Then AskUserQuestion with two options:
 1. **Dashboard** — description: "Best if you have a browser on this machine. Open http://127.0.0.1:10254 and add the secret in the UI."
 2. **CLI** — description: "Best for remote/headless servers. Run: `onecli secrets create --name Anthropic --type anthropic --value YOUR_KEY --host-pattern api.anthropic.com`"
 
+### Custom Anthropic endpoint
+
+After the user picks subscription or API key but **before** they register the secret, check if they use a custom Anthropic endpoint (corporate proxy, self-hosted gateway, etc.):
+
+AskUserQuestion: Does your organization use a custom Anthropic API endpoint (e.g. a proxy like `llm.corp.example.com`)?
+
+1. **No, use api.anthropic.com** — description: "Standard Anthropic endpoint. Most users should pick this."
+2. **Yes, custom endpoint** — description: "My org routes through a proxy. I'll provide the hostname."
+
+**If custom endpoint:**
+
+1. Collect the hostname (e.g. `llm.labs.blackduck.com`) — just the domain, no `https://` prefix.
+2. Set `ANTHROPIC_BASE_URL` in `.env`:
+   ```bash
+   grep -q 'ANTHROPIC_BASE_URL' .env 2>/dev/null && \
+     sed -i '' "s|.*ANTHROPIC_BASE_URL.*|ANTHROPIC_BASE_URL=https://<hostname>|" .env || \
+     echo "ANTHROPIC_BASE_URL=https://<hostname>" >> .env
+   ```
+3. Use `--host-pattern <hostname>` (NOT `api.anthropic.com`) in the OneCLI secret registration command.
+
+**Critical:** Both `ANTHROPIC_BASE_URL` in `.env` and the OneCLI `--host-pattern` must point to the same host. If they don't match, containers will send requests to one endpoint while the gateway expects to intercept traffic for the other — resulting in a silent "Invalid API key" error.
+
+**If standard endpoint:** Use `--host-pattern api.anthropic.com` and leave `ANTHROPIC_BASE_URL` unset (or commented out) in `.env`.
+
 ### After either path
 
 Ask them to let you know when done.
 
-**If the user's response happens to contain a token or key** (starts with `sk-ant-`): handle it gracefully — run the `onecli secrets create` command with that value on their behalf.
+**If the user's response happens to contain a token or key** (starts with `sk-ant-`): handle it gracefully — run the `onecli secrets create` command with that value on their behalf. Use the correct `--host-pattern` based on whether they chose a custom endpoint above.
 
 **After user confirms:** verify with `onecli secrets list` that an Anthropic secret exists. If not, ask again.
+
+**Verify endpoint match:** If `ANTHROPIC_BASE_URL` is set in `.env`, confirm the OneCLI secret's `hostPattern` matches (from `onecli secrets list`). If they don't match, warn the user and offer to fix it.
 
 ## 5. Set Up Channels
 

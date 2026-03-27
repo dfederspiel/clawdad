@@ -106,6 +106,12 @@ Or run `/customize` for guided changes.
 
 The codebase is small enough that Claude can safely modify it.
 
+## Credentials
+
+NanoClaw uses [OneCLI Agent Vault](https://github.com/onecli/onecli) to manage API credentials. The vault intercepts outbound HTTPS from containers and injects credentials at request time — agents never see raw keys.
+
+Run `/init-onecli` for automated setup, or see [docs/CREDENTIALS.md](docs/CREDENTIALS.md) for manual configuration, custom endpoints, and troubleshooting.
+
 ## Contributing
 
 **Don't add features. Add skills.**

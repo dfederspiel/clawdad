@@ -3,7 +3,7 @@
 # Usage: atlassian-api.sh <METHOD> <PATH> [CURL_ARGS...]
 #
 # Examples:
-#   atlassian-api.sh GET "/rest/api/3/issue/PROJ-1234"
+#   atlassian-api.sh GET "/rest/api/3/issue/POLUIG-1234"
 #   atlassian-api.sh POST "/rest/api/3/issue" -d '{"fields":{...}}'
 #
 # Environment: ATLASSIAN_BASE_URL, ATLASSIAN_EMAIL, ATLASSIAN_API_TOKEN
@@ -19,7 +19,13 @@ URL="${BASE_URL}${API_PATH}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Auth: use env var if available (legacy), otherwise rely on OneCLI gateway injection
+AUTH_ARGS=()
+if [[ -n "${ATLASSIAN_API_TOKEN:-}" ]]; then
+  AUTH_ARGS+=(-u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN")
+fi
+
 exec "$SCRIPT_DIR/api.sh" atlassian "$METHOD" "$URL" \
   -H "Content-Type: application/json" \
-  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" \
+  "${AUTH_ARGS[@]}" \
   "$@"

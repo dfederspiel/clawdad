@@ -1,0 +1,21 @@
+{
+  "_comment": "Updates agent configuration. The agent will walk you through filling this in on first message.",
+
+  "user_name": "Your Name",
+  "user_role": "Your role and team",
+  "team_name": "Your Team",
+  "organization": "Your Organization",
+
+  "jira_project_key": "PROJ",
+  "jira_user_id": "your-atlassian-account-id",
+
+  "confluence_space_key": "TEAM",
+  "confluence_space_id": "",
+  "confluence_reference_pages": [
+    { "id": "", "title": "Team Rolling Update", "owner": "", "read_only": true }
+  ],
+
+  "report_audience": "Directors / managers (semi-technical)",
+  "report_format": "epic-grouped",
+  "initiatives": ["initiative-1", "initiative-2"]
+}

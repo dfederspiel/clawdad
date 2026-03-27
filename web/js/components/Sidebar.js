@@ -7,13 +7,17 @@ import { StatusPanel } from './StatusPanel.js';
 
 export function Sidebar() {
   const [dialogOpen, setDialogOpen] = useState(false);
-  const list = groups.value;
+  // Sort: template groups first, system groups at the bottom
+  const list = [...groups.value].sort((a, b) => (a.isSystem ? 1 : 0) - (b.isSystem ? 1 : 0));
   const selected = selectedJid.value;
 
   return html`
     <aside class="w-[250px] min-w-[250px] bg-bg-2 border-r border-border flex flex-col">
       <div class="flex items-center justify-between px-4 py-3 border-b border-border">
-        <h1 class="text-base font-semibold text-txt">NanoClaw</h1>
+        <div>
+          <h1 class="text-base font-semibold text-txt leading-tight">ClawDad</h1>
+          <p class="text-[10px] text-txt-muted leading-tight">NanoClaw Agent Orchestrator</p>
+        </div>
         <button
           class="w-7 h-7 flex items-center justify-center rounded-md text-txt-2 hover:bg-bg-hover hover:text-txt transition-colors text-lg leading-none"
           title="New group"

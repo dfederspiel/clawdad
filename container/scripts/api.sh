@@ -13,17 +13,17 @@
 #   2 — connection failure (DNS, timeout, network — no response at all)
 #
 # Examples:
-#   api.sh gitlab GET "$GITLAB_URL/api/v4/projects/$PROJECT_ID/pipelines?per_page=5" \
+#   api.sh gitlab GET "$GITLAB_URL/api/v4/projects/9634/pipelines?per_page=5" \
 #     -H "PRIVATE-TOKEN: $GITLAB_TOKEN"
 #
-#   api.sh harness POST "$HARNESS_URL/pipeline/api/pipeline/execute/..." \
+#   api.sh harness POST "https://app.harness.io/pipeline/api/pipeline/execute/..." \
 #     -H "x-api-key: $HARNESS_API_KEY" -H "Content-Type: application/yaml" -d '...'
 #
-#   api.sh atlassian GET "$ATLASSIAN_URL/rest/api/3/issue/PROJ-1234" \
-#     -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN"
+#   api.sh atlassian GET "https://blackduck.atlassian.net/rest/api/3/issue/POLUIG-1234"
+#     (auth injected by OneCLI gateway, or pass -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" if set)
 #
-#   api.sh launchdarkly GET "https://app.launchdarkly.com/api/v2/flags/$LD_PROJECT/my-flag" \
-#     -H "Authorization: $LAUNCHDARKLY_API_KEY"
+#   api.sh launchdarkly GET "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen/my-flag" \
+#     -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415"
 
 set -euo pipefail
 

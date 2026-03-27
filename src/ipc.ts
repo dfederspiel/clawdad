@@ -1,5 +1,7 @@
+import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { promisify } from 'util';
 
 import { CronExpressionParser } from 'cron-parser';
 
@@ -9,6 +11,8 @@ import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
+
+const execAsync = promisify(exec);
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -144,6 +148,38 @@ export function startIpcWatcher(deps: IpcDeps): void {
         }
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
+      }
+
+      // Process credential registrations from this group's IPC directory
+      const credentialsDir = path.join(ipcBaseDir, sourceGroup, 'credentials');
+      try {
+        if (fs.existsSync(credentialsDir)) {
+          const credFiles = fs
+            .readdirSync(credentialsDir)
+            .filter((f) => f.endsWith('.json'));
+          for (const file of credFiles) {
+            const filePath = path.join(credentialsDir, file);
+            try {
+              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              fs.unlinkSync(filePath); // Remove immediately — contains secret
+              await processCredentialIpc(data, sourceGroup, credentialsDir);
+            } catch (err) {
+              logger.error(
+                { file, sourceGroup, err },
+                'Error processing IPC credential',
+              );
+              // Don't move to errors dir — may contain secrets. Just delete.
+              try {
+                fs.unlinkSync(filePath);
+              } catch { /* already gone */ }
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(
+          { err, sourceGroup },
+          'Error reading IPC credentials directory',
+        );
       }
     }
 
@@ -464,5 +500,152 @@ export async function processTaskIpc(
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
+  }
+}
+
+/**
+ * Supported credential services and their OneCLI secret configurations.
+ * Each entry maps a service name to the OneCLI flags needed to register it.
+ */
+const CREDENTIAL_SERVICES: Record<
+  string,
+  {
+    type: 'generic';
+    headerName: string;
+    valueFormat: string;
+    defaultHostPattern: string;
+  }
+> = {
+  atlassian: {
+    type: 'generic',
+    headerName: 'Authorization',
+    valueFormat: 'Basic {value}',
+    defaultHostPattern: '*.atlassian.net',
+  },
+  gitlab: {
+    type: 'generic',
+    headerName: 'PRIVATE-TOKEN',
+    valueFormat: '{value}',
+    defaultHostPattern: 'gitlab.com',
+  },
+  github: {
+    type: 'generic',
+    headerName: 'Authorization',
+    valueFormat: 'token {value}',
+    defaultHostPattern: '*.github.com',
+  },
+  harness: {
+    type: 'generic',
+    headerName: 'x-api-key',
+    valueFormat: '{value}',
+    defaultHostPattern: 'app.harness.io',
+  },
+  launchdarkly: {
+    type: 'generic',
+    headerName: 'Authorization',
+    valueFormat: '{value}',
+    defaultHostPattern: 'app.launchdarkly.com',
+  },
+};
+
+interface CredentialIpcData {
+  service: string;
+  value: string;
+  email?: string; // For Atlassian basic auth
+  hostPattern?: string;
+  name?: string;
+}
+
+async function processCredentialIpc(
+  data: CredentialIpcData,
+  sourceGroup: string,
+  credentialsDir: string,
+): Promise<void> {
+  const { service, value, email, hostPattern, name } = data;
+
+  if (!service || !value) {
+    logger.warn({ sourceGroup }, 'Credential IPC missing service or value');
+    writeCredentialResult(credentialsDir, service, false, 'Missing service or value');
+    return;
+  }
+
+  const serviceConfig = CREDENTIAL_SERVICES[service];
+  if (!serviceConfig) {
+    logger.warn(
+      { service, sourceGroup },
+      'Unknown credential service',
+    );
+    writeCredentialResult(credentialsDir, service, false, `Unknown service: ${service}`);
+    return;
+  }
+
+  const host = hostPattern || serviceConfig.defaultHostPattern;
+  const secretName = name || `${service}-${sourceGroup}`;
+
+  // For Atlassian, the value needs to be base64(email:token) for basic auth
+  let secretValue = value;
+  let valueFormat = serviceConfig.valueFormat;
+  if (service === 'atlassian' && email) {
+    secretValue = Buffer.from(`${email}:${value}`).toString('base64');
+  } else if (service === 'atlassian' && !email) {
+    // If no email provided, assume value is already the full token/key
+    valueFormat = 'Basic {value}';
+  }
+
+  try {
+    // Use onecli CLI to register the secret
+    const args = [
+      'secrets', 'create',
+      '--name', secretName,
+      '--type', serviceConfig.type,
+      '--value', secretValue,
+      '--host-pattern', host,
+      '--header-name', serviceConfig.headerName,
+      '--value-format', valueFormat,
+    ];
+
+    const { stdout, stderr } = await execAsync(
+      `onecli ${args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`,
+      { timeout: 15_000 },
+    );
+
+    logger.info(
+      { service, sourceGroup, host, secretName },
+      'Credential registered via IPC',
+    );
+    writeCredentialResult(credentialsDir, service, true, 'Credential registered successfully');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Check if it's a duplicate — that's OK, just update
+    if (message.includes('409') || message.includes('already exists') || message.includes('conflict')) {
+      logger.info(
+        { service, sourceGroup },
+        'Credential already exists in vault — skipping (use onecli secrets update to change)',
+      );
+      writeCredentialResult(credentialsDir, service, true, 'Credential already registered');
+    } else {
+      logger.error(
+        { service, sourceGroup, err: message },
+        'Failed to register credential via OneCLI',
+      );
+      writeCredentialResult(credentialsDir, service, false, `Registration failed: ${message}`);
+    }
+  }
+}
+
+function writeCredentialResult(
+  credentialsDir: string,
+  service: string,
+  success: boolean,
+  message: string,
+): void {
+  try {
+    const resultPath = path.join(credentialsDir, `result-${service}.json`);
+    fs.writeFileSync(
+      resultPath,
+      JSON.stringify({ success, message, timestamp: new Date().toISOString() }),
+    );
+  } catch {
+    // Best-effort — container may check for this but it's not critical
   }
 }
