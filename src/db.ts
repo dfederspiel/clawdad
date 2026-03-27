@@ -753,6 +753,23 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
   );
 }
 
+export function deleteGroupData(jid: string, folder: string): void {
+  const txn = db.transaction(() => {
+    // Delete task run logs for all tasks in this group
+    db.prepare(
+      `DELETE FROM task_run_logs WHERE task_id IN (SELECT id FROM scheduled_tasks WHERE group_folder = ?)`,
+    ).run(folder);
+    db.prepare('DELETE FROM scheduled_tasks WHERE group_folder = ?').run(
+      folder,
+    );
+    db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(folder);
+    db.prepare('DELETE FROM messages WHERE chat_jid = ?').run(jid);
+    db.prepare('DELETE FROM chats WHERE jid = ?').run(jid);
+    db.prepare('DELETE FROM registered_groups WHERE jid = ?').run(jid);
+  });
+  txn();
+}
+
 export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
   const rows = db.prepare('SELECT * FROM registered_groups').all() as Array<{
     jid: string;

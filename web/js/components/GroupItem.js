@@ -5,11 +5,11 @@ function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export function GroupItem({ group, isActive }) {
+export function GroupItem({ group, isActive, onDelete }) {
   const count = unread.value[group.jid] || 0;
   const isThinking = typingGroups.value[group.jid] || false;
   const base =
-    'flex items-center gap-2.5 px-4 py-2.5 cursor-pointer transition-colors text-sm';
+    'flex items-center gap-2.5 px-4 py-2.5 cursor-pointer transition-colors text-sm group/item';
   const active = isActive ? 'bg-bg-3 text-txt' : 'text-txt-2 hover:bg-bg-hover';
 
   // Dot color: green pulsing if thinking, accent if active, muted otherwise
@@ -18,6 +18,8 @@ export function GroupItem({ group, isActive }) {
     : isActive
       ? 'bg-accent'
       : 'bg-txt-muted';
+
+  const canDelete = !group.isSystem && !group.isMain;
 
   return html`
     <div class="${base} ${active}" onClick=${() => selectGroup(group.jid)}>
@@ -33,6 +35,13 @@ export function GroupItem({ group, isActive }) {
         <span class="min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-accent text-bg text-[11px] font-semibold px-1">
           ${count}
         </span>
+      `}
+      ${canDelete && html`
+        <button
+          class="w-5 h-5 flex items-center justify-center rounded text-txt-muted hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover/item:opacity-100 transition-all text-xs leading-none"
+          title="Delete group"
+          onClick=${(e) => { e.stopPropagation(); onDelete(group); }}
+        >×</button>
       `}
     </div>
   `;

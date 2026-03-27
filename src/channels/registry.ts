@@ -10,6 +10,7 @@ export interface ChannelOpts {
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
   onRegisterGroup?: (jid: string, group: RegisteredGroup) => void;
+  onDeleteGroup?: (jid: string, group: RegisteredGroup) => void;
   /** Optional status provider for web UI telemetry/task management */
   getStatus?: () => unknown;
 }
