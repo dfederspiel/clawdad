@@ -47,5 +47,6 @@ groups/discord_updates/*
 
 # Skills system (local per-installation state)
 .nanoclaw/
+scripts/claw
 
 agents-sdk-docs
