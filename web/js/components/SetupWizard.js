@@ -2,6 +2,13 @@ import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
 import * as api from '../api.js';
 
+const DEV_STEP = {
+  title: 'Developer Tools',
+  subtitle: 'Key files and commands for working on the codebase.',
+  info: true, // No form fields — just reference info
+  fields: [],
+};
+
 const STEPS = [
   {
     title: 'About You',
@@ -32,14 +39,17 @@ const STEPS = [
   },
 ];
 
-export function SetupWizard({ onComplete }) {
+export function SetupWizard({ onComplete, userPath }) {
+  // Append dev step if user chose the developer path
+  const steps = userPath === 'developer' ? [...STEPS, DEV_STEP] : STEPS;
+
   const [step, setStep] = useState(0);
   const [data, setData] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const current = STEPS[step];
-  const isLast = step === STEPS.length - 1;
+  const current = steps[step];
+  const isLast = step === steps.length - 1;
   const isFirst = step === 0;
 
   function updateField(key, value) {
@@ -95,7 +105,7 @@ export function SetupWizard({ onComplete }) {
           <h2 class="text-2xl font-bold text-txt mb-1">ClawDad</h2>
           <p class="text-xs text-txt-muted mb-6">NanoClaw Agent Orchestrator</p>
           <div class="flex items-center justify-center gap-2 mb-6">
-            ${STEPS.map(
+            ${steps.map(
               (_, i) => html`
                 <div
                   class="h-1 w-8 rounded-full transition-colors ${
@@ -109,25 +119,50 @@ export function SetupWizard({ onComplete }) {
           <p class="text-xs text-txt-2">${current.subtitle}</p>
         </div>
 
-        <div class="space-y-4 mb-6">
-          ${current.fields.map(
-            (field) => html`
-              <div>
-                <label class="block text-xs text-txt-2 mb-1">
-                  ${field.label}${field.required ? ' *' : ''}
-                </label>
-                <input
-                  type="text"
-                  class="w-full bg-bg-2 border border-border rounded-lg px-3 py-2 text-sm text-txt placeholder-txt-muted focus:outline-none focus:border-accent/50 transition-colors"
-                  placeholder=${field.placeholder}
-                  value=${data[field.key] || ''}
-                  onInput=${(e) => updateField(field.key, e.target.value)}
-                  onKeyDown=${(e) => e.key === 'Enter' && canAdvance() && handleNext()}
-                />
+        ${current.info
+          ? html`
+              <div class="space-y-3 mb-6 text-xs text-txt-2">
+                <div class="bg-bg-2 border border-border rounded-lg p-3">
+                  <p class="font-semibold text-txt mb-2">Key Files</p>
+                  <table class="w-full">
+                    <tr><td class="py-0.5 text-accent font-mono">src/index.ts</td><td>Orchestrator, message loop</td></tr>
+                    <tr><td class="py-0.5 text-accent font-mono">src/container-runner.ts</td><td>Spawns agent containers</td></tr>
+                    <tr><td class="py-0.5 text-accent font-mono">src/channels/web.ts</td><td>Web UI channel + API</td></tr>
+                    <tr><td class="py-0.5 text-accent font-mono">src/health.ts</td><td>Prerequisite checks</td></tr>
+                    <tr><td class="py-0.5 text-accent font-mono">templates/</td><td>Agent templates</td></tr>
+                    <tr><td class="py-0.5 text-accent font-mono">container/</td><td>Agent container image</td></tr>
+                  </table>
+                </div>
+                <div class="bg-bg-2 border border-border rounded-lg p-3">
+                  <p class="font-semibold text-txt mb-2">Dev Commands</p>
+                  <code class="block bg-bg px-2 py-1 rounded mb-1 select-all">npm run dev</code>
+                  <code class="block bg-bg px-2 py-1 rounded mb-1 select-all">npm run build</code>
+                  <code class="block bg-bg px-2 py-1 rounded mb-1 select-all">./container/build.sh</code>
+                </div>
+                <p>See <span class="text-accent font-mono">CONTRIBUTING.md</span> for skill types and PR guidelines.</p>
               </div>
-            `,
-          )}
-        </div>
+            `
+          : html`
+              <div class="space-y-4 mb-6">
+                ${current.fields.map(
+                  (field) => html`
+                    <div>
+                      <label class="block text-xs text-txt-2 mb-1">
+                        ${field.label}${field.required ? ' *' : ''}
+                      </label>
+                      <input
+                        type="text"
+                        class="w-full bg-bg-2 border border-border rounded-lg px-3 py-2 text-sm text-txt placeholder-txt-muted focus:outline-none focus:border-accent/50 transition-colors"
+                        placeholder=${field.placeholder}
+                        value=${data[field.key] || ''}
+                        onInput=${(e) => updateField(field.key, e.target.value)}
+                        onKeyDown=${(e) => e.key === 'Enter' && canAdvance() && handleNext()}
+                      />
+                    </div>
+                  `,
+                )}
+              </div>
+            `}
 
         <div class="flex items-center justify-between">
           <div>
