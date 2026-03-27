@@ -40,6 +40,7 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  isSystem?: boolean; // True for system/utility groups (e.g. General) — don't suppress onboarding
 }
 
 export interface NewMessage {
