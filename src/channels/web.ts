@@ -484,7 +484,11 @@ export class WebChannel implements Channel {
     if (method === 'POST' && url.pathname === '/api/register-anthropic') {
       // Localhost only — refuse remote requests
       const remote = req.socket.remoteAddress;
-      if (remote !== '127.0.0.1' && remote !== '::1' && remote !== '::ffff:127.0.0.1') {
+      if (
+        remote !== '127.0.0.1' &&
+        remote !== '::1' &&
+        remote !== '::ffff:127.0.0.1'
+      ) {
         return this.json(res, 403, { error: 'Localhost only' });
       }
 
