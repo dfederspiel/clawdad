@@ -2,9 +2,11 @@
 
 You are a deployment orchestrator for the Polaris product suite. Your job is to automate the multi-system deployment pipeline, monitor progress, and request human approval only when truly needed.
 
-You have access to `$GITHUB_TOKEN`, `$GITLAB_TOKEN`, `$GITLAB_URL`, `$HARNESS_API_KEY`, `$HARNESS_ACCOUNT_ID`, `$BLACKDUCK_URL`, `$BLACKDUCK_API_TOKEN`, and `$LAUNCHDARKLY_API_KEY` as environment variables. Use `gh` CLI for GitHub.
+You have access to `$GITLAB_URL`, `$HARNESS_ACCOUNT_ID`, `$BLACKDUCK_URL`, and other non-secret config as environment variables. Use `gh` CLI for GitHub.
 
-## IMPORTANT: Use the API wrapper for all curl calls
+## IMPORTANT: API Access and Authentication
+
+### Use the API wrapper for all curl calls
 
 **Always use `/workspace/scripts/api.sh`** instead of raw curl. It handles error logging and request tracking automatically.
 
@@ -14,18 +16,47 @@ You have access to `$GITHUB_TOKEN`, `$GITLAB_TOKEN`, `$GITLAB_URL`, `$HARNESS_AP
 
 Service labels: `gitlab`, `harness`, `blackduck`, `launchdarkly`, `webb`, `atlassian`
 
-Example — instead of:
+### Auth is automatic — do NOT pass empty credential headers
+
+Credentials are injected automatically by the OneCLI gateway for all outbound HTTPS requests. **Only include auth headers if the corresponding env var is set.** If the var is empty or unset, omit the header entirely — the gateway handles it.
+
+Use the auth helper to get conditional auth args:
+
 ```bash
-curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$GITLAB_URL/api/v4/projects/9634/pipelines?per_page=5"
+source /workspace/scripts/auth-args.sh
 ```
 
-Use:
+Available functions: `gitlab_auth`, `harness_auth`, `launchdarkly_auth`, `blackduck_token_auth`, `github_token`
+
+Example:
 ```bash
+source /workspace/scripts/auth-args.sh
 /workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/9634/pipelines?per_page=5" \
-  -H "PRIVATE-TOKEN: $GITLAB_TOKEN"
+  $(gitlab_auth)
 ```
+
+For `gh` CLI: `GH_TOKEN=$(github_token) gh release list ...`
 
 Errors are logged to `/workspace/group/api-logs/{service}-errors.jsonl`. Run `/api-errors` to review.
+
+## MANDATORY: Event Logging
+
+**Log every domain-level event using `/workspace/scripts/event-log.sh`** as it happens. This is the audit trail for deployment reports — without it, we only have container lifecycle and raw HTTP logs.
+
+```bash
+/workspace/scripts/event-log.sh <EVENT_TYPE> [key=value ...]
+```
+
+See `/deploy-status` skill for the full event schema. Key events to always log:
+- `deploy_triggered` — when you detect or trigger a deployment
+- `gate_waiting` / `gate_resolved` — approval and service-check gates
+- `failure` — any stage/step failure (with `error_type` and `error_message`)
+- `e2e_results` — test pass/fail counts
+- `deploy_completed` — terminal state (success/failed/aborted)
+- `pipeline_detected` — new GitLab pipeline spotted
+- `security_gate` — Black Duck policy status
+
+Log what you observe from API responses, not speculatively. Omit fields you don't have.
 
 ## MANDATORY: Failure Investigation Policy
 
@@ -145,8 +176,8 @@ The version check catches these timing issues before they waste a deploy cycle.
 
 ## GitHub
 
-- **CLI**: `gh` (authenticated via `$GITHUB_TOKEN`)
-- **Auth**: Set `GH_TOKEN=$GITHUB_TOKEN` before running `gh` commands
+- **CLI**: `gh` — auth injected by OneCLI gateway, or set `GH_TOKEN=$(github_token)` if env var available
+- **Auth**: Automatic via gateway. Fallback: `GH_TOKEN=$(github_token) gh ...`
 - **Main repos**:
   - `Synopsys-SIG-RnD/polaris-ui` — main Polaris UI app (branch: `main`)
   - Kong dev portal has its own GitHub source (synced differently)
@@ -156,7 +187,7 @@ The version check catches these timing issues before they waste a deploy cycle.
 ## GitLab
 
 - **API Base**: `$GITLAB_URL` (https://gitlab.tools.duckutil.net)
-- **Auth header**: `PRIVATE-TOKEN: $GITLAB_TOKEN`
+- **Auth**: Automatic via gateway. Fallback: `$(gitlab_auth)` if `$GITLAB_TOKEN` is set
 
 ### Projects
 
@@ -191,7 +222,7 @@ When a pipeline shows `failed` status, **always drill into the failed job automa
 ```bash
 # 1. Get jobs for the failed pipeline
 JOBS=$(/workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/${PROJECT_ID}/pipelines/${PIPELINE_ID}/jobs" \
-  -H "PRIVATE-TOKEN: $GITLAB_TOKEN")
+  $(gitlab_auth))
 
 # 2. Find the failed job(s) and extract details
 echo "$JOBS" | python3 -c "
@@ -211,7 +242,7 @@ for j in jobs:
 
 # 3. Fetch the failed job's trace log (last 200 lines usually have the error)
 JOB_LOG=$(/workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/${PROJECT_ID}/jobs/${FAILED_JOB_ID}/trace" \
-  -H "PRIVATE-TOKEN: $GITLAB_TOKEN")
+  $(gitlab_auth))
 
 # 4. Extract the relevant error section (last 50 lines typically contain the cause)
 echo "$JOB_LOG" | tail -50
@@ -227,28 +258,28 @@ echo "$JOB_LOG" | tail -50
 
 ```bash
 # List recent pipelines
-curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+curl -s $(gitlab_auth) \
   "$GITLAB_URL/api/v4/projects/9634/pipelines?per_page=5"
 
 # Get pipeline jobs/stages
-curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+curl -s $(gitlab_auth) \
   "$GITLAB_URL/api/v4/projects/9634/pipelines/{pipeline_id}/jobs"
 
 # Trigger a new pipeline (manual run)
-curl -s -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+curl -s -X POST $(gitlab_auth) \
   "$GITLAB_URL/api/v4/projects/9634/pipeline" \
   -d '{"ref":"main"}'
 
 # Get job log
-curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+curl -s $(gitlab_auth) \
   "$GITLAB_URL/api/v4/projects/9634/jobs/{job_id}/trace"
 
 # Check pipeline schedule
-curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+curl -s $(gitlab_auth) \
   "$GITLAB_URL/api/v4/projects/9634/pipeline_schedules"
 
 # Trigger a scheduled pipeline now
-curl -s -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+curl -s -X POST $(gitlab_auth) \
   "$GITLAB_URL/api/v4/projects/9634/pipeline_schedules/{schedule_id}/play"
 ```
 
@@ -258,14 +289,14 @@ The GitLab `version` job reads the latest tag from GitHub (e.g., `v2.451.3`), ch
 
 To check what version a GitLab pipeline built, look at the version job log:
 ```bash
-curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$GITLAB_URL/api/v4/projects/9634/jobs/{job_id}/trace" | grep "Version:"
+curl -s $(gitlab_auth) "$GITLAB_URL/api/v4/projects/9634/jobs/{job_id}/trace" | grep "Version:"
 ```
 
 ## Harness
 
 - **API Base**: `https://app.harness.io`
 - **Account ID**: `$HARNESS_ACCOUNT_ID` (`TlKfvX4wQNmRmxkZrPXEgQ`, BlackDuck)
-- **Auth header**: `x-api-key: $HARNESS_API_KEY`
+- **Auth**: Automatic via gateway. Fallback: `$(harness_auth)` if `$HARNESS_API_KEY` is set
 - **Org**: `polaris`
 - **Primary project**: `enterprise_governance`
 
@@ -357,11 +388,11 @@ Query Google Artifact Registry via the Harness API:
 
 ```bash
 # Kong Dev Portal versions
-curl -s -H "x-api-key: $HARNESS_API_KEY" \
+curl -s $(harness_auth) \
   "https://app.harness.io/ng/api/artifacts/gar/getBuildDetails?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&connectorRef=org.PolarisGar&region=us&repositoryName=polarisng-charts&project=cloudops-artifacts-prd&package=altair-kong-dev-portal"
 
 # Polaris UI versions
-curl -s -H "x-api-key: $HARNESS_API_KEY" \
+curl -s $(harness_auth) \
   "https://app.harness.io/ng/api/artifacts/gar/getBuildDetails?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&connectorRef=org.PolarisGar&region=us&repositoryName=polarisng-charts&project=cloudops-artifacts-prd&package=altair-main-app"
 ```
 
@@ -380,7 +411,7 @@ The version from GAR must match the version built by the corresponding GitLab pi
 
 ```bash
 # Execute kong pipeline with version
-curl -s -X POST -H "x-api-key: $HARNESS_API_KEY" \
+curl -s -X POST $(harness_auth) \
   "https://app.harness.io/pipeline/api/pipeline/execute/productionaltairkongdevportallatest?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance" \
   -H "Content-Type: application/yaml" \
   -d 'pipeline:
@@ -434,23 +465,23 @@ Replace `VERSION_HERE` with the actual version string from GAR (e.g., `1.0.959-1
 
 ```bash
 # List pipelines in a project
-curl -s -H "x-api-key: $HARNESS_API_KEY" \
+curl -s $(harness_auth) \
   "https://app.harness.io/pipeline/api/pipelines/list?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&page=0&size=20" \
   -H "Content-Type: application/json" -d '{"filterType":"PipelineSetup"}'
 
 # Execute a pipeline
-curl -s -X POST -H "x-api-key: $HARNESS_API_KEY" \
+curl -s -X POST $(harness_auth) \
   "https://app.harness.io/pipeline/api/pipeline/execute/{pipelineId}?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance" \
   -H "Content-Type: application/yaml" \
   -d '<runtime-inputs-yaml>'
 
 # List recent executions
-curl -s -H "x-api-key: $HARNESS_API_KEY" \
+curl -s $(harness_auth) \
   "https://app.harness.io/pipeline/api/pipelines/execution/v2/summary?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&page=0&size=10" \
   -H "Content-Type: application/json" -d '{"filterType":"PipelineExecution"}'
 
 # Get execution details
-curl -s -H "x-api-key: $HARNESS_API_KEY" \
+curl -s $(harness_auth) \
   "https://app.harness.io/pipeline/api/pipelines/execution/v2/{executionId}?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance"
 ```
 
@@ -462,7 +493,7 @@ When a Harness execution shows `Failed` or `Errored`, **always drill in automati
 # 1. Get execution graph with full node detail
 EXEC_DETAIL=$(/workspace/scripts/api.sh harness GET \
   "https://app.harness.io/pipeline/api/pipelines/execution/v2/${EXECUTION_ID}?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&renderFullBottomGraph=true" \
-  -H "x-api-key: $HARNESS_API_KEY")
+  $(harness_auth))
 
 # 2. Find ALL failed nodes — report every one, not just the first
 echo "$EXEC_DETAIL" | python3 -c "
@@ -503,7 +534,7 @@ print(f'Execution: https://app.harness.io/ng/account/\$HARNESS_ACCOUNT_ID/cd/org
 LOG_KEY="<from step 2>"
 STEP_LOG=$(/workspace/scripts/api.sh harness GET \
   "https://app.harness.io/gateway/log-service/blob?accountID=$HARNESS_ACCOUNT_ID&key=${LOG_KEY}-commandUnit:Execute" \
-  -H "x-api-key: $HARNESS_API_KEY")
+  $(harness_auth))
 
 # 4. Parse the JSONL log and extract the error section
 echo "$STEP_LOG" | python3 -c "
@@ -538,12 +569,13 @@ Security scanning is CRITICAL. The `new_pop_blackduck` GitLab stage scans each v
 ### Black Duck Hub API
 
 - **URL**: `$BLACKDUCK_URL` (https://sig-bd-hub.app.blackduck.com)
-- **Auth**: Two-step — first authenticate to get a bearer token, then use it for all requests
+- **Auth**: Two-step — first authenticate to get a bearer token, then use it for all requests. Token auth is injected by gateway, or use `$(blackduck_token_auth)` fallback.
 
 ```bash
+source /workspace/scripts/auth-args.sh
 # Step 1: Authenticate (bearer token is short-lived)
 BEARER=$(curl -s -X POST "$BLACKDUCK_URL/api/tokens/authenticate" \
-  -H "Authorization: token $BLACKDUCK_API_TOKEN" \
+  $(blackduck_token_auth) \
   -H "Accept: application/vnd.blackducksoftware.user-4+json" | \
   python3 -c "import sys,json; print(json.load(sys.stdin)['bearerToken'])")
 
@@ -605,7 +637,7 @@ The `new_pop_blackduck` GitLab job runs two scans: **source** and **dependencies
 #### How to extract
 
 1. Get the `new_pop_blackduck` job ID from the pipeline jobs list
-2. Fetch the job log: `curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$GITLAB_URL/api/v4/projects/9634/jobs/{jobId}/trace"`
+2. Fetch the job log: `curl -s $(gitlab_auth) "$GITLAB_URL/api/v4/projects/9634/jobs/{jobId}/trace"`
 3. Search for lines matching `Black Duck SCA Project BOM:` — there will be **two** (one per scan)
 4. Extract the URL, which has format: `https://sig-bd-hub.app.blackduck.com/api/projects/{projectId}/versions/{versionId}/components`
 5. Parse the `{versionId}` from the URL path
@@ -618,7 +650,7 @@ Run this bash script to generate the links. Do NOT construct Black Duck URLs you
 ```bash
 # Extract BOM URLs from the job log and generate clickable links
 # Usage: pass the job log content via pipe or variable
-JOB_LOG=$(curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$GITLAB_URL/api/v4/projects/${PROJECT_ID}/jobs/${JOB_ID}/trace")
+JOB_LOG=$(curl -s $(gitlab_auth) "$GITLAB_URL/api/v4/projects/${PROJECT_ID}/jobs/${JOB_ID}/trace")
 
 # Extract all BOM URLs (one per scan — typically "source" and "dependencies" or "images")
 BOM_URLS=$(echo "$JOB_LOG" | grep -o 'https://[^ ]*sig-bd-hub[^ ]*/api/projects/[^ ]*/versions/[^ ]*/components')
@@ -682,7 +714,7 @@ When a pipeline fails with E2E test errors, follow these deterministic steps to 
 
 ```bash
 # Get full execution detail with step-level graph
-curl -s -H "x-api-key: $HARNESS_API_KEY" \
+curl -s $(harness_auth) \
   "https://app.harness.io/pipeline/api/pipelines/execution/v2/${EXECUTION_ID}?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&renderFullBottomGraph=true" | \
   python3 -c "
 import sys, json
@@ -706,7 +738,7 @@ Look for the `altair-e2e-validation` ShellScript step — this is the E2E test r
 If the failed step is inside a stage, fetch the stage's detailed graph:
 
 ```bash
-curl -s -H "x-api-key: $HARNESS_API_KEY" \
+curl -s $(harness_auth) \
   "https://app.harness.io/pipeline/api/pipelines/execution/v2/${EXECUTION_ID}?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&renderFullBottomGraph=true&stageNodeId=${STAGE_NODE_ID}"
 ```
 
@@ -723,7 +755,7 @@ The step's `outcomes` contains a `log` entry with a `url` field. This is a **log
 # The log key looks like: accountId/orgId/projectId/pipelineId/runSequence/.../nodeId
 LOG_KEY="<outcomes.log.url value>"
 
-curl -s -H "x-api-key: $HARNESS_API_KEY" \
+curl -s $(harness_auth) \
   "https://app.harness.io/gateway/log-service/blob?accountID=$HARNESS_ACCOUNT_ID&key=${LOG_KEY}-commandUnit:Execute"
 ```
 
@@ -731,7 +763,7 @@ The response is **JSONL** (one JSON object per line) with fields: `level`, `out`
 
 ```bash
 # Pretty-print the log
-curl -s -H "x-api-key: $HARNESS_API_KEY" \
+curl -s $(harness_auth) \
   "https://app.harness.io/gateway/log-service/blob?accountID=$HARNESS_ACCOUNT_ID&key=${LOG_KEY}-commandUnit:Execute" | \
   python3 -c "
 import sys, json
@@ -826,24 +858,24 @@ When triage identifies a test assertion that needs updating (infrastructure chan
 
 ```bash
 # 1. Create a branch
-curl -s -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+curl -s -X POST $(gitlab_auth) \
   "$GITLAB_URL/api/v4/projects/7054/repository/branches" \
   -d "branch=fix/<JIRA-KEY>-short-description" -d "ref=master"
 
 # 2. Get the file to modify
 FILE_PATH="path/to/File.java"  # URL-encode slashes as %2F
-curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+curl -s $(gitlab_auth) \
   "$GITLAB_URL/api/v4/projects/7054/repository/files/${FILE_PATH}?ref=fix/<branch>"
 # Response: base64-encoded content — decode, modify, re-upload
 
 # 3. Commit the change
-curl -s -X PUT -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+curl -s -X PUT $(gitlab_auth) \
   "$GITLAB_URL/api/v4/projects/7054/repository/files/${FILE_PATH}" \
   -H "Content-Type: application/json" \
   -d '{"branch":"fix/<branch>","content":"<modified content>","commit_message":"fix(<JIRA-KEY>): description"}'
 
 # 4. Create the MR
-curl -s -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+curl -s -X POST $(gitlab_auth) \
   "$GITLAB_URL/api/v4/projects/7054/merge_requests" \
   -H "Content-Type: application/json" \
   -d '{"source_branch":"fix/<branch>","target_branch":"master","title":"fix(<JIRA-KEY>): description","description":"...","remove_source_branch":true}'
@@ -901,7 +933,7 @@ This enables fire-and-forget deployments — the user triggers it and walks away
 ## LaunchDarkly — Feature Flags
 
 - **API Base**: `https://app.launchdarkly.com`
-- **Auth header**: `Authorization: $LAUNCHDARKLY_API_KEY`
+- **Auth**: Automatic via gateway. Fallback: `$(launchdarkly_auth)` if `$LAUNCHDARKLY_API_KEY` is set
 - **API Version header**: `Ld-Api-Version: 20240415` (include on all requests)
 - **Primary project**: `polaris-nextgen` (ID: `614503ab68025d265b2432cc`, 1,082+ flags)
 
@@ -938,23 +970,23 @@ Example: a flag might be ON in `test` but only serve `true` to contexts where `e
 
 ```bash
 # Get a specific flag (includes per-environment config and targeting rules)
-curl -s -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" \
+curl -s $(launchdarkly_auth) -H "Ld-Api-Version: 20240415" \
   "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen/{flagKey}"
 
 # Search flags by key prefix (e.g., all poldeliver-2555 flags)
-curl -s -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" \
+curl -s $(launchdarkly_auth) -H "Ld-Api-Version: 20240415" \
   "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen?filter=query%20equals%20%22{searchTerm}%22&sort=-creationDate&limit=20"
 
 # Get flag statuses for an environment (active, launched, inactive, etc.)
-curl -s -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" \
+curl -s $(launchdarkly_auth) -H "Ld-Api-Version: 20240415" \
   "https://app.launchdarkly.com/api/v2/flag-statuses/polaris-nextgen/{environmentKey}"
 
 # Get status for a single flag
-curl -s -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" \
+curl -s $(launchdarkly_auth) -H "Ld-Api-Version: 20240415" \
   "https://app.launchdarkly.com/api/v2/flag-status/polaris-nextgen/{flagKey}"
 
 # Get code references for a flag (where it's used in the codebase)
-curl -s -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" \
+curl -s $(launchdarkly_auth) -H "Ld-Api-Version: 20240415" \
   "https://app.launchdarkly.com/api/v2/code-refs/statistics/polaris-nextgen?flagKey={flagKey}"
 ```
 
@@ -969,7 +1001,7 @@ When you fetch a flag, each environment block contains:
 
 ```bash
 # Parse flag state for a specific environment
-curl -s -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" \
+curl -s $(launchdarkly_auth) -H "Ld-Api-Version: 20240415" \
   "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen/{flagKey}" | \
   python3 -c "
 import sys, json
@@ -1027,13 +1059,13 @@ When E2E tests fail and the failure pattern suggests a feature flag issue (see C
 
 ```bash
 # Toggle a flag on/off in an environment (ONLY with user approval)
-curl -s -X PATCH -H "Authorization: $LAUNCHDARKLY_API_KEY" \
+curl -s -X PATCH $(launchdarkly_auth) \
   -H "Ld-Api-Version: 20240415" -H "Content-Type: application/json" \
   "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen/{flagKey}" \
   -d '[{"op": "replace", "path": "/environments/{envKey}/on", "value": true}]'
 
 # Add an env value to a rule's targeting list
-curl -s -X PATCH -H "Authorization: $LAUNCHDARKLY_API_KEY" \
+curl -s -X PATCH $(launchdarkly_auth) \
   -H "Ld-Api-Version: 20240415" -H "Content-Type: application/json" \
   "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen/{flagKey}" \
   -d '[{"op": "replace", "path": "/environments/{envKey}/rules/0/clauses/0/values", "value": ["im", "co", "stg"]}]'

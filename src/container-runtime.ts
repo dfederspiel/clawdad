@@ -3,7 +3,9 @@
  * All runtime-specific logic lives here so swapping runtimes means changing one file.
  */
 import { execSync } from 'child_process';
+import fs from 'fs';
 import os from 'os';
+import path from 'path';
 
 import { logger } from './logger.js';
 
@@ -99,14 +101,29 @@ export function ensureContainerRuntimeRunning(): void {
   }
 }
 
-/** Kill orphaned NanoClaw containers from previous runs. */
+/**
+ * Kill orphaned NanoClaw containers from previous runs.
+ * Only stops containers whose group folder exists in THIS instance's groups/
+ * directory, so multiple NanoClaw installs don't interfere with each other.
+ */
 export function cleanupOrphans(): void {
   try {
     const output = execSync(
       `${CONTAINER_RUNTIME_BIN} ps --filter name=nanoclaw- --format '{{.Names}}'`,
       { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' },
     );
-    const orphans = output.trim().split('\n').filter(Boolean);
+    const allContainers = output.trim().split('\n').filter(Boolean);
+
+    // Container names are nanoclaw-{folder}-{timestamp}.
+    // Convert back to folder name: strip "nanoclaw-" prefix and trailing "-{timestamp}".
+    const groupsDir = path.resolve(process.cwd(), 'groups');
+    const orphans = allContainers.filter((name) => {
+      const withoutPrefix = name.replace(/^nanoclaw-/, '');
+      // Folder is everything before the last dash-followed-by-digits segment
+      const folder = withoutPrefix.replace(/-\d+$/, '').replace(/-/g, '_');
+      return fs.existsSync(path.join(groupsDir, folder));
+    });
+
     for (const name of orphans) {
       try {
         stopContainer(name);
@@ -118,6 +135,12 @@ export function cleanupOrphans(): void {
       logger.info(
         { count: orphans.length, names: orphans },
         'Stopped orphaned containers',
+      );
+    }
+    if (allContainers.length > orphans.length) {
+      logger.debug(
+        { skipped: allContainers.length - orphans.length },
+        'Skipped containers belonging to other NanoClaw instances',
       );
     }
   } catch (err) {

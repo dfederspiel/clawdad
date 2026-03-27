@@ -13,16 +13,25 @@ Check the end-to-end deployment pipeline status for a service. Deterministic —
 `/deploy-status polaris-ui` — polaris-ui only
 `/deploy-status kong` — kong dev portal only
 
+## Auth
+
+Credentials are injected automatically by the OneCLI gateway. If credential env vars are set (native proxy / legacy), they're passed explicitly as a fallback. Source the helper at the top of your script:
+
+```bash
+source /workspace/scripts/auth-args.sh
+```
+
 ## Step 1: GitHub — Latest Release
 
 ```bash
+source /workspace/scripts/auth-args.sh
 SERVICE="$1"  # "polaris-ui", "kong", or empty for both
 
 if [ -z "$SERVICE" ] || [ "$SERVICE" = "polaris-ui" ]; then
   echo "## Polaris UI"
   echo ""
   echo "### GitHub Release"
-  GH_TOKEN=$GITHUB_TOKEN gh release list -R Synopsys-SIG-RnD/polaris-ui -L 3 --json tagName,publishedAt,isLatest \
+  GH_TOKEN=$(github_token) gh release list -R Synopsys-SIG-RnD/polaris-ui -L 3 --json tagName,publishedAt,isLatest \
     | python3 -c "
 import sys, json
 releases = json.load(sys.stdin)
@@ -38,7 +47,7 @@ if [ -z "$SERVICE" ] || [ "$SERVICE" = "kong" ]; then
   echo ""
   echo "### GitLab Tags"
   /workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/7087/repository/tags?per_page=3" \
-    -H "PRIVATE-TOKEN: $GITLAB_TOKEN" | \
+    $(gitlab_auth) | \
     python3 -c "
 import sys, json
 tags = json.load(sys.stdin)
@@ -57,7 +66,7 @@ fi
 if [ -z "$SERVICE" ] || [ "$SERVICE" = "polaris-ui" ]; then
   echo "### GitLab Pipeline (polaris-ui, project 9634)"
   /workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/9634/pipelines?per_page=3" \
-    -H "PRIVATE-TOKEN: $GITLAB_TOKEN" | \
+    $(gitlab_auth) | \
     python3 -c "
 import sys, json
 pipelines = json.load(sys.stdin)
@@ -71,7 +80,7 @@ fi
 if [ -z "$SERVICE" ] || [ "$SERVICE" = "kong" ]; then
   echo "### GitLab Pipeline (kong-dev-portal, project 7087)"
   /workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/7087/pipelines?per_page=3" \
-    -H "PRIVATE-TOKEN: $GITLAB_TOKEN" | \
+    $(gitlab_auth) | \
     python3 -c "
 import sys, json
 pipelines = json.load(sys.stdin)
@@ -90,7 +99,7 @@ if [ -z "$SERVICE" ] || [ "$SERVICE" = "polaris-ui" ]; then
   echo "### Harness Executions (polaris-ui)"
   /workspace/scripts/api.sh harness POST \
     "https://app.harness.io/pipeline/api/pipelines/execution/v2/summary?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&page=0&size=5" \
-    -H "x-api-key: $HARNESS_API_KEY" \
+    $(harness_auth) \
     -H "Content-Type: application/json" \
     -d '{"filterType":"PipelineExecution","pipelineIdentifiers":["imDomainMainApp","devCentralMainApp","productionAltairMainApp"]}' | \
     python3 -c "
@@ -117,7 +126,7 @@ if [ -z "$SERVICE" ] || [ "$SERVICE" = "kong" ]; then
   echo "### Harness Executions (kong-dev-portal)"
   /workspace/scripts/api.sh harness POST \
     "https://app.harness.io/pipeline/api/pipelines/execution/v2/summary?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&page=0&size=5" \
-    -H "x-api-key: $HARNESS_API_KEY" \
+    $(harness_auth) \
     -H "Content-Type: application/json" \
     -d '{"filterType":"PipelineExecution","pipelineIdentifiers":["productionaltairkongdevportallatest","devCentralKongDevPortal"]}' | \
     python3 -c "
@@ -145,7 +154,7 @@ fi
 
 ```bash
 BEARER=$(/workspace/scripts/api.sh blackduck POST "$BLACKDUCK_URL/api/tokens/authenticate" \
-  -H "Authorization: token $BLACKDUCK_API_TOKEN" \
+  $(blackduck_token_auth) \
   -H "Accept: application/vnd.blackducksoftware.user-4+json" | \
   python3 -c "import sys,json; print(json.load(sys.stdin)['bearerToken'])")
 
@@ -227,6 +236,88 @@ print()
 ```
 
 This is the source of truth for Harness service-check gates — NOT BD Hub directly. If BD Hub shows green but this shows red, the dashboard update hasn't propagated yet (~10 min delay).
+
+## Event Logging
+
+**You MUST log domain events using `/workspace/scripts/event-log.sh` as they happen.** This builds the audit trail for deployment reports. The API telemetry (`api.sh`) captures HTTP calls, but only `event-log.sh` captures what those calls *mean*.
+
+### When to log
+
+Log an event whenever you observe a meaningful state change — not speculatively, only when confirmed by API response.
+
+### Event types and fields
+
+```bash
+# A deployment execution was detected or triggered
+/workspace/scripts/event-log.sh deploy_triggered \
+  execution_id=<harness_execution_id> \
+  pipeline=<pipeline_identifier> \
+  service=<polaris-ui|kong-dev-portal> \
+  version=<version_string> \
+  run_number=<N>
+
+# A pipeline is waiting at an approval or service-check gate
+/workspace/scripts/event-log.sh gate_waiting \
+  gate_type=<approval|service_check> \
+  gate_name=<gate_identifier> \
+  execution_id=<harness_execution_id> \
+  service=<polaris-ui|kong-dev-portal> \
+  version=<version_string>
+
+# A gate was resolved (approved, rejected, or timed out)
+/workspace/scripts/event-log.sh gate_resolved \
+  gate_type=<approval|service_check> \
+  outcome=<approved|rejected|timed_out> \
+  execution_id=<harness_execution_id> \
+  service=<polaris-ui|kong-dev-portal> \
+  wait_s=<seconds_waited>
+
+# A stage or step failed
+/workspace/scripts/event-log.sh failure \
+  stage=<stage_name> \
+  error_type=<test_failure|auth_failure|timeout|aborted|infra_error> \
+  pipeline=<pipeline_identifier> \
+  service=<polaris-ui|kong-dev-portal> \
+  version=<version_string> \
+  error_message="<brief message, max 200 chars>"
+
+# E2E test results observed
+/workspace/scripts/event-log.sh e2e_results \
+  service=<polaris-ui|kong-dev-portal> \
+  version=<version_string> \
+  webb_run_id=<N> \
+  total_passed=<N> \
+  total_failed=<N>
+
+# Deployment reached a terminal state
+/workspace/scripts/event-log.sh deploy_completed \
+  outcome=<success|failed|aborted> \
+  service=<polaris-ui|kong-dev-portal> \
+  version=<version_string> \
+  execution_id=<harness_execution_id>
+
+# A new GitLab pipeline was detected during polling
+/workspace/scripts/event-log.sh pipeline_detected \
+  pipeline_id=<gitlab_pipeline_id> \
+  project_id=<gitlab_project_id> \
+  project=<polaris-ui|kong-dev-portal> \
+  ref=<branch_or_tag>
+
+# Security gate status from Black Duck
+/workspace/scripts/event-log.sh security_gate \
+  service=<polaris-ui|kong-dev-portal> \
+  version=<version_string> \
+  policy_status=<NOT_IN_VIOLATION|IN_VIOLATION> \
+  deployable=<true|false>
+```
+
+### Rules
+
+- **Log what you see, when you see it.** Don't batch events for later.
+- **Omit fields you don't have** — `event-log.sh` accepts any key=value pairs, so just skip unknown fields rather than passing empty strings.
+- **Use the exact event names above** so reports can aggregate consistently.
+- **Don't log container lifecycle** — the host already handles `container_started`/`container_completed`.
+- **Don't log raw API errors** — `api.sh` already captures those in `api-logs/`. Only log `failure` when you've confirmed a domain-level failure (stage failed, deploy aborted, etc.).
 
 ## Notes
 

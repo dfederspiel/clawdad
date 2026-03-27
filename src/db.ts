@@ -566,23 +566,21 @@ export function getTelemetryStats(): {
   const h24 = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
   const d7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const messages24h =
-    (
-      db
-        .prepare(
-          'SELECT COUNT(*) as c FROM messages WHERE timestamp > ? AND is_bot_message = 0',
-        )
-        .get(h24) as { c: number }
-    ).c;
+  const messages24h = (
+    db
+      .prepare(
+        'SELECT COUNT(*) as c FROM messages WHERE timestamp > ? AND is_bot_message = 0',
+      )
+      .get(h24) as { c: number }
+  ).c;
 
-  const messages7d =
-    (
-      db
-        .prepare(
-          'SELECT COUNT(*) as c FROM messages WHERE timestamp > ? AND is_bot_message = 0',
-        )
-        .get(d7) as { c: number }
-    ).c;
+  const messages7d = (
+    db
+      .prepare(
+        'SELECT COUNT(*) as c FROM messages WHERE timestamp > ? AND is_bot_message = 0',
+      )
+      .get(d7) as { c: number }
+  ).c;
 
   const messagesPerGroup = db
     .prepare(
@@ -592,7 +590,7 @@ export function getTelemetryStats(): {
     )
     .all(h24) as Array<{ chat_jid: string; count: number }>;
 
-  const taskCounts = db
+  const taskCounts = (db
     .prepare(
       `SELECT
         SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
@@ -600,13 +598,13 @@ export function getTelemetryStats(): {
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
        FROM scheduled_tasks`,
     )
-    .get() as { active: number; paused: number; completed: number } || {
+    .get() as { active: number; paused: number; completed: number }) || {
     active: 0,
     paused: 0,
     completed: 0,
   };
 
-  const taskStats = db
+  const taskStats = (db
     .prepare(
       `SELECT
         COUNT(*) as total,
@@ -618,7 +616,7 @@ export function getTelemetryStats(): {
     total: number;
     successes: number;
     avg_duration: number | null;
-  } || { total: 0, successes: 0, avg_duration: null };
+  }) || { total: 0, successes: 0, avg_duration: null };
 
   return {
     messages24h,

@@ -19,7 +19,13 @@ URL="${BASE_URL}${API_PATH}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Auth: use env var if available (legacy), otherwise rely on OneCLI gateway injection
+AUTH_ARGS=()
+if [[ -n "${ATLASSIAN_API_TOKEN:-}" ]]; then
+  AUTH_ARGS+=(-u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN")
+fi
+
 exec "$SCRIPT_DIR/api.sh" atlassian "$METHOD" "$URL" \
   -H "Content-Type: application/json" \
-  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" \
+  "${AUTH_ARGS[@]}" \
   "$@"

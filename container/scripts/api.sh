@@ -19,8 +19,8 @@
 #   api.sh harness POST "https://app.harness.io/pipeline/api/pipeline/execute/..." \
 #     -H "x-api-key: $HARNESS_API_KEY" -H "Content-Type: application/yaml" -d '...'
 #
-#   api.sh atlassian GET "https://blackduck.atlassian.net/rest/api/3/issue/POLUIG-1234" \
-#     -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN"
+#   api.sh atlassian GET "https://blackduck.atlassian.net/rest/api/3/issue/POLUIG-1234"
+#     (auth injected by OneCLI gateway, or pass -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" if set)
 #
 #   api.sh launchdarkly GET "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen/my-flag" \
 #     -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415"

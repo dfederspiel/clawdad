@@ -12,13 +12,18 @@ Check the state of a feature flag across environments. Deterministic — always 
 `/check-flag <flag-key>` — full flag report (both environments, all rules)
 `/check-flag <flag-key> <env>` — check if flag is active for a specific Polaris environment (e.g., `im`, `co`, `stg`)
 
+## Auth
+
+Credentials are injected automatically by the OneCLI gateway. If `$LAUNCHDARKLY_API_KEY` is set (native proxy / legacy), it's passed explicitly as a fallback.
+
 ## Step 1: Get the flag
 
 ```bash
 FLAG_KEY="$1"
+source /workspace/scripts/auth-args.sh
 /workspace/scripts/api.sh launchdarkly GET \
   "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen/${FLAG_KEY}" \
-  -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" > /tmp/flag.json
+  $(launchdarkly_auth) -H "Ld-Api-Version: 20240415" > /tmp/flag.json
 
 if [ $? -ne 0 ]; then
   echo "ERROR: Flag '${FLAG_KEY}' not found in polaris-nextgen"
@@ -121,7 +126,7 @@ Post the output directly. If the flag was not found, search for similar flags:
 ```bash
 /workspace/scripts/api.sh launchdarkly GET \
   "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen?filter=query%20equals%20%22${FLAG_KEY}%22&limit=5" \
-  -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415" | \
+  $(launchdarkly_auth) -H "Ld-Api-Version: 20240415" | \
   python3 -c "
 import sys, json
 data = json.load(sys.stdin)

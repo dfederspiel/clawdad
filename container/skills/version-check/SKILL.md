@@ -13,6 +13,14 @@ description: Pre-deployment version comparison across GitHub/GitLab/Harness GAR.
 `/version-check polaris-ui` — polaris-ui only
 `/version-check kong` — kong dev portal only
 
+## Auth
+
+Credentials are injected automatically by the OneCLI gateway. If credential env vars are set (native proxy / legacy), they're passed explicitly as a fallback. Source the helper at the top of your script:
+
+```bash
+source /workspace/scripts/auth-args.sh
+```
+
 ## Polaris UI Version Chain
 
 Source of truth: **GitHub release tags** → GitLab builds from those tags → Harness deploys from GAR.
@@ -22,10 +30,11 @@ Failure mode: GitLab pipeline runs before GitHub Actions creates the tag → bui
 ### Step 1: GitHub — Latest Release Tag
 
 ```bash
+source /workspace/scripts/auth-args.sh
 echo "=== POLARIS UI VERSION CHECK ==="
 echo ""
 echo "--- GitHub (source of truth) ---"
-GH_RELEASE=$(GH_TOKEN=$GITHUB_TOKEN gh release list -R Synopsys-SIG-RnD/polaris-ui -L 1 --json tagName,publishedAt,isLatest 2>/dev/null)
+GH_RELEASE=$(GH_TOKEN=$(github_token) gh release list -R Synopsys-SIG-RnD/polaris-ui -L 1 --json tagName,publishedAt,isLatest 2>/dev/null)
 GH_VERSION=$(echo "$GH_RELEASE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r[0]['tagName'] if r else 'NONE')" 2>/dev/null || echo "NONE")
 GH_DATE=$(echo "$GH_RELEASE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r[0]['publishedAt'][:19] if r else '?')" 2>/dev/null || echo "?")
 echo "  Latest release: $GH_VERSION ($GH_DATE)"
@@ -40,7 +49,7 @@ echo ""
 echo "--- GitLab Pipeline (project 9634) ---"
 # Get the latest successful pipeline
 PIPELINE_JSON=$(/workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/9634/pipelines?ref=main&status=success&per_page=1" \
-  -H "PRIVATE-TOKEN: $GITLAB_TOKEN" 2>/dev/null)
+  $(gitlab_auth) 2>/dev/null)
 
 PIPELINE_ID=$(echo "$PIPELINE_JSON" | python3 -c "import sys,json; p=json.load(sys.stdin); print(p[0]['id'] if p else 'NONE')" 2>/dev/null || echo "NONE")
 PIPELINE_DATE=$(echo "$PIPELINE_JSON" | python3 -c "import sys,json; p=json.load(sys.stdin); print(p[0]['created_at'][:19] if p else '?')" 2>/dev/null || echo "?")
@@ -50,7 +59,7 @@ if [ "$PIPELINE_ID" != "NONE" ]; then
 
   # Find the version job to extract what version was built
   JOBS_JSON=$(/workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/9634/pipelines/$PIPELINE_ID/jobs" \
-    -H "PRIVATE-TOKEN: $GITLAB_TOKEN" 2>/dev/null)
+    $(gitlab_auth) 2>/dev/null)
 
   VERSION_JOB_ID=$(echo "$JOBS_JSON" | python3 -c "
 import sys, json
@@ -65,7 +74,7 @@ else:
 
   if [ "$VERSION_JOB_ID" != "NONE" ]; then
     VERSION_LOG=$(/workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/9634/jobs/$VERSION_JOB_ID/trace" \
-      -H "PRIVATE-TOKEN: $GITLAB_TOKEN" 2>/dev/null)
+      $(gitlab_auth) 2>/dev/null)
     GL_VERSION=$(echo "$VERSION_LOG" | grep -oP '(?<=Version:\s)[\d.]+' | head -1 || echo "")
     if [ -z "$GL_VERSION" ]; then
       GL_VERSION=$(echo "$VERSION_LOG" | grep -oP 'TAG_NAME[=: ]+v?([\d.]+)' | head -1 | grep -oP '[\d.]+' || echo "UNKNOWN")
@@ -88,7 +97,7 @@ echo ""
 echo "--- Harness GAR (deployable artifacts) ---"
 GAR_JSON=$(/workspace/scripts/api.sh harness GET \
   "https://app.harness.io/ng/api/artifacts/gar/getBuildDetails?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&connectorRef=org.PolarisGar&region=us&repositoryName=polarisng-charts&project=cloudops-artifacts-prd&package=altair-main-app" \
-  -H "x-api-key: $HARNESS_API_KEY" 2>/dev/null)
+  $(harness_auth) 2>/dev/null)
 
 GAR_LATEST=$(echo "$GAR_JSON" | python3 -c "
 import sys, json
@@ -155,7 +164,7 @@ echo "=== KONG DEV PORTAL VERSION CHECK ==="
 echo ""
 echo "--- GitLab Tags (source of truth, project 7087) ---"
 KDP_TAGS=$(/workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/7087/repository/tags?per_page=3" \
-  -H "PRIVATE-TOKEN: $GITLAB_TOKEN" 2>/dev/null)
+  $(gitlab_auth) 2>/dev/null)
 
 KDP_LATEST_TAG=$(echo "$KDP_TAGS" | python3 -c "
 import sys, json
@@ -174,7 +183,7 @@ echo "  Latest tag: $KDP_LATEST_TAG"
 echo ""
 echo "--- GitLab Pipeline (project 7087) ---"
 KDP_PIPELINE=$(/workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects/7087/pipelines?per_page=3&status=success" \
-  -H "PRIVATE-TOKEN: $GITLAB_TOKEN" 2>/dev/null)
+  $(gitlab_auth) 2>/dev/null)
 
 echo "$KDP_PIPELINE" | python3 -c "
 import sys, json
@@ -191,7 +200,7 @@ echo ""
 echo "--- Harness GAR (deployable artifacts) ---"
 KDP_GAR=$(/workspace/scripts/api.sh harness GET \
   "https://app.harness.io/ng/api/artifacts/gar/getBuildDetails?accountIdentifier=$HARNESS_ACCOUNT_ID&orgIdentifier=polaris&projectIdentifier=enterprise_governance&connectorRef=org.PolarisGar&region=us&repositoryName=polarisng-charts&project=cloudops-artifacts-prd&package=altair-kong-dev-portal" \
-  -H "x-api-key: $HARNESS_API_KEY" 2>/dev/null)
+  $(harness_auth) 2>/dev/null)
 
 KDP_GAR_LATEST=$(echo "$KDP_GAR" | python3 -c "
 import sys, json

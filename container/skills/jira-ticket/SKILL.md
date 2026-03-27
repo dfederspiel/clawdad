@@ -8,7 +8,7 @@ description: Create and manage Jira tickets in the POLUIG (Central UI Engineerin
 ## Instance Configuration
 
 - **Instance URL**: `https://blackduck.atlassian.net`
-- **Auth**: Basic auth via `$ATLASSIAN_EMAIL` and `$ATLASSIAN_API_TOKEN` env vars
+- **Auth**: Handled automatically — OneCLI gateway injects credentials, or falls back to `$ATLASSIAN_EMAIL`/`$ATLASSIAN_API_TOKEN` env vars if set
 
 ## API Access
 

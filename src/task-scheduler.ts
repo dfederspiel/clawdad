@@ -233,7 +233,10 @@ async function runTask(
     });
   } catch (err) {
     // Task may have been deleted via IPC while running — FK constraint fails
-    logger.debug({ taskId: task.id, err }, 'Could not log task run (task may have been deleted)');
+    logger.debug(
+      { taskId: task.id, err },
+      'Could not log task run (task may have been deleted)',
+    );
   }
 
   try {
@@ -245,7 +248,10 @@ async function runTask(
         : 'Completed';
     updateTaskAfterRun(task.id, nextRun, resultSummary);
   } catch (err) {
-    logger.debug({ taskId: task.id, err }, 'Could not update task after run (task may have been deleted)');
+    logger.debug(
+      { taskId: task.id, err },
+      'Could not update task after run (task may have been deleted)',
+    );
   }
 }
 
