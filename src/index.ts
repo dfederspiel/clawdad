@@ -77,6 +77,9 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
+// Maps triggered agent JID → origin chat JID for cross-chat response routing
+const pendingOrigins: Record<string, string> = {};
+
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
@@ -314,7 +317,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  await channel.setTyping?.(chatJid, true);
+  // Cross-chat triggers: route responses to the originating chat
+  const originJid = pendingOrigins[chatJid];
+  const responseJid = originJid || chatJid;
+  const responseChannel = originJid
+    ? findChannel(channels, originJid) || channel
+    : channel;
+
+  await responseChannel.setTyping?.(responseJid, true);
   let hadError = false;
   let outputSentToUser = false;
 
@@ -329,7 +339,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
-        await channel.sendMessage(chatJid, text);
+        await responseChannel.sendMessage(responseJid, text);
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -345,7 +355,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   });
 
-  await channel.setTyping?.(chatJid, false);
+  await responseChannel.setTyping?.(responseJid, false);
+  // Clean up origin tracking after processing
+  if (originJid) delete pendingOrigins[chatJid];
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
@@ -556,6 +568,43 @@ async function startMessageLoop(): Promise<void> {
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
+          }
+        }
+
+        // Cross-chat trigger scan: check web-all triggered agents
+        // against messages from other web chats
+        for (const [chatJid, groupMessages] of messagesByGroup) {
+          if (!chatJid.startsWith('web:')) continue;
+          const userMessages = groupMessages.filter(
+            (m) => !m.is_bot_message && !m.is_from_me,
+          );
+          if (userMessages.length === 0) continue;
+
+          for (const [agentJid, agent] of Object.entries(registeredGroups)) {
+            if (agent.triggerScope !== 'web-all') continue;
+            if (!agent.requiresTrigger) continue;
+            if (agentJid === chatJid) continue;
+
+            const pattern = getTriggerPattern(agent.trigger);
+            const triggered = userMessages.some((m) =>
+              pattern.test(m.content.trim()),
+            );
+            if (!triggered) continue;
+
+            // Copy the triggering messages to the agent's JID so it has context
+            for (const msg of userMessages) {
+              storeMessage({
+                ...msg,
+                id: `${msg.id}_trigger_${agent.folder}`,
+                chat_jid: agentJid,
+              });
+            }
+            pendingOrigins[agentJid] = chatJid;
+            queue.enqueueMessageCheck(agentJid);
+            logger.info(
+              { trigger: agent.trigger, agentJid, originJid: chatJid },
+              'Cross-chat trigger detected',
+            );
           }
         }
       }

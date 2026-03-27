@@ -45,8 +45,10 @@ export const getConfig = () => fetchJson('/api/config');
 export const saveConfig = (data) =>
   fetchJson('/api/config', { method: 'POST', body: data });
 
-export const createGroup = (name, folder, template) =>
-  fetchJson('/api/groups', { method: 'POST', body: { name, folder, template } });
+export const createGroup = (name, folder, template, opts = {}) =>
+  fetchJson('/api/groups', { method: 'POST', body: { name, folder, template, ...opts } });
+
+export const getTriggers = () => fetchJson('/api/triggers');
 
 export const deleteGroup = (folder) =>
   fetchJson(`/api/groups/${encodeURIComponent(folder)}`, { method: 'DELETE' });
