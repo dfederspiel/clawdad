@@ -35,17 +35,18 @@ Single Node.js process with web UI channel (always-on) and optional messaging ch
 
 API keys, OAuth tokens, and auth credentials are managed by the **OneCLI Agent Vault** — a local gateway that intercepts outbound HTTPS requests from containers and injects credentials at request time. Agents never see raw keys. See [docs/CREDENTIALS.md](docs/CREDENTIALS.md) for the full reference.
 
+The gateway starts automatically when agents run (via the OneCLI SDK's `applyContainerConfig`). You don't need to start it manually.
+
 **Quick reference:**
 
 ```bash
-onecli gateway start                    # Start the credential gateway
 onecli secrets list                     # List registered secrets
 onecli secrets create --name NAME \     # Register a new credential
   --type anthropic|generic \
   --value TOKEN \
   --host-pattern api.example.com \
   --header-name Authorization           # (required for --type generic)
-curl -sf http://127.0.0.1:10254/health  # Verify gateway is running
+curl -sf http://127.0.0.1:10254/health  # Verify gateway is running (after an agent starts)
 ```
 
 **Config vs secrets:** Non-secret values (URLs, account IDs) pass to containers as env vars via `PASSTHROUGH_ENV_PREFIXES` in `container-runner.ts`. Secrets flow through the gateway only.
