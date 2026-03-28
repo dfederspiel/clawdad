@@ -44,6 +44,7 @@ export function MessageList() {
                       threadId=${m.id}
                       agentName=${thread.agent_name}
                       messages=${expanded[m.id] || []}
+                      replyCount=${thread.reply_count || 0}
                       isExpanded=${!!expanded[m.id]}
                       isTyping=${!!tTyping[m.id]}
                       onToggle=${toggleThread}

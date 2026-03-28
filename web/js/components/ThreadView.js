@@ -3,13 +3,14 @@ import { useState, useRef, useEffect } from 'preact/hooks';
 import { Message } from './Message.js';
 import { TypingIndicator } from './TypingIndicator.js';
 
-export function ThreadView({ threadId, agentName, messages, isExpanded, isTyping, onToggle, onReply }) {
+export function ThreadView({ threadId, agentName, messages, replyCount: metaReplyCount, isExpanded, isTyping, onToggle, onReply }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
 
-  const replyCount = messages?.length || 0;
+  // Use loaded messages count when expanded, threadMeta reply_count when collapsed
+  const replyCount = isExpanded ? (messages?.length || 0) : (metaReplyCount || 0);
 
   // Auto-scroll thread on new messages
   useEffect(() => {

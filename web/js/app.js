@@ -83,22 +83,26 @@ api.onSSE('typing', (data) => {
   typingGroups.value = { ...typingGroups.value, [data.jid]: data.isTyping };
 });
 
-api.onSSE('user_message', (data) => {
-  // If this is a thread reply echo, append to open thread
-  if (data.message?.thread_id) {
-    const tid = data.message.thread_id;
-    const threads = openThreads.value;
-    if (threads[tid]) {
-      openThreads.value = {
-        ...threads,
-        [tid]: [...threads[tid], {
-          role: 'user', content: data.message.content, timestamp: data.message.timestamp,
-          senderName: data.message.sender_name,
-        }],
-      };
-    }
-    return;
+api.onSSE('thread_created', (data) => {
+  // A new thread was created by a trigger — add to threadMeta so UI shows immediately
+  if (data.jid === selectedJid.value && data.thread_id) {
+    threadMeta.value = {
+      ...threadMeta.value,
+      [data.thread_id]: {
+        thread_id: data.thread_id,
+        agent_jid: '',
+        origin_jid: data.jid,
+        agent_name: data.agent_name,
+        created_at: new Date().toISOString(),
+        reply_count: 0,
+      },
+    };
   }
+});
+
+api.onSSE('user_message', (data) => {
+  // Skip thread reply echo — optimistic update already added it
+  if (data.message?.thread_id) return;
   // Ignore echo for normal messages — optimistic update already shows them
 });
 
