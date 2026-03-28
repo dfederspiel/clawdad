@@ -254,6 +254,7 @@ async function buildContainerArgs(
   // These are non-secret service keys the agent needs for API calls.
   const PASSTHROUGH_ENV_PREFIXES = [
     'ANTHROPIC_BASE_URL', // Custom API endpoint (not the secret — just the URL)
+    'CLAUDE_MODEL', // Model override for LiteLLM proxy compatibility
     'HARNESS_',
     'GITLAB_',
     'GITHUB_',
