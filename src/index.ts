@@ -297,7 +297,19 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     !isThreadReply, // excludeThreaded — but include thread replies when processing a thread agent
   );
 
-  if (missedMessages.length === 0) return true;
+  if (missedMessages.length === 0) {
+    if (isThreadReply) {
+      logger.warn(
+        {
+          chatJid,
+          threadId: pendingOrigin?.threadId,
+          cursor: getOrRecoverCursor(chatJid),
+        },
+        'Thread reply: no messages found after cursor (messages may have been consumed by message loop)',
+      );
+    }
+    return true;
+  }
 
   // For non-main groups, check if trigger is required and present.
   // Skip this check for thread replies — the user is continuing a
@@ -314,6 +326,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
   const originJid = pendingOrigin?.originJid;
   const threadId = pendingOrigin?.threadId;
+
+  if (threadId) {
+    logger.info(
+      { chatJid, originJid, threadId, messageCount: missedMessages.length },
+      'Processing thread messages — response will route to thread',
+    );
+  }
 
   // For triggered agents, prepend conversation context from the origin chat
   // so the agent understands what's being discussed.
@@ -396,7 +415,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+      logger.info(
+        { group: group.name, responseJid, threadId: threadId || null },
+        `Agent output: ${raw.length} chars → ${threadId ? 'thread' : 'main'}`,
+      );
       if (text) {
         await responseChannel.sendMessage(responseJid, text, threadId);
         outputSentToUser = true;
@@ -589,6 +611,10 @@ async function startMessageLoop(): Promise<void> {
         for (const [chatJid, groupMessages] of messagesByGroup) {
           const group = registeredGroups[chatJid];
           if (!group) continue;
+
+          // Skip groups with pending thread routing — processGroupMessages
+          // handles these via the queue with proper thread context.
+          if (pendingOrigins[chatJid]) continue;
 
           const channel = findChannel(channels, chatJid);
           if (!channel) {
