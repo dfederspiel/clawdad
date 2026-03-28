@@ -284,20 +284,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const isMainGroup = group.isMain === true;
 
+  // Cross-chat triggers: route responses to the originating chat
+  const pendingOrigin = pendingOrigins[chatJid];
+  const isThreadReply = !!pendingOrigin?.threadId;
+
   const missedMessages = getMessagesSince(
     chatJid,
     getOrRecoverCursor(chatJid),
     ASSISTANT_NAME,
     MAX_MESSAGES_PER_PROMPT,
     false, // includeBotMessages
-    true, // excludeThreaded — thread replies are handled by the thread's agent
+    !isThreadReply, // excludeThreaded — but include thread replies when processing a thread agent
   );
 
   if (missedMessages.length === 0) return true;
-
-  // Cross-chat triggers: route responses to the originating chat
-  const pendingOrigin = pendingOrigins[chatJid];
-  const isThreadReply = !!pendingOrigin?.threadId;
 
   // For non-main groups, check if trigger is required and present.
   // Skip this check for thread replies — the user is continuing a
