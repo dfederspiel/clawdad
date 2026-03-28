@@ -10,6 +10,7 @@ import {
   RegisteredGroup,
   ScheduledTask,
   TaskRunLog,
+  ThreadInfo,
 } from './types.js';
 
 let db: Database.Database;
@@ -135,6 +136,23 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* columns already exist */
   }
+
+  // Add thread_id column to messages and threads table (migration for threaded conversations)
+  try {
+    database.exec(`ALTER TABLE messages ADD COLUMN thread_id TEXT`);
+  } catch {
+    /* column already exists */
+  }
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS threads (
+      thread_id TEXT PRIMARY KEY,
+      agent_jid TEXT NOT NULL,
+      origin_jid TEXT NOT NULL,
+      agent_name TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+  `);
 
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
@@ -284,7 +302,7 @@ export function setLastGroupSync(): void {
  */
 export function storeMessage(msg: NewMessage): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -294,6 +312,7 @@ export function storeMessage(msg: NewMessage): void {
     msg.timestamp,
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
+    msg.thread_id || null,
   );
 }
 
@@ -309,9 +328,10 @@ export function storeMessageDirect(msg: {
   timestamp: string;
   is_from_me: boolean;
   is_bot_message?: boolean;
+  thread_id?: string;
 }): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -321,6 +341,7 @@ export function storeMessageDirect(msg: {
     msg.timestamp,
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
+    msg.thread_id || null,
   );
 }
 
@@ -366,6 +387,7 @@ export function getMessagesSince(
   botPrefix: string,
   limit: number = 200,
   includeBotMessages: boolean = false,
+  excludeThreaded: boolean = false,
 ): NewMessage[] {
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
@@ -374,12 +396,14 @@ export function getMessagesSince(
   const botFilter = includeBotMessages
     ? ''
     : 'AND is_bot_message = 0 AND content NOT LIKE ?';
+  const threadFilter = excludeThreaded ? 'AND thread_id IS NULL' : '';
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
         ${botFilter}
+        ${threadFilter}
         AND content != '' AND content IS NOT NULL
       ORDER BY timestamp DESC
       LIMIT ?
@@ -402,6 +426,70 @@ export function getLastBotMessageTimestamp(
     )
     .get(chatJid, `${botPrefix}:%`) as { ts: string | null } | undefined;
   return row?.ts ?? undefined;
+}
+
+// --- Thread accessors ---
+
+export function createThread(
+  threadId: string,
+  agentJid: string,
+  originJid: string,
+  agentName?: string,
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO threads (thread_id, agent_jid, origin_jid, agent_name, created_at) VALUES (?, ?, ?, ?, ?)`,
+  ).run(
+    threadId,
+    agentJid,
+    originJid,
+    agentName || null,
+    new Date().toISOString(),
+  );
+}
+
+export function getThread(threadId: string): ThreadInfo | undefined {
+  return db
+    .prepare('SELECT * FROM threads WHERE thread_id = ?')
+    .get(threadId) as ThreadInfo | undefined;
+}
+
+export function getAllThreads(): ThreadInfo[] {
+  return db.prepare('SELECT * FROM threads').all() as ThreadInfo[];
+}
+
+export function getThreadMessages(
+  threadId: string,
+  limit: number = 50,
+): NewMessage[] {
+  return db
+    .prepare(
+      `SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id
+       FROM messages WHERE thread_id = ?
+       ORDER BY timestamp
+       LIMIT ?`,
+    )
+    .all(threadId, limit) as NewMessage[];
+}
+
+export function getThreadsForChat(chatJid: string): ThreadInfo[] {
+  return db
+    .prepare(
+      `SELECT t.thread_id, t.agent_jid, t.origin_jid, t.agent_name, t.created_at,
+              COUNT(m.id) as reply_count
+       FROM threads t
+       LEFT JOIN messages m ON m.thread_id = t.thread_id AND m.chat_jid = ?
+       WHERE t.origin_jid = ?
+       GROUP BY t.thread_id
+       ORDER BY t.created_at DESC`,
+    )
+    .all(chatJid, chatJid) as ThreadInfo[];
+}
+
+export function deleteThreadsForGroup(jid: string): void {
+  db.prepare('DELETE FROM threads WHERE origin_jid = ? OR agent_jid = ?').run(
+    jid,
+    jid,
+  );
 }
 
 export function createTask(
@@ -830,6 +918,7 @@ export function deleteGroupData(jid: string, folder: string): void {
     db.prepare('DELETE FROM messages WHERE chat_jid = ?').run(jid);
     db.prepare('DELETE FROM chats WHERE jid = ?').run(jid);
     db.prepare('DELETE FROM registered_groups WHERE jid = ?').run(jid);
+    deleteThreadsForGroup(jid);
   });
   txn();
 }

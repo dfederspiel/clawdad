@@ -21,6 +21,8 @@ import {
   updateTask,
   deleteTask,
   getTelemetryStats,
+  getThreadsForChat,
+  getThreadMessages,
 } from '../db.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -128,7 +130,11 @@ export class WebChannel implements Channel {
     return jid.startsWith('web:');
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(
+    jid: string,
+    text: string,
+    threadId?: string,
+  ): Promise<void> {
     const timestamp = new Date().toISOString();
 
     // Persist agent response so it survives page reloads
@@ -141,14 +147,19 @@ export class WebChannel implements Channel {
       timestamp,
       is_from_me: true,
       is_bot_message: true,
+      thread_id: threadId,
     });
 
-    this.broadcast('message', { jid, text, timestamp });
-    logger.info({ jid, length: text.length }, 'Web message sent');
+    this.broadcast('message', { jid, text, timestamp, thread_id: threadId });
+    logger.info({ jid, length: text.length, threadId }, 'Web message sent');
   }
 
-  async setTyping(jid: string, isTyping: boolean): Promise<void> {
-    this.broadcast('typing', { jid, isTyping });
+  async setTyping(
+    jid: string,
+    isTyping: boolean,
+    threadId?: string,
+  ): Promise<void> {
+    this.broadcast('typing', { jid, isTyping, thread_id: threadId });
   }
 
   // --- HTTP Request Handler ---
@@ -411,7 +422,25 @@ export class WebChannel implements Channel {
       return this.json(res, 200, { ok: true });
     }
 
-    // GET /api/messages/:jid — message history
+    // GET /api/threads/:jid — threads for a chat with reply counts
+    const threadsMatch = url.pathname.match(/^\/api\/threads\/(.+)$/);
+    if (method === 'GET' && threadsMatch) {
+      const jid = decodeURIComponent(threadsMatch[1]);
+      const threads = getThreadsForChat(jid);
+      return this.json(res, 200, { threads });
+    }
+
+    // GET /api/thread-messages/:threadId — messages in a thread
+    const threadMsgsMatch = url.pathname.match(
+      /^\/api\/thread-messages\/(.+)$/,
+    );
+    if (method === 'GET' && threadMsgsMatch) {
+      const threadId = decodeURIComponent(threadMsgsMatch[1]);
+      const messages = getThreadMessages(threadId);
+      return this.json(res, 200, { messages });
+    }
+
+    // GET /api/messages/:jid — message history (excludes thread replies)
     const messagesMatch = url.pathname.match(/^\/api\/messages\/(.+)$/);
     if (method === 'GET' && messagesMatch) {
       const jid = decodeURIComponent(messagesMatch[1]);
@@ -423,14 +452,15 @@ export class WebChannel implements Channel {
         ASSISTANT_NAME,
         limit,
         true,
+        true, // excludeThreaded — hide thread replies from main timeline
       );
       return this.json(res, 200, { messages });
     }
 
-    // POST /api/send — send a message to a web group
+    // POST /api/send — send a message to a web group (or thread reply)
     if (method === 'POST' && url.pathname === '/api/send') {
       const body = await this.readBody(req);
-      const { jid, content, sender } = body;
+      const { jid, content, sender, thread_id } = body;
       if (!jid || !content) {
         return this.json(res, 400, { error: 'jid and content are required' });
       }
@@ -456,16 +486,32 @@ export class WebChannel implements Channel {
         timestamp: new Date().toISOString(),
         is_from_me: false,
         is_bot_message: false,
+        thread_id: thread_id || undefined,
       };
 
-      // Deliver to orchestrator (same path as Discord/Gmail)
-      this.opts.onMessage(jid, msg);
-
-      // Echo back to all connected browsers so the sender sees their message
-      this.broadcast('user_message', {
-        jid,
-        message: msg,
-      });
+      if (thread_id) {
+        // Thread reply: store in origin chat with thread_id, route to the thread's agent
+        const storable = { ...msg, is_from_me: msg.is_from_me ?? false };
+        storeMessageDirect(storable);
+        // Copy to the thread's agent JID so it picks up the message
+        const threadInfo = this.opts.getThreadInfo?.(thread_id);
+        if (threadInfo) {
+          storeMessageDirect({
+            ...storable,
+            id: `${msg.id}_thread_${threadInfo.agentJid}`,
+            chat_jid: threadInfo.agentJid,
+            thread_id: thread_id,
+          });
+          this.opts.onThreadReply?.(thread_id, threadInfo.agentJid);
+        }
+        // Broadcast to browsers for live update
+        this.broadcast('user_message', { jid, message: msg });
+      } else {
+        // Normal message: deliver to orchestrator
+        this.opts.onMessage(jid, msg);
+        // Echo back to all connected browsers so the sender sees their message
+        this.broadcast('user_message', { jid, message: msg });
+      }
 
       return this.json(res, 200, { ok: true, messageId: msg.id });
     }
