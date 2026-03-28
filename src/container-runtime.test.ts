@@ -51,8 +51,12 @@ describe('stopContainer', () => {
   });
 
   it('rejects names with shell metacharacters', () => {
-    expect(() => stopContainer('foo; rm -rf /')).toThrow('Invalid container name');
-    expect(() => stopContainer('foo$(whoami)')).toThrow('Invalid container name');
+    expect(() => stopContainer('foo; rm -rf /')).toThrow(
+      'Invalid container name',
+    );
+    expect(() => stopContainer('foo$(whoami)')).toThrow(
+      'Invalid container name',
+    );
     expect(() => stopContainer('foo`id`')).toThrow('Invalid container name');
     expect(mockExecSync).not.toHaveBeenCalled();
   });
@@ -71,7 +75,9 @@ describe('ensureContainerRuntimeRunning', () => {
       `${CONTAINER_RUNTIME_BIN} system status`,
       { stdio: 'pipe' },
     );
-    expect(logger.debug).toHaveBeenCalledWith('Container runtime already running');
+    expect(logger.debug).toHaveBeenCalledWith(
+      'Container runtime already running',
+    );
   });
 
   it('auto-starts when system status fails', () => {
