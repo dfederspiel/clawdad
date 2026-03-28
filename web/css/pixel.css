@@ -30,6 +30,16 @@
 .game-hud {
   padding: 12px 16px;
   border-bottom: 1px solid #2a2d3e;
+  position: relative;
+  transition: background 0.2s;
+}
+
+.game-hud:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.game-hud:hover .game-hud-xp-track {
+  border-color: rgba(240, 192, 64, 0.3);
 }
 
 .game-hud-level {
@@ -57,6 +67,29 @@
     rgba(0, 0, 0, 0.15) 6px
   );
   transition: width 0.5s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.game-hud-xp-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.25) 45%,
+    rgba(255, 255, 255, 0.35) 50%,
+    rgba(255, 255, 255, 0.25) 55%,
+    transparent 70%
+  );
+  animation: xp-sheen 8s ease-in-out infinite;
+  animation-delay: 3s;
+}
+
+@keyframes xp-sheen {
+  0%, 85%, 100% { transform: translateX(-150%); }
+  90% { transform: translateX(250%); }
 }
 
 .game-hud-stats {
