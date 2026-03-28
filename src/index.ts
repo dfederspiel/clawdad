@@ -437,8 +437,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   });
 
   await responseChannel.setTyping?.(responseJid, false, threadId);
-  // Clean up origin tracking after processing
-  if (originJid) delete pendingOrigins[chatJid];
+  // Clean up origin tracking after processing — but only if it hasn't been
+  // re-set by a new thread reply arriving during this processing cycle.
+  if (originJid && pendingOrigins[chatJid] === pendingOrigin) {
+    delete pendingOrigins[chatJid];
+  }
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
