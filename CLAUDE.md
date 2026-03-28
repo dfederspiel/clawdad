@@ -104,6 +104,36 @@ systemctl --user stop nanoclaw
 systemctl --user restart nanoclaw
 ```
 
+## Windows Setup Notes
+
+ClawDad runs on Windows via Git Bash. These are the known gotchas:
+
+**Docker Desktop PATH:** After installing Docker Desktop via `winget`, the `docker` CLI is not in the Git Bash PATH until you add it manually:
+```bash
+echo 'export PATH="/c/Program Files/Docker/Docker/resources/bin:$PATH"' >> ~/.bashrc
+```
+Restart your shell after adding this.
+
+**OneCLI CLI not supported:** The `onecli` CLI installer (`onecli.sh/cli/install`) does not support Git Bash / MSYS2. Use the OneCLI dashboard at `http://localhost:10254` or the REST API to manage secrets instead:
+```bash
+# Register a secret via API
+curl -X POST http://127.0.0.1:10254/api/secrets \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Anthropic","type":"anthropic","value":"YOUR_KEY","hostPattern":"api.anthropic.com"}'
+
+# List secrets
+curl -s http://127.0.0.1:10254/api/secrets
+```
+
+**Health check shows Anthropic "missing":** The health endpoint uses `onecli secrets list` (the CLI) to verify credentials. Since the CLI doesn't work on Windows, it always reports `missing` even when the secret is correctly registered via the API. Agents still work.
+
+**pm2 log capture:** pm2 may silently fail to capture stdout/stderr on Windows. If `pm2 logs` shows nothing, run the service directly instead:
+```bash
+node dist/index.js > logs/clawdad.log 2>&1 &
+```
+
+**Service auto-start:** The built-in service setup (`npx tsx setup/index.ts --step service`) only supports macOS (launchd) and Linux (systemd). On Windows, start manually after reboot or create a Windows Task Scheduler entry.
+
 ## Troubleshooting
 
 **WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `npx tsx scripts/apply-skill.ts .claude/skills/add-whatsapp && npm run build`) to install it. Existing auth credentials and groups are preserved.
