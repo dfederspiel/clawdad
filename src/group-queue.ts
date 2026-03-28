@@ -59,6 +59,15 @@ export class GroupQueue {
     this.processMessagesFn = fn;
   }
 
+  /**
+   * Remove all queue state for a deleted group.
+   * Must be called after stopping any active container.
+   */
+  deleteGroup(groupJid: string): void {
+    this.groups.delete(groupJid);
+    this.waitingGroups = this.waitingGroups.filter((j) => j !== groupJid);
+  }
+
   enqueueMessageCheck(groupJid: string): void {
     if (this.shuttingDown) return;
 
