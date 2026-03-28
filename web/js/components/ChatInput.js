@@ -116,7 +116,7 @@ export function ChatInput() {
   }
 
   return html`
-    <div class="relative flex gap-2 p-3 px-5 border-t border-border bg-bg-2 items-end">
+    <div class="relative flex gap-2 p-3 px-3 md:px-5 border-t border-border bg-bg-2 items-end">
       ${showMentions && filtered.length > 0 && html`
         <div
           ref=${menuRef}
@@ -145,19 +145,22 @@ export function ChatInput() {
       `}
       <textarea
         ref=${ref}
-        class="flex-1 bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt resize-none focus:outline-none focus:border-accent placeholder-txt-muted font-sans"
+        class="flex-1 min-w-0 bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt resize-none focus:outline-none focus:border-accent placeholder-txt-muted font-sans"
         placeholder="Type a message..."
-        rows="2"
+        rows="1"
         value=${text}
         onInput=${onInput}
         onKeyDown=${onKeyDown}
       />
       <button
-        class="px-4 py-2 bg-accent text-bg font-semibold rounded-lg text-sm hover:brightness-110 disabled:opacity-40 transition-all"
+        class="shrink-0 w-9 h-9 flex items-center justify-center bg-accent text-bg rounded-full hover:brightness-110 disabled:opacity-40 transition-all"
         onClick=${onSend}
         disabled=${!text.trim() || sending}
+        title="Send"
       >
-        Send
+        <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M10 17a.75.75 0 01-.75-.75V5.612L5.29 9.77a.75.75 0 01-1.08-1.04l5.25-5.5a.75.75 0 011.08 0l5.25 5.5a.75.75 0 11-1.08 1.04l-3.96-4.158V16.25A.75.75 0 0110 17z" clip-rule="evenodd"/>
+        </svg>
       </button>
     </div>
   `;

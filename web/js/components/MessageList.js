@@ -20,7 +20,7 @@ export function MessageList() {
   }, [msgs.length, isTyping]);
 
   return html`
-    <div ref=${containerRef} class="flex-1 overflow-y-auto p-5 flex flex-col gap-3">
+    <div ref=${containerRef} class="flex-1 overflow-y-auto p-3 md:p-5 flex flex-col gap-3">
       ${msgs.length === 0 && !isTyping
         ? html`
             <div class="flex-1 flex items-center justify-center">
