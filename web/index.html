@@ -1,24 +1,33 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ClawDad</title>
 
+  <!-- Default theme vars (dark) — applied before JS loads to prevent flash -->
+  <style>
+    :root {
+      --bg: #0f1117; --bg2: #161922; --bg3: #1e2130; --bg-hover: #252940;
+      --txt: #e1e4ed; --txt2: #8b8fa3; --txt-muted: #5e6275;
+      --accent: #6c8aff; --accent-dim: #3d5199;
+      --userbg: #1a2744; --asstbg: #1c1f2e; --border: #2a2d3e; --err: #ff6b6b;
+    }
+  </style>
+
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
-      darkMode: 'class',
       theme: {
         extend: {
           colors: {
-            bg:     { DEFAULT: '#0f1117', 2: '#161922', 3: '#1e2130', hover: '#252940' },
-            txt:    { DEFAULT: '#e1e4ed', 2: '#8b8fa3', muted: '#5e6275' },
-            accent: { DEFAULT: '#6c8aff', dim: '#3d5199' },
-            userbg: '#1a2744',
-            asstbg: '#1c1f2e',
-            border: '#2a2d3e',
-            err:    '#ff6b6b',
+            bg:     { DEFAULT: 'var(--bg)', 2: 'var(--bg2)', 3: 'var(--bg3)', hover: 'var(--bg-hover)' },
+            txt:    { DEFAULT: 'var(--txt)', 2: 'var(--txt2)', muted: 'var(--txt-muted)' },
+            accent: { DEFAULT: 'var(--accent)', dim: 'var(--accent-dim)' },
+            userbg: 'var(--userbg)',
+            asstbg: 'var(--asstbg)',
+            border: 'var(--border)',
+            err:    'var(--err)',
           },
           fontFamily: {
             sans: ['-apple-system','BlinkMacSystemFont','Segoe UI','system-ui','sans-serif'],

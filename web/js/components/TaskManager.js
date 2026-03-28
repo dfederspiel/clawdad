@@ -23,8 +23,8 @@ export function TaskManager() {
     <div class="max-h-[300px] overflow-y-auto">
       ${Object.entries(byGroup).map(
         ([folder, folderTasks]) => html`
-          <div class="border-b border-border/30 last:border-b-0">
-            <div class="px-4 py-1.5 text-[10px] font-medium text-txt-muted uppercase tracking-wider bg-bg/50">
+          <div class="border-b border-border last:border-b-0">
+            <div class="px-4 py-1.5 text-[10px] font-medium text-txt-muted uppercase tracking-wider bg-bg">
               ${folder}
             </div>
             ${folderTasks.map((t) => html`<${TaskItem} key=${t.id} task=${t} />`)}

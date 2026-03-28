@@ -5,7 +5,7 @@ function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export function GroupItem({ group, isActive, onDelete }) {
+export function GroupItem({ group, isActive, onSelect, onDelete }) {
   const count = unread.value[group.jid] || 0;
   const isThinking = typingGroups.value[group.jid] || false;
   const base =
@@ -21,15 +21,23 @@ export function GroupItem({ group, isActive, onDelete }) {
 
   const canDelete = !group.isSystem && !group.isMain;
 
+  function onClick() {
+    if (onSelect) {
+      onSelect(group.jid);
+    } else {
+      selectGroup(group.jid);
+    }
+  }
+
   return html`
-    <div class="${base} ${active}" onClick=${() => selectGroup(group.jid)}>
+    <div class="${base} ${active}" onClick=${onClick}>
       <span class="w-2 h-2 rounded-full flex-shrink-0 ${dotClass}" />
       <span class="flex-1 truncate">${esc(group.name)}</span>
       ${group.isSystem && html`
         <span class="text-[10px] px-1.5 py-0.5 rounded bg-bg-3 text-txt-muted font-medium">system</span>
       `}
       ${group.isMain && !group.isSystem && html`
-        <span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent font-medium">main</span>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-accent-dim text-accent font-medium">main</span>
       `}
       ${count > 0 && html`
         <span class="min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-accent text-bg text-[11px] font-semibold px-1">
