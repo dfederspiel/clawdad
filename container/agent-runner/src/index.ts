@@ -391,9 +391,16 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // Model override: use CLAUDE_MODEL env var if set (e.g., for LiteLLM proxy model names)
+  const modelOverride = process.env.CLAUDE_MODEL || undefined;
+  if (modelOverride) {
+    log(`Using model override: ${modelOverride}`);
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
+      model: modelOverride,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
