@@ -13,6 +13,9 @@ export const messages = signal([]);
 export const typingGroups = signal({}); // { [jid]: boolean }
 export const typing = computed(() => typingGroups.value[selectedJid.value] || false);
 export const unread = signal({}); // { [jid]: count }
+export const threadMeta = signal({}); // { [messageId]: ThreadInfo }
+export const openThreads = signal({}); // { [threadId]: Message[] }
+export const threadTyping = signal({}); // { [threadId]: boolean }
 
 export const selectedGroup = computed(() =>
   groups.value.find((g) => g.jid === selectedJid.value) || null,
@@ -30,6 +33,29 @@ const clientId = crypto.randomUUID();
 api.connectSSE(clientId);
 
 api.onSSE('message', (data) => {
+  if (data.thread_id) {
+    // Thread message — append to open thread, update reply count, clear thread typing
+    threadTyping.value = { ...threadTyping.value, [data.thread_id]: false };
+    const threads = openThreads.value;
+    if (threads[data.thread_id]) {
+      openThreads.value = {
+        ...threads,
+        [data.thread_id]: [...threads[data.thread_id], {
+          role: 'assistant', content: data.text, timestamp: data.timestamp,
+        }],
+      };
+    }
+    // Bump reply count in threadMeta
+    const meta = threadMeta.value[data.thread_id];
+    if (meta) {
+      threadMeta.value = {
+        ...threadMeta.value,
+        [data.thread_id]: { ...meta, reply_count: (meta.reply_count || 0) + 1 },
+      };
+    }
+    return;
+  }
+
   // Clear typing for this group regardless of selection
   typingGroups.value = { ...typingGroups.value, [data.jid]: false };
 
@@ -50,11 +76,30 @@ api.onSSE('message', (data) => {
 });
 
 api.onSSE('typing', (data) => {
+  if (data.thread_id) {
+    threadTyping.value = { ...threadTyping.value, [data.thread_id]: data.isTyping };
+    return;
+  }
   typingGroups.value = { ...typingGroups.value, [data.jid]: data.isTyping };
 });
 
-api.onSSE('user_message', () => {
-  // Ignore echo — optimistic update already shows the message
+api.onSSE('user_message', (data) => {
+  // If this is a thread reply echo, append to open thread
+  if (data.message?.thread_id) {
+    const tid = data.message.thread_id;
+    const threads = openThreads.value;
+    if (threads[tid]) {
+      openThreads.value = {
+        ...threads,
+        [tid]: [...threads[tid], {
+          role: 'user', content: data.message.content, timestamp: data.message.timestamp,
+          senderName: data.message.sender_name,
+        }],
+      };
+    }
+    return;
+  }
+  // Ignore echo for normal messages — optimistic update already shows them
 });
 
 // --- Actions ---
@@ -81,13 +126,26 @@ export async function selectGroup(jid) {
   delete cur[jid];
   unread.value = cur;
 
-  const data = await api.getMessages(jid);
-  messages.value = data.messages.map((m) => ({
+  const [msgData, threadData] = await Promise.all([
+    api.getMessages(jid),
+    api.getThreads(jid),
+  ]);
+  messages.value = msgData.messages.map((m) => ({
+    id: m.id,
     role: m.is_bot_message || m.is_from_me ? 'assistant' : 'user',
     content: m.content,
     timestamp: m.timestamp,
     senderName: m.sender_name,
   }));
+
+  // Index threads by their thread_id (= triggering message id)
+  const meta = {};
+  for (const t of threadData.threads) {
+    meta[t.thread_id] = t;
+  }
+  threadMeta.value = meta;
+  openThreads.value = {};
+  threadTyping.value = {};
 }
 
 export async function handleSend(content) {
@@ -123,6 +181,52 @@ export async function createGroup(name, folder, template, opts = {}) {
     selectGroup(result.jid);
   }
   return result;
+}
+
+export async function toggleThread(threadId) {
+  const threads = openThreads.value;
+  if (threads[threadId]) {
+    // Collapse — remove from open threads
+    const next = { ...threads };
+    delete next[threadId];
+    openThreads.value = next;
+    return;
+  }
+  // Expand — lazy-load messages on first open
+  try {
+    const data = await api.getThreadMessages(threadId);
+    const mapped = data.messages.map((m) => ({
+      id: m.id,
+      role: m.is_bot_message || m.is_from_me ? 'assistant' : 'user',
+      content: m.content,
+      timestamp: m.timestamp,
+      senderName: m.sender_name,
+    }));
+    openThreads.value = { ...openThreads.value, [threadId]: mapped };
+  } catch (err) {
+    console.error('Failed to load thread messages', err);
+  }
+}
+
+export async function handleThreadReply(threadId, content) {
+  if (!content.trim() || !selectedJid.value) return;
+
+  // Optimistic update
+  const threads = openThreads.value;
+  if (threads[threadId]) {
+    openThreads.value = {
+      ...threads,
+      [threadId]: [...threads[threadId], {
+        role: 'user', content, timestamp: new Date().toISOString(),
+      }],
+    };
+  }
+
+  try {
+    await api.sendMessage(selectedJid.value, content, undefined, threadId);
+  } catch (err) {
+    console.error('Failed to send thread reply', err);
+  }
 }
 
 export async function loadTriggers() {
