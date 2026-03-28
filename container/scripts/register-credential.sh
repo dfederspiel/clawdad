@@ -48,8 +48,8 @@ done
 
 # Validate service
 case "$SERVICE" in
-  atlassian|gitlab|github|harness|launchdarkly|brave) ;;
-  *) echo "Unknown service: $SERVICE (valid: atlassian, gitlab, github, harness, launchdarkly, brave)" >&2; exit 1 ;;
+  atlassian|gitlab|github|harness|launchdarkly) ;;
+  *) echo "Unknown service: $SERVICE (valid: atlassian, gitlab, github, harness, launchdarkly)" >&2; exit 1 ;;
 esac
 
 # Atlassian requires email
