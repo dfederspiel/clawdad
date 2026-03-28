@@ -1,4 +1,5 @@
 {
   "name": "Bug Triage Agent",
-  "description": "Auto-triage Jira bugs, investigate code, propose fixes, and create pull requests."
+  "description": "Auto-triage Jira bugs, investigate code, propose fixes, and create pull requests.",
+  "tier": "recipe"
 }

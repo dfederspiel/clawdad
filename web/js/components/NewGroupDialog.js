@@ -170,16 +170,23 @@ export function NewGroupDialog({ open, onClose }) {
               >
                 Blank
               </button>
-              ${templates.map((t) => html`
-                <button
-                  type="button"
-                  key=${t.id}
-                  class="px-3 py-1.5 text-xs rounded-lg border transition-colors ${pillClass(selectedTemplate?.id === t.id)}"
-                  onClick=${() => selectTemplate(t)}
-                >
-                  ${t.name}
-                </button>
-              `)}
+              ${['beginner', 'advanced', 'recipe']
+                .filter((tier) => templates.some((t) => (t.tier || 'recipe') === tier))
+                .map((tier) => {
+                  const tierTemplates = templates.filter((t) => (t.tier || 'recipe') === tier);
+                  return tierTemplates.map((t) => html`
+                    <button
+                      type="button"
+                      key=${t.id}
+                      class="px-3 py-1.5 text-xs rounded-lg border transition-colors ${pillClass(selectedTemplate?.id === t.id)}"
+                      onClick=${() => selectTemplate(t)}
+                      title=${t.description}
+                    >
+                      ${t.name}${' '}
+                      ${tier === 'beginner' ? html`<span class="text-green-400 text-[8px]">*</span>` : ''}
+                    </button>
+                  `);
+                })}
             </div>
             ${selectedTemplate && html`
               <p class="text-xs text-txt-muted">${selectedTemplate.description}</p>

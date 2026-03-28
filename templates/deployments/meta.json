@@ -1,4 +1,5 @@
 {
   "name": "Deployment Agent",
-  "description": "Monitor CI/CD pipelines, trigger deployments, investigate failures, and track security gates."
+  "description": "Monitor CI/CD pipelines, trigger deployments, investigate failures, and track security gates.",
+  "tier": "recipe"
 }

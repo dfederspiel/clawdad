@@ -6,6 +6,7 @@ import { ChatView } from './ChatView.js';
 import { OnboardingGuide } from './OnboardingGuide.js';
 import { NewGroupDialog } from './NewGroupDialog.js';
 import { AchievementToast } from './blocks/AchievementToast.js';
+import { AchievementPanel } from './AchievementPanel.js';
 
 export function App() {
   const group = selectedGroup.value;
@@ -51,6 +52,7 @@ export function App() {
         onClose=${() => setDialogOpen(false)}
       />
       <${AchievementToast} />
+      <${AchievementPanel} />
     </div>
   `;
 }

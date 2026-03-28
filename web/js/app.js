@@ -3,7 +3,8 @@ import { signal, computed } from 'preact/signals';
 import { html } from 'htm/preact';
 import * as api from './api.js';
 import { App } from './components/App.js';
-import { checkAchievements } from './components/blocks/AchievementToast.js';
+import { showAchievementToast } from './components/blocks/AchievementToast.js';
+import { loadAchievements, handleAchievementSSE } from './achievements.js';
 import {
   THEMES, applyTheme, getThemeByName, validateThemeJson,
   buildExportJson, getCurrentColors,
@@ -118,6 +119,11 @@ api.onSSE('user_message', (data) => {
   // Skip thread reply echo — optimistic update already added it
   if (data.message?.thread_id) return;
   // Ignore echo for normal messages — optimistic update already shows them
+});
+
+api.onSSE('achievement', (data) => {
+  const enriched = handleAchievementSSE(data);
+  showAchievementToast(enriched);
 });
 
 api.onSSE('messages_cleared', (data) => {
@@ -334,7 +340,8 @@ async function pollTasks() {
 async function pollTelemetry() {
   try {
     telemetry.value = await api.getTelemetry();
-    checkAchievements(telemetry.value);
+    // Telemetry-based achievements (centurion, streaks) are checked server-side
+    // in the /api/telemetry handler and broadcast via SSE
   } catch { /* ignore */ }
 }
 
@@ -361,6 +368,7 @@ export async function getTaskLogs(taskId) {
 pollStatus();
 pollTasks();
 pollTelemetry();
+loadAchievements();
 setInterval(pollStatus, 5000);
 setInterval(pollTasks, 10000);
 setInterval(pollTelemetry, 30000);
