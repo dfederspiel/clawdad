@@ -90,9 +90,22 @@ export function ensureContainerRuntimeRunning(): boolean {
 }
 
 /**
+ * Convert a group folder name to the container name prefix used by container-runner.
+ * Must mirror the safeName logic in container-runner.ts:
+ *   `nanoclaw-${folder.replace(/[^a-zA-Z0-9-]/g, '-')}`
+ */
+function containerPrefix(folder: string): string {
+  return `nanoclaw-${folder.replace(/[^a-zA-Z0-9-]/g, '-')}`;
+}
+
+/**
  * Kill orphaned NanoClaw containers from previous runs.
  * Only stops containers whose group folder exists in THIS instance's groups/
  * directory, so multiple NanoClaw installs don't interfere with each other.
+ *
+ * Matching works forward (folder → container prefix) rather than reverse
+ * (container name → folder) because the folder-to-safename mapping is lossy
+ * (both '_' and other special chars become '-').
  */
 export function cleanupOrphans(): void {
   try {
@@ -102,15 +115,28 @@ export function cleanupOrphans(): void {
     );
     const allContainers = output.trim().split('\n').filter(Boolean);
 
-    // Container names are nanoclaw-{folder}-{timestamp}.
-    // Convert back to folder name: strip "nanoclaw-" prefix and trailing "-{timestamp}".
+    // Build set of valid container prefixes from actual group folders
     const groupsDir = path.resolve(process.cwd(), 'groups');
-    const orphans = allContainers.filter((name) => {
-      const withoutPrefix = name.replace(/^nanoclaw-/, '');
-      // Folder is everything before the last dash-followed-by-digits segment
-      const folder = withoutPrefix.replace(/-\d+$/, '').replace(/-/g, '_');
-      return fs.existsSync(path.join(groupsDir, folder));
-    });
+    const prefixes: string[] = [];
+    try {
+      for (const entry of fs.readdirSync(groupsDir)) {
+        if (fs.statSync(path.join(groupsDir, entry)).isDirectory()) {
+          prefixes.push(containerPrefix(entry));
+        }
+      }
+    } catch {
+      /* groups dir may not exist yet */
+    }
+
+    // A container belongs to this instance if its name starts with a known
+    // prefix followed by a dash and timestamp digits
+    const orphans = allContainers.filter((name) =>
+      prefixes.some(
+        (prefix) =>
+          name.startsWith(prefix + '-') &&
+          /^-\d+$/.test(name.slice(prefix.length)),
+      ),
+    );
 
     for (const name of orphans) {
       try {
