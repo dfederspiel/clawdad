@@ -24,6 +24,7 @@ groups/global/*
 
 # Temp files
 .tmp-*
+ecosystem.config.cjs
 
 # OS
 .DS_Store
