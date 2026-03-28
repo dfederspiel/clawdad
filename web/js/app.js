@@ -83,7 +83,7 @@ api.onSSE('typing', (data) => {
   typingGroups.value = { ...typingGroups.value, [data.jid]: data.isTyping };
 });
 
-api.onSSE('thread_created', (data) => {
+api.onSSE('thread_created', async (data) => {
   // A new thread was created by a trigger — add to threadMeta so UI shows immediately
   if (data.jid === selectedJid.value && data.thread_id) {
     threadMeta.value = {
@@ -97,6 +97,16 @@ api.onSSE('thread_created', (data) => {
         reply_count: 0,
       },
     };
+    // Reload messages from server so optimistic messages get proper IDs
+    // (thread indicators match by message ID)
+    const msgData = await api.getMessages(data.jid);
+    messages.value = msgData.messages.map((m) => ({
+      id: m.id,
+      role: m.is_bot_message || m.is_from_me ? 'assistant' : 'user',
+      content: m.content,
+      timestamp: m.timestamp,
+      senderName: m.sender_name,
+    }));
   }
 });
 
