@@ -1,8 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 
-import { OneCLI } from '@onecli-sh/sdk';
-
 import {
   ASSISTANT_NAME,
   DATA_DIR,
@@ -100,7 +98,12 @@ let broadcastThreadCreated:
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
-const onecli = new OneCLI({ url: ONECLI_URL });
+// OneCLI is optional — when not installed, agent ensure calls are silently skipped.
+const onecli = await import('@onecli-sh/sdk')
+  .then((m) => new m.OneCLI({ url: ONECLI_URL }))
+  .catch(() => ({
+    ensureAgent: async () => ({ created: false }),
+  }));
 
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
   if (group.isMain) return;

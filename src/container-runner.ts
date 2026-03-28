@@ -24,12 +24,16 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { readEnvFile } from './env.js';
 import { RegisteredGroup } from './types.js';
 
-const onecli = new OneCLI({ url: ONECLI_URL });
+// OneCLI is optional — when not installed, containers run without credential injection.
+const onecli = await import('@onecli-sh/sdk')
+  .then((m) => new m.OneCLI({ url: ONECLI_URL }))
+  .catch(() => ({
+    applyContainerConfig: async () => false,
+  }));
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
