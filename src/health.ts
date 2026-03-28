@@ -73,7 +73,26 @@ function checkOneCLI(): Promise<HealthStatus['onecli']> {
   });
 }
 
-function checkAnthropic(): HealthStatus['anthropic'] {
+function matchesAnthropicHost(
+  secrets: Array<{ hostPattern?: string }>,
+): boolean {
+  const envVars = readEnvFile(['ANTHROPIC_BASE_URL']);
+  const baseUrl = process.env.ANTHROPIC_BASE_URL || envVars.ANTHROPIC_BASE_URL;
+  const anthropicHost = baseUrl
+    ? new URL(baseUrl).hostname
+    : 'api.anthropic.com';
+  return (
+    Array.isArray(secrets) &&
+    secrets.some(
+      (s) =>
+        s.hostPattern &&
+        (s.hostPattern.includes('anthropic.com') ||
+          s.hostPattern.includes(anthropicHost)),
+    )
+  );
+}
+
+function checkAnthropicViaCli(): HealthStatus['anthropic'] | null {
   try {
     const output = execSync('onecli secrets list', {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -81,26 +100,44 @@ function checkAnthropic(): HealthStatus['anthropic'] {
       timeout: 5000,
     });
     const secrets = JSON.parse(output);
-    // Look for a secret with hostPattern matching anthropic.
-    // Read ANTHROPIC_BASE_URL from .env since launchd/systemd won't have it in process.env.
-    const envVars = readEnvFile(['ANTHROPIC_BASE_URL']);
-    const baseUrl =
-      process.env.ANTHROPIC_BASE_URL || envVars.ANTHROPIC_BASE_URL;
-    const anthropicHost = baseUrl
-      ? new URL(baseUrl).hostname
-      : 'api.anthropic.com';
-    const found =
-      Array.isArray(secrets) &&
-      secrets.some(
-        (s: { hostPattern?: string }) =>
-          s.hostPattern &&
-          (s.hostPattern.includes('anthropic.com') ||
-            s.hostPattern.includes(anthropicHost)),
-      );
-    return { status: found ? 'configured' : 'missing' };
+    return { status: matchesAnthropicHost(secrets) ? 'configured' : 'missing' };
   } catch {
-    return { status: 'missing' };
+    return null;
   }
+}
+
+function checkAnthropicViaApi(): Promise<HealthStatus['anthropic']> {
+  return new Promise((resolve) => {
+    const url = new URL('/api/secrets', ONECLI_URL);
+    const req = http.get(url, { timeout: 3000 }, (res) => {
+      let data = '';
+      res.on('data', (chunk: string) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        try {
+          const secrets = JSON.parse(data);
+          resolve({
+            status: matchesAnthropicHost(secrets) ? 'configured' : 'missing',
+          });
+        } catch {
+          resolve({ status: 'missing' });
+        }
+      });
+    });
+    req.on('error', () => resolve({ status: 'missing' }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ status: 'missing' });
+    });
+  });
+}
+
+async function checkAnthropic(): Promise<HealthStatus['anthropic']> {
+  // Try CLI first (fast, no network), fall back to OneCLI HTTP API
+  const cliResult = checkAnthropicViaCli();
+  if (cliResult) return cliResult;
+  return checkAnthropicViaApi();
 }
 
 function checkContainerImage(): HealthStatus['container_image'] {
@@ -120,11 +157,11 @@ function checkContainerImage(): HealthStatus['container_image'] {
 
 export async function getHealthStatus(): Promise<HealthStatus> {
   // Run checks concurrently where possible
-  const [docker, onecli] = await Promise.all([
+  const [docker, onecli, anthropic] = await Promise.all([
     Promise.resolve(checkDocker()),
     checkOneCLI(),
+    checkAnthropic(),
   ]);
-  const anthropic = checkAnthropic();
   const containerImage = checkContainerImage();
 
   const allGood =
