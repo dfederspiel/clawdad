@@ -141,7 +141,7 @@ function createSchema(database: Database.Database): void {
       `UPDATE chats SET channel = 'discord', is_group = 1 WHERE jid LIKE 'dc:%'`,
     );
     database.exec(
-      `UPDATE chats SET channel = 'telegram', is_group = 1 WHERE jid LIKE 'tg:%'`,
+      `UPDATE chats SET channel = 'telegram', is_group = 0 WHERE jid LIKE 'tg:%'`,
     );
   } catch {
     /* columns already exist */
@@ -163,6 +163,11 @@ export function initDatabase(): void {
 export function _initTestDatabase(): void {
   db = new Database(':memory:');
   createSchema(db);
+}
+
+/** @internal - for tests only. */
+export function _closeDatabase(): void {
+  db.close();
 }
 
 /**
@@ -368,6 +373,19 @@ export function getMessagesSince(
   return db
     .prepare(sql)
     .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
+}
+
+export function getLastBotMessageTimestamp(
+  chatJid: string,
+  botPrefix: string,
+): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT MAX(timestamp) as ts FROM messages
+       WHERE chat_jid = ? AND (is_bot_message = 1 OR content LIKE ?)`,
+    )
+    .get(chatJid, `${botPrefix}:%`) as { ts: string | null } | undefined;
+  return row?.ts ?? undefined;
 }
 
 export function createTask(
