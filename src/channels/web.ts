@@ -98,10 +98,17 @@ export class WebChannel implements Channel {
   /** Register a default web:general group as main if no web groups exist. */
   private ensureDefaultGroup(): void {
     const groups = this.opts.registeredGroups();
-    const hasWebGroup = Object.keys(groups).some((jid) =>
+    const existingJid = Object.keys(groups).find((jid) =>
       jid.startsWith('web:'),
     );
-    if (hasWebGroup) return;
+
+    // If a web group exists but lost isSystem (not persisted in DB), restore it
+    if (existingJid) {
+      if (!groups[existingJid].isSystem) {
+        groups[existingJid].isSystem = true;
+      }
+      return;
+    }
 
     const jid = 'web:general';
     const group: RegisteredGroup = {
