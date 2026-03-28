@@ -19,6 +19,12 @@ export interface ChannelOpts {
   ) => { agentJid: string; originJid: string } | undefined;
   /** Notify orchestrator of a thread reply so it enqueues the agent */
   onThreadReply?: (threadId: string, agentJid: string) => void;
+  /** Broadcast thread creation to connected clients */
+  onThreadCreated?: (
+    originJid: string,
+    threadId: string,
+    agentName: string,
+  ) => void;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

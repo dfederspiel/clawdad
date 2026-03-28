@@ -17,6 +17,7 @@ import {
 } from './config.js';
 import './channels/index.js';
 import {
+  ChannelOpts,
   getChannelFactory,
   getRegisteredChannelNames,
 } from './channels/registry.js';
@@ -90,6 +91,10 @@ const activeThreads = new Map<
   string,
   { agentJid: string; originJid: string }
 >();
+// Callback set by the web channel to broadcast thread creation events
+let broadcastThreadCreated:
+  | ((originJid: string, threadId: string, agentName: string) => void)
+  | null = null;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -284,12 +289,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     getOrRecoverCursor(chatJid),
     ASSISTANT_NAME,
     MAX_MESSAGES_PER_PROMPT,
+    false, // includeBotMessages
+    true, // excludeThreaded — thread replies are handled by the thread's agent
   );
 
   if (missedMessages.length === 0) return true;
 
-  // For non-main groups, check if trigger is required and present
-  if (!isMainGroup && group.requiresTrigger !== false) {
+  // Cross-chat triggers: route responses to the originating chat
+  const pendingOrigin = pendingOrigins[chatJid];
+  const isThreadReply = !!pendingOrigin?.threadId;
+
+  // For non-main groups, check if trigger is required and present.
+  // Skip this check for thread replies — the user is continuing a
+  // conversation with the triggered agent without re-triggering.
+  if (!isMainGroup && group.requiresTrigger !== false && !isThreadReply) {
     const triggerPattern = getTriggerPattern(group.trigger);
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
@@ -299,9 +312,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     );
     if (!hasTrigger) return true;
   }
-
-  // Cross-chat triggers: route responses to the originating chat
-  const pendingOrigin = pendingOrigins[chatJid];
   const originJid = pendingOrigin?.originJid;
   const threadId = pendingOrigin?.threadId;
 
@@ -700,6 +710,8 @@ async function startMessageLoop(): Promise<void> {
               threadId: triggerThreadId,
             };
             queue.enqueueMessageCheck(agentJid);
+            // Broadcast to connected web clients so the thread UI appears immediately
+            broadcastThreadCreated?.(chatJid, triggerThreadId, agent.name);
             logger.info(
               { trigger: agent.trigger, agentJid, originJid: chatJid },
               'Cross-chat trigger detected',
@@ -828,7 +840,7 @@ async function main(): Promise<void> {
   }
 
   // Channel callbacks (shared by all channels)
-  const channelOpts = {
+  const channelOpts: ChannelOpts = {
     onRegisterGroup: (jid: string, group: RegisteredGroup) => {
       registerGroup(jid, group);
     },
@@ -900,6 +912,11 @@ async function main(): Promise<void> {
     }
     channels.push(channel);
     await channel.connect();
+  }
+
+  // Wire up thread creation broadcast (set by web channel constructor)
+  if (channelOpts.onThreadCreated) {
+    broadcastThreadCreated = channelOpts.onThreadCreated;
   }
   if (channels.length === 0) {
     logger.fatal('No channels connected');
