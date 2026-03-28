@@ -485,6 +485,22 @@ export function getThreadsForChat(chatJid: string): ThreadInfo[] {
     .all(chatJid, chatJid) as ThreadInfo[];
 }
 
+/**
+ * Clear all messages (and associated threads) for a chat JID.
+ * Preserves group registration, sessions, and tasks.
+ */
+export function clearMessages(chatJid: string): void {
+  const txn = db.transaction(() => {
+    db.prepare('DELETE FROM messages WHERE chat_jid = ?').run(chatJid);
+    // Also clear messages copied to triggered agent JIDs from this chat
+    db.prepare(
+      `DELETE FROM messages WHERE chat_jid IN (SELECT agent_jid FROM threads WHERE origin_jid = ?)`,
+    ).run(chatJid);
+    db.prepare('DELETE FROM threads WHERE origin_jid = ?').run(chatJid);
+  });
+  txn();
+}
+
 export function deleteThreadsForGroup(jid: string): void {
   db.prepare('DELETE FROM threads WHERE origin_jid = ? OR agent_jid = ?').run(
     jid,
