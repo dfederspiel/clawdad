@@ -386,7 +386,6 @@ async function buildContainerArgs(
     'LAUNCHDARKLY_',
     'FIGMA_',
     'ATLASSIAN_',
-    'BRAVE_',
   ];
   const envVars = readEnvFile(
     PASSTHROUGH_ENV_PREFIXES.flatMap((prefix) => {
