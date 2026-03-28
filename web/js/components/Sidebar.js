@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
-import { groups, selectedJid, selectGroup, deleteGroup } from '../app.js';
+import { groups, selectedJid, selectGroup, deleteGroup, messages } from '../app.js';
 import { GroupItem } from './GroupItem.js';
 import { NewGroupDialog } from './NewGroupDialog.js';
 import { StatusPanel } from './StatusPanel.js';
@@ -18,7 +18,13 @@ export function Sidebar({ open, onClose }) {
   const selected = selectedJid.value;
 
   function onGroupSelect(jid) {
-    selectGroup(jid);
+    // Toggle: clicking the active group deselects it, showing the template picker
+    if (jid === selected) {
+      selectedJid.value = null;
+      messages.value = [];
+    } else {
+      selectGroup(jid);
+    }
     onClose();
   }
 
