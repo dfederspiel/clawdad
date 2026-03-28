@@ -1,0 +1,9 @@
+{
+  "_comment": "Specialist Agent configuration. The agent guides you through choosing a specialty.",
+
+  "specialty": "",
+  "trigger_name": "",
+  "personality": "",
+  "knowledge_sources": [],
+  "response_style": "concise"
+}

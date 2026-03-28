@@ -88,3 +88,4 @@ export const resumeTask = (taskId) =>
 export const cancelTask = (taskId) =>
   fetchJson(`/api/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
 export const getTelemetry = () => fetchJson('/api/telemetry');
+export const getAchievements = () => fetchJson('/api/achievements');

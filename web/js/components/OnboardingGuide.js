@@ -5,12 +5,37 @@ import * as api from '../api.js';
 import { PrerequisiteCheck } from './PrerequisiteCheck.js';
 import { SetupWizard } from './SetupWizard.js';
 
+const TIER_META = {
+  beginner: { label: 'Getting Started', desc: 'Learn the basics — each template guides you step by step' },
+  advanced: { label: 'Advanced', desc: 'Power features — triggers, monitoring, and orchestration' },
+  recipe: { label: 'Recipes', desc: 'Pre-built workflows for specific use cases' },
+};
+
+const TIER_ORDER = ['beginner', 'advanced', 'recipe'];
+
 function TemplateCard({ template, onSelect, creating }) {
+  const tierColors = {
+    beginner: 'border-green-500/30 hover:border-green-500/60',
+    advanced: 'border-purple-500/30 hover:border-purple-500/60',
+    recipe: 'border-border hover:border-accent/50',
+  };
+  const tierBadge = {
+    beginner: 'bg-green-500/10 text-green-400',
+    advanced: 'bg-purple-500/10 text-purple-400',
+    recipe: 'bg-bg-3 text-txt-muted',
+  };
+  const tier = template.tier || 'recipe';
+
   return html`
     <div
-      class="bg-bg-2 border border-border rounded-xl p-5 flex flex-col gap-3 hover:border-accent/50 transition-colors"
+      class="bg-bg-2 border rounded-xl p-5 flex flex-col gap-3 transition-colors ${tierColors[tier] || tierColors.recipe}"
     >
-      <h3 class="text-sm font-semibold text-txt">${template.name}</h3>
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-txt">${template.name}</h3>
+        <span class="text-[10px] px-1.5 py-0.5 rounded ${tierBadge[tier] || tierBadge.recipe}">
+          ${tier === 'beginner' ? 'Beginner' : tier === 'advanced' ? 'Advanced' : 'Recipe'}
+        </span>
+      </div>
       <p class="text-xs text-txt-2 flex-1">${template.description}</p>
       <button
         class="self-start px-3 py-1.5 bg-accent text-bg text-xs font-semibold rounded-lg hover:brightness-110 disabled:opacity-40 transition-all"
@@ -114,17 +139,29 @@ export function OnboardingGuide({ onCustom }) {
 
         ${templates.length > 0
           ? html`
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-                ${templates.map(
-                  (t) =>
-                    html`<${TemplateCard}
-                      key=${t.id}
-                      template=${t}
-                      onSelect=${handleSelect}
-                      creating=${creating}
-                    />`,
-                )}
-              </div>
+              ${TIER_ORDER.filter((tier) => templates.some((t) => (t.tier || 'recipe') === tier)).map((tier) => {
+                const tierTemplates = templates.filter((t) => (t.tier || 'recipe') === tier);
+                const meta = TIER_META[tier] || TIER_META.recipe;
+                return html`
+                  <div class="mb-6" key=${tier}>
+                    <div class="mb-3">
+                      <h3 class="text-sm font-semibold text-txt">${meta.label}</h3>
+                      <p class="text-xs text-txt-muted">${meta.desc}</p>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      ${tierTemplates.map(
+                        (t) =>
+                          html`<${TemplateCard}
+                            key=${t.id}
+                            template=${t}
+                            onSelect=${handleSelect}
+                            creating=${creating}
+                          />`,
+                      )}
+                    </div>
+                  </div>
+                `;
+              })}
             `
           : html`
               <div class="text-center text-txt-muted text-sm py-8">

@@ -1,0 +1,11 @@
+{
+  "_comment": "Daily Briefing agent configuration. The agent walks you through filling this in on first message.",
+
+  "briefing_time": "09:00",
+  "timezone": "America/New_York",
+  "topics": [],
+  "websites": [],
+  "include_weather": false,
+  "weather_location": "",
+  "briefing_style": "concise"
+}

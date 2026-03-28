@@ -1,4 +1,5 @@
 {
   "name": "Updates Agent",
-  "description": "Daily check-ins, weekly status reports, Jira activity tracking, and Confluence integration."
+  "description": "Daily check-ins, weekly status reports, Jira activity tracking, and Confluence integration.",
+  "tier": "recipe"
 }

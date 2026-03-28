@@ -3,7 +3,8 @@ import { signal, computed } from 'preact/signals';
 import { html } from 'htm/preact';
 import * as api from './api.js';
 import { App } from './components/App.js';
-import { checkAchievements } from './components/blocks/AchievementToast.js';
+import { showAchievementToast } from './components/blocks/AchievementToast.js';
+import { loadAchievements, handleAchievementSSE } from './achievements.js';
 import {
   THEMES, applyTheme, getThemeByName, validateThemeJson,
   buildExportJson, getCurrentColors,
@@ -120,6 +121,11 @@ api.onSSE('user_message', (data) => {
   // Ignore echo for normal messages — optimistic update already shows them
 });
 
+api.onSSE('achievement', (data) => {
+  const enriched = handleAchievementSSE(data);
+  showAchievementToast(enriched);
+});
+
 api.onSSE('messages_cleared', (data) => {
   if (data.jid === selectedJid.value) {
     messages.value = [];
@@ -153,17 +159,27 @@ export async function selectGroup(jid) {
   delete cur[jid];
   unread.value = cur;
 
+  // Clear messages before fetch so SSE messages arriving during the fetch
+  // are appended to a clean slate (selectedJid is already set above).
+  messages.value = [];
+
   const [msgData, threadData] = await Promise.all([
     api.getMessages(jid),
     api.getThreads(jid),
   ]);
-  messages.value = msgData.messages.map((m) => ({
+
+  // Build the DB message list, then merge any SSE messages that arrived
+  // during the fetch (they're already in messages.value via the SSE handler).
+  const dbMessages = msgData.messages.map((m) => ({
     id: m.id,
     role: m.is_bot_message || m.is_from_me ? 'assistant' : 'user',
     content: m.content,
     timestamp: m.timestamp,
     senderName: m.sender_name,
   }));
+  const dbIds = new Set(dbMessages.map((m) => m.id));
+  const sseDuring = messages.value.filter((m) => !m.id || !dbIds.has(m.id));
+  messages.value = [...dbMessages, ...sseDuring];
 
   // Index threads by their thread_id (= triggering message id)
   const meta = {};
@@ -324,7 +340,8 @@ async function pollTasks() {
 async function pollTelemetry() {
   try {
     telemetry.value = await api.getTelemetry();
-    checkAchievements(telemetry.value);
+    // Telemetry-based achievements (centurion, streaks) are checked server-side
+    // in the /api/telemetry handler and broadcast via SSE
   } catch { /* ignore */ }
 }
 
@@ -351,6 +368,7 @@ export async function getTaskLogs(taskId) {
 pollStatus();
 pollTasks();
 pollTelemetry();
+loadAchievements();
 setInterval(pollStatus, 5000);
 setInterval(pollTasks, 10000);
 setInterval(pollTelemetry, 30000);

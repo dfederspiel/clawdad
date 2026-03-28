@@ -1,0 +1,15 @@
+{
+  "_comment": "Project Tracker agent configuration. The agent walks you through filling this in on first message.",
+
+  "atlassian_instance": "https://your-team.atlassian.net",
+  "atlassian_email": "",
+  "jira_project_key": "PROJ",
+  "jira_user_id": "",
+
+  "github_org": "",
+  "github_repo": "",
+
+  "poll_interval_minutes": 30,
+  "track_statuses": ["In Progress", "Code Review", "Done"],
+  "notify_on": ["new_tickets", "status_changes", "pr_merged"]
+}
