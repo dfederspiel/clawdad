@@ -14,6 +14,7 @@ import { getHealthStatus } from '../health.js';
 import {
   getMessagesSince,
   storeMessageDirect,
+  clearMessages,
   getAllTasks,
   getTaskById,
   getTaskRunLogs,
@@ -464,6 +465,18 @@ export class WebChannel implements Channel {
         true, // excludeThreaded — hide thread replies from main timeline
       );
       return this.json(res, 200, { messages });
+    }
+
+    // DELETE /api/messages/:jid — clear all messages (and threads) for a group
+    if (method === 'DELETE' && messagesMatch) {
+      const jid = decodeURIComponent(messagesMatch[1]);
+      if (!jid.startsWith('web:')) {
+        return this.json(res, 400, { error: 'jid must start with web:' });
+      }
+      clearMessages(jid);
+      this.broadcast('messages_cleared', { jid });
+      logger.info({ jid }, 'Messages cleared');
+      return this.json(res, 200, { ok: true });
     }
 
     // POST /api/send — send a message to a web group (or thread reply)

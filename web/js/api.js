@@ -65,6 +65,9 @@ export const getThreads = (jid) =>
 export const getThreadMessages = (threadId) =>
   fetchJson(`/api/thread-messages/${encodeURIComponent(threadId)}`);
 
+export const clearMessages = (jid) =>
+  fetchJson(`/api/messages/${encodeURIComponent(jid)}`, { method: 'DELETE' });
+
 // Health & onboarding
 export const getHealth = () => fetchJson('/api/health');
 export const registerAnthropic = (key, customEndpoint) =>
