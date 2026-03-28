@@ -153,17 +153,27 @@ export async function selectGroup(jid) {
   delete cur[jid];
   unread.value = cur;
 
+  // Clear messages before fetch so SSE messages arriving during the fetch
+  // are appended to a clean slate (selectedJid is already set above).
+  messages.value = [];
+
   const [msgData, threadData] = await Promise.all([
     api.getMessages(jid),
     api.getThreads(jid),
   ]);
-  messages.value = msgData.messages.map((m) => ({
+
+  // Build the DB message list, then merge any SSE messages that arrived
+  // during the fetch (they're already in messages.value via the SSE handler).
+  const dbMessages = msgData.messages.map((m) => ({
     id: m.id,
     role: m.is_bot_message || m.is_from_me ? 'assistant' : 'user',
     content: m.content,
     timestamp: m.timestamp,
     senderName: m.sender_name,
   }));
+  const dbIds = new Set(dbMessages.map((m) => m.id));
+  const sseDuring = messages.value.filter((m) => !m.id || !dbIds.has(m.id));
+  messages.value = [...dbMessages, ...sseDuring];
 
   // Index threads by their thread_id (= triggering message id)
   const meta = {};
