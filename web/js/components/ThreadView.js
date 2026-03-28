@@ -38,13 +38,23 @@ export function ThreadView({ threadId, agentName, messages, replyCount: metaRepl
 
   // Collapsed indicator
   if (!isExpanded) {
+    // Show status: typing → "thinking...", 0 replies → "initializing...", else reply count
+    let statusText;
+    if (isTyping) {
+      statusText = html`<span class="animate-pulse">thinking\u2026</span>`;
+    } else if (replyCount === 0) {
+      statusText = html`<span class="animate-pulse text-txt-muted">initializing agent\u2026</span>`;
+    } else {
+      statusText = html`<span>${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}</span>`;
+    }
+
     return html`
       <button
         class="ml-6 mt-1 flex items-center gap-2 text-xs text-accent hover:text-accent/80 transition-colors cursor-pointer"
         onClick=${() => onToggle(threadId)}
       >
         <span class="opacity-60">|</span>
-        <span>${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}</span>
+        ${statusText}
         ${agentName && html`<span class="text-txt-muted">\u00B7 ${agentName}</span>`}
         <span class="text-txt-muted">\u25BC</span>
       </button>
