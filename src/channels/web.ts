@@ -62,6 +62,15 @@ export class WebChannel implements Channel {
     this.opts = opts;
     // web/ directory is at project root
     this.webRoot = path.resolve(process.cwd(), 'web');
+
+    // Wire up thread creation broadcast
+    opts.onThreadCreated = (originJid, threadId, agentName) => {
+      this.broadcast('thread_created', {
+        jid: originJid,
+        thread_id: threadId,
+        agent_name: agentName,
+      });
+    };
   }
 
   async connect(): Promise<void> {
