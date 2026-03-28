@@ -56,6 +56,11 @@ Point CLI at local instance:
 onecli config set api-host http://127.0.0.1:10254
 ```
 
+Install the Node.js SDK so the runtime can talk to the gateway:
+```bash
+npm ls @onecli-sh/sdk 2>/dev/null || npm install @onecli-sh/sdk
+```
+
 Ensure `.env` has OneCLI URL:
 ```bash
 grep -q 'ONECLI_URL' .env 2>/dev/null || echo 'ONECLI_URL=http://127.0.0.1:10254' >> .env

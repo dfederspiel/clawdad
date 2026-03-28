@@ -56,7 +56,12 @@ If they cancel, stop.
 grep "@onecli-sh/sdk" package.json
 ```
 
-If `@onecli-sh/sdk` is NOT in package.json, the codebase hasn't been updated to use OneCLI yet. Tell the user to run `/update-nanoclaw` first to get the OneCLI integration, then retry `/init-onecli`. Stop here.
+If `@onecli-sh/sdk` is NOT in package.json (check both `dependencies` and `optionalDependencies`), the codebase hasn't been updated to use OneCLI yet. Tell the user to run `/update-nanoclaw` first to get the OneCLI integration, then retry `/init-onecli`. Stop here.
+
+If it is listed but not installed, install it:
+```bash
+npm ls @onecli-sh/sdk 2>/dev/null || npm install @onecli-sh/sdk
+```
 
 ## Phase 2: Install OneCLI
 
