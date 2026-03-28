@@ -1,13 +1,17 @@
 import { html } from 'htm/preact';
 import { useRef, useEffect } from 'preact/hooks';
-import { messages, typing } from '../app.js';
+import { messages, typing, threadMeta, openThreads, threadTyping, toggleThread, handleThreadReply } from '../app.js';
 import { Message } from './Message.js';
+import { ThreadView } from './ThreadView.js';
 import { TypingIndicator } from './TypingIndicator.js';
 
 export function MessageList() {
   const containerRef = useRef(null);
   const msgs = messages.value;
   const isTyping = typing.value;
+  const threads = threadMeta.value;
+  const expanded = openThreads.value;
+  const tTyping = threadTyping.value;
 
   useEffect(() => {
     if (containerRef.current) {
@@ -24,16 +28,31 @@ export function MessageList() {
             </div>
           `
         : msgs.map(
-            (m, i) => html`
-              <${Message}
-                key=${i}
-                role=${m.role}
-                content=${m.content}
-                timestamp=${m.timestamp}
-                senderName=${m.senderName}
-                isError=${m.isError}
-              />
-            `,
+            (m, i) => {
+              const thread = m.id ? threads[m.id] : null;
+              return html`
+                <div key=${i}>
+                  <${Message}
+                    role=${m.role}
+                    content=${m.content}
+                    timestamp=${m.timestamp}
+                    senderName=${m.senderName}
+                    isError=${m.isError}
+                  />
+                  ${thread && html`
+                    <${ThreadView}
+                      threadId=${m.id}
+                      agentName=${thread.agent_name}
+                      messages=${expanded[m.id] || []}
+                      isExpanded=${!!expanded[m.id]}
+                      isTyping=${!!tTyping[m.id]}
+                      onToggle=${toggleThread}
+                      onReply=${handleThreadReply}
+                    />
+                  `}
+                </div>
+              `;
+            },
           )}
       ${isTyping && html`<${TypingIndicator} />`}
     </div>

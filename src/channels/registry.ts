@@ -13,6 +13,12 @@ export interface ChannelOpts {
   onDeleteGroup?: (jid: string, group: RegisteredGroup) => void;
   /** Optional status provider for web UI telemetry/task management */
   getStatus?: () => unknown;
+  /** Look up thread→agent mapping */
+  getThreadInfo?: (
+    threadId: string,
+  ) => { agentJid: string; originJid: string } | undefined;
+  /** Notify orchestrator of a thread reply so it enqueues the agent */
+  onThreadReply?: (threadId: string, agentJid: string) => void;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

@@ -56,8 +56,14 @@ export const deleteGroup = (folder) =>
 export const getMessages = (jid, since) =>
   fetchJson(`/api/messages/${encodeURIComponent(jid)}${since ? `?since=${since}` : ''}`);
 
-export const sendMessage = (jid, content, sender) =>
-  fetchJson('/api/send', { method: 'POST', body: { jid, content, sender } });
+export const sendMessage = (jid, content, sender, threadId) =>
+  fetchJson('/api/send', { method: 'POST', body: { jid, content, sender, thread_id: threadId } });
+
+export const getThreads = (jid) =>
+  fetchJson(`/api/threads/${encodeURIComponent(jid)}`);
+
+export const getThreadMessages = (threadId) =>
+  fetchJson(`/api/thread-messages/${encodeURIComponent(threadId)}`);
 
 // Health & onboarding
 export const getHealth = () => fetchJson('/api/health');

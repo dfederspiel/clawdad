@@ -54,6 +54,16 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  thread_id?: string;
+}
+
+export interface ThreadInfo {
+  thread_id: string;
+  agent_jid: string;
+  origin_jid: string;
+  agent_name?: string;
+  created_at: string;
+  reply_count?: number;
 }
 
 export interface ScheduledTask {
@@ -86,12 +96,12 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
+  sendMessage(jid: string, text: string, threadId?: string): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
-  setTyping?(jid: string, isTyping: boolean): Promise<void>;
+  setTyping?(jid: string, isTyping: boolean, threadId?: string): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
 }

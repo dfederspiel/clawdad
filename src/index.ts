@@ -32,15 +32,19 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import {
+  createThread,
   deleteGroupData,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
+  getAllThreads,
   getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
   getRouterState,
+  getThread,
+  getThreadMessages,
   initDatabase,
   setRegisteredGroup,
   setRouterState,
@@ -77,8 +81,15 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
-// Maps triggered agent JID → origin chat JID for cross-chat response routing
-const pendingOrigins: Record<string, string> = {};
+// Maps triggered agent JID → origin info for cross-chat response routing
+const pendingOrigins: Record<string, { originJid: string; threadId?: string }> =
+  {};
+
+// Maps thread_id → agent JID for thread reply routing (rebuilt from DB on startup)
+const activeThreads = new Map<
+  string,
+  { agentJid: string; originJid: string }
+>();
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -289,7 +300,48 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  // Cross-chat triggers: route responses to the originating chat
+  const pendingOrigin = pendingOrigins[chatJid];
+  const originJid = pendingOrigin?.originJid;
+  const threadId = pendingOrigin?.threadId;
+
+  // For triggered agents, prepend conversation context from the origin chat
+  // so the agent understands what's being discussed.
+  let prompt: string;
+  if (originJid && group.triggerScope === 'web-all') {
+    const originContext = getMessagesSince(
+      originJid,
+      '',
+      ASSISTANT_NAME,
+      MAX_MESSAGES_PER_PROMPT,
+      true, // include bot messages for full context
+    );
+    // Remove the last few messages that are duplicated as trigger copies
+    const triggerIds = new Set(
+      missedMessages.map((m) => m.id.replace(/_trigger_.*$/, '')),
+    );
+    const contextOnly = originContext.filter((m) => !triggerIds.has(m.id));
+    if (contextOnly.length > 0) {
+      prompt =
+        '--- Conversation context from the chat where you were triggered ---\n' +
+        formatMessages(contextOnly, TIMEZONE) +
+        '\n--- Your trigger message ---\n' +
+        formatMessages(missedMessages, TIMEZONE);
+    } else {
+      prompt = formatMessages(missedMessages, TIMEZONE);
+    }
+    logger.info(
+      {
+        group: group.name,
+        originJid,
+        contextMessages: contextOnly.length,
+        triggerMessages: missedMessages.length,
+      },
+      'Triggered agent with origin context',
+    );
+  } else {
+    prompt = formatMessages(missedMessages, TIMEZONE);
+  }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -316,15 +368,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       queue.closeStdin(chatJid);
     }, IDLE_TIMEOUT);
   };
-
-  // Cross-chat triggers: route responses to the originating chat
-  const originJid = pendingOrigins[chatJid];
   const responseJid = originJid || chatJid;
   const responseChannel = originJid
     ? findChannel(channels, originJid) || channel
     : channel;
 
-  await responseChannel.setTyping?.(responseJid, true);
+  await responseChannel.setTyping?.(responseJid, true, threadId);
   let hadError = false;
   let outputSentToUser = false;
 
@@ -339,7 +388,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
-        await responseChannel.sendMessage(responseJid, text);
+        await responseChannel.sendMessage(responseJid, text, threadId);
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -355,7 +404,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   });
 
-  await responseChannel.setTyping?.(responseJid, false);
+  await responseChannel.setTyping?.(responseJid, false, threadId);
   // Clean up origin tracking after processing
   if (originJid) delete pendingOrigins[chatJid];
   if (idleTimer) clearTimeout(idleTimer);
@@ -511,6 +560,22 @@ async function startMessageLoop(): Promise<void> {
           }
         }
 
+        // Build a set of web-all trigger patterns so origin chats can skip
+        // messages that will be handled by a triggered agent instead.
+        const webAllTriggers: { pattern: RegExp; agentJid: string }[] = [];
+        for (const [agentJid, agent] of Object.entries(registeredGroups)) {
+          if (
+            agent.triggerScope === 'web-all' &&
+            agent.requiresTrigger &&
+            agentJid.startsWith('web:')
+          ) {
+            webAllTriggers.push({
+              pattern: getTriggerPattern(agent.trigger),
+              agentJid,
+            });
+          }
+        }
+
         for (const [chatJid, groupMessages] of messagesByGroup) {
           const group = registeredGroups[chatJid];
           if (!group) continue;
@@ -519,6 +584,30 @@ async function startMessageLoop(): Promise<void> {
           if (!channel) {
             logger.warn({ chatJid }, 'No channel owns JID, skipping messages');
             continue;
+          }
+
+          // If every user message in this chat matches a web-all trigger,
+          // skip processing — the triggered agent will handle it.
+          if (
+            chatJid.startsWith('web:') &&
+            group.triggerScope !== 'web-all' &&
+            webAllTriggers.length > 0
+          ) {
+            const userMsgs = groupMessages.filter(
+              (m) => !m.is_bot_message && !m.is_from_me,
+            );
+            const allHandledByTrigger =
+              userMsgs.length > 0 &&
+              userMsgs.every((m) =>
+                webAllTriggers.some((t) => t.pattern.test(m.content.trim())),
+              );
+            if (allHandledByTrigger) {
+              logger.debug(
+                { chatJid },
+                'Skipping — all messages handled by cross-chat trigger',
+              );
+              continue;
+            }
           }
 
           const isMainGroup = group.isMain === true;
@@ -599,7 +688,17 @@ async function startMessageLoop(): Promise<void> {
                 chat_jid: agentJid,
               });
             }
-            pendingOrigins[agentJid] = chatJid;
+            // Create a thread anchored to the first triggering message
+            const triggerThreadId = userMessages[0].id;
+            createThread(triggerThreadId, agentJid, chatJid, agent.name);
+            activeThreads.set(triggerThreadId, {
+              agentJid,
+              originJid: chatJid,
+            });
+            pendingOrigins[agentJid] = {
+              originJid: chatJid,
+              threadId: triggerThreadId,
+            };
             queue.enqueueMessageCheck(agentJid);
             logger.info(
               { trigger: agent.trigger, agentJid, originJid: chatJid },
@@ -653,6 +752,20 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
+
+  // Rebuild active threads map from DB
+  for (const t of getAllThreads()) {
+    activeThreads.set(t.thread_id, {
+      agentJid: t.agent_jid,
+      originJid: t.origin_jid,
+    });
+  }
+  if (activeThreads.size > 0) {
+    logger.info(
+      { count: activeThreads.size },
+      'Restored active threads from DB',
+    );
+  }
 
   // Ensure OneCLI agents exist for all registered groups.
   // Recovers from missed creates (e.g. OneCLI was down at registration time).
@@ -762,6 +875,14 @@ async function main(): Promise<void> {
       containers: queue.getSnapshot(),
       uptime: process.uptime(),
     }),
+    getThreadInfo: (threadId: string) => activeThreads.get(threadId),
+    onThreadReply: (threadId: string, agentJid: string) => {
+      pendingOrigins[agentJid] = {
+        originJid: activeThreads.get(threadId)!.originJid,
+        threadId,
+      };
+      queue.enqueueMessageCheck(agentJid);
+    },
   };
 
   // Create and connect all registered channels.
