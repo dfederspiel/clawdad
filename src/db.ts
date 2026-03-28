@@ -137,6 +137,15 @@ function createSchema(database: Database.Database): void {
     /* columns already exist */
   }
 
+  // Add is_system column to registered_groups (migration for system group flag)
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN is_system INTEGER DEFAULT 0`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add thread_id column to messages and threads table (migration for threaded conversations)
   try {
     database.exec(`ALTER TABLE messages ADD COLUMN thread_id TEXT`);
@@ -909,8 +918,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, description, trigger_scope)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, description, trigger_scope, is_system)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -922,6 +931,7 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.isMain ? 1 : 0,
     group.description || null,
     group.triggerScope || null,
+    group.isSystem ? 1 : 0,
   );
 }
 
@@ -955,6 +965,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     is_main: number | null;
     description: string | null;
     trigger_scope: string | null;
+    is_system: number | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -976,6 +987,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       requiresTrigger:
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
+      isSystem: row.is_system === 1 ? true : undefined,
       description: row.description || undefined,
       triggerScope:
         (row.trigger_scope as RegisteredGroup['triggerScope']) || undefined,
