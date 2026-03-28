@@ -465,9 +465,11 @@ export function getThreadMessages(
 ): NewMessage[] {
   return db
     .prepare(
-      `SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id
-       FROM messages WHERE thread_id = ?
-       ORDER BY timestamp
+      `SELECT m.id, m.chat_jid, m.sender, m.sender_name, m.content, m.timestamp, m.is_from_me, m.is_bot_message, m.thread_id
+       FROM messages m
+       JOIN threads t ON m.thread_id = t.thread_id
+       WHERE m.thread_id = ? AND m.chat_jid = t.origin_jid
+       ORDER BY m.timestamp
        LIMIT ?`,
     )
     .all(threadId, limit) as NewMessage[];
