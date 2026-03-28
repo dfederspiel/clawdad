@@ -621,64 +621,6 @@ async function processCredentialIpc(
     return;
   }
 
-  // Env-based credentials — stored in .env and passed as env vars to containers
-  const ENV_CREDENTIALS: Record<string, string> = {
-    brave: 'BRAVE_SEARCH_API_KEY',
-  };
-
-  if (ENV_CREDENTIALS[service]) {
-    const envKey = ENV_CREDENTIALS[service];
-    try {
-      const envPath = path.join(process.cwd(), '.env');
-      let envContent = '';
-      try {
-        envContent = fs.readFileSync(envPath, 'utf-8');
-      } catch {
-        /* new file */
-      }
-
-      // Update or append the env var
-      const lines = envContent.split('\n');
-      const idx = lines.findIndex((l) => l.startsWith(`${envKey}=`));
-      if (idx >= 0) {
-        lines[idx] = `${envKey}=${value}`;
-      } else {
-        // Add with a comment
-        if (envContent.length > 0 && !envContent.endsWith('\n')) lines.push('');
-        lines.push(`# ${service} API key (registered via agent)`);
-        lines.push(`${envKey}=${value}`);
-      }
-      fs.writeFileSync(envPath, lines.join('\n'));
-
-      // Also set in current process env so new containers pick it up immediately
-      process.env[envKey] = value;
-
-      logger.info(
-        { service, sourceGroup, envKey },
-        'Env credential saved to .env',
-      );
-      writeCredentialResult(
-        credentialsDir,
-        service,
-        true,
-        `${envKey} saved to .env — available on next container start`,
-      );
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error(
-        { service, sourceGroup, err: message },
-        'Failed to save env credential',
-      );
-      writeCredentialResult(
-        credentialsDir,
-        service,
-        false,
-        `Failed to save: ${message}`,
-      );
-    }
-    return;
-  }
-
   const serviceConfig = CREDENTIAL_SERVICES[service];
   if (!serviceConfig) {
     logger.warn({ service, sourceGroup }, 'Unknown credential service');
