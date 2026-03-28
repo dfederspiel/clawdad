@@ -5,6 +5,8 @@ import { promisify } from 'util';
 
 import { CronExpressionParser } from 'cron-parser';
 
+import type { AchievementDef } from './achievements.js';
+import { unlockAchievement } from './achievements.js';
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
@@ -27,6 +29,7 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+  onAchievement?: (achievement: AchievementDef, group: string) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -148,6 +151,48 @@ export function startIpcWatcher(deps: IpcDeps): void {
         }
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
+      }
+
+      // Process achievement unlocks from this group's IPC directory
+      const achievementsDir = path.join(
+        ipcBaseDir,
+        sourceGroup,
+        'achievements',
+      );
+      try {
+        if (fs.existsSync(achievementsDir)) {
+          const achFiles = fs
+            .readdirSync(achievementsDir)
+            .filter((f) => f.endsWith('.json'));
+          for (const file of achFiles) {
+            const filePath = path.join(achievementsDir, file);
+            try {
+              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              fs.unlinkSync(filePath);
+              if (data.type === 'achievement' && data.achievementId) {
+                const def = unlockAchievement(data.achievementId, sourceGroup);
+                if (def) {
+                  deps.onAchievement?.(def, sourceGroup);
+                }
+              }
+            } catch (err) {
+              logger.error(
+                { file, sourceGroup, err },
+                'Error processing IPC achievement',
+              );
+              try {
+                fs.unlinkSync(filePath);
+              } catch {
+                /* already gone */
+              }
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(
+          { err, sourceGroup },
+          'Error reading IPC achievements directory',
+        );
       }
 
       // Process credential registrations from this group's IPC directory

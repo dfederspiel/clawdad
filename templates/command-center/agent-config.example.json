@@ -1,0 +1,7 @@
+{
+  "_comment": "Command Center configuration. This agent manages other agents.",
+
+  "managed_groups": [],
+  "auto_health_check": true,
+  "health_check_interval_minutes": 60
+}

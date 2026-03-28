@@ -5,6 +5,11 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 import {
+  getAchievementResponse,
+  checkTelemetryAchievements,
+  AchievementDef,
+} from '../achievements.js';
+import {
   GROUPS_DIR,
   WEB_UI_PORT,
   WEB_UI_ENABLED,
@@ -172,6 +177,18 @@ export class WebChannel implements Channel {
     this.broadcast('typing', { jid, isTyping, thread_id: threadId });
   }
 
+  /** Broadcast an achievement unlock to all connected clients. */
+  broadcastAchievement(achievement: AchievementDef, group: string): void {
+    this.broadcast('achievement', {
+      id: achievement.id,
+      name: achievement.name,
+      description: achievement.description,
+      tier: achievement.tier,
+      xp: achievement.xp,
+      group,
+    });
+  }
+
   // --- HTTP Request Handler ---
 
   private async handleRequest(
@@ -241,7 +258,12 @@ export class WebChannel implements Channel {
     // GET /api/templates — list available group templates
     if (method === 'GET' && url.pathname === '/api/templates') {
       const templatesDir = path.resolve(process.cwd(), 'templates');
-      const templates: { id: string; name: string; description: string }[] = [];
+      const templates: {
+        id: string;
+        name: string;
+        description: string;
+        tier: string;
+      }[] = [];
       if (fs.existsSync(templatesDir)) {
         for (const entry of fs.readdirSync(templatesDir, {
           withFileTypes: true,
@@ -250,16 +272,18 @@ export class WebChannel implements Channel {
           const metaPath = path.join(templatesDir, entry.name, 'meta.json');
           let name = entry.name;
           let description = '';
+          let tier = 'recipe';
           if (fs.existsSync(metaPath)) {
             try {
               const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
               name = meta.name || name;
               description = meta.description || '';
+              tier = meta.tier || 'recipe';
             } catch {
               /* use defaults */
             }
           }
-          templates.push({ id: entry.name, name, description });
+          templates.push({ id: entry.name, name, description, tier });
         }
       }
       return this.json(res, 200, { templates });
@@ -647,7 +671,26 @@ export class WebChannel implements Channel {
 
     // GET /api/telemetry — aggregated metrics
     if (method === 'GET' && url.pathname === '/api/telemetry') {
-      return this.json(res, 200, getTelemetryStats());
+      const stats = getTelemetryStats();
+
+      // Check telemetry-based achievements (centurion, streaks)
+      const newAchievements = checkTelemetryAchievements(stats);
+      for (const ach of newAchievements) {
+        this.broadcast('achievement', {
+          id: ach.id,
+          name: ach.name,
+          description: ach.description,
+          tier: ach.tier,
+          xp: ach.xp,
+        });
+      }
+
+      return this.json(res, 200, stats);
+    }
+
+    // GET /api/achievements — achievement definitions + unlock state
+    if (method === 'GET' && url.pathname === '/api/achievements') {
+      return this.json(res, 200, getAchievementResponse());
     }
 
     // GET /api/health — prerequisite check for first-boot onboarding

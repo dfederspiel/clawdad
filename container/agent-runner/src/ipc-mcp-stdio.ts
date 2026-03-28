@@ -341,6 +341,56 @@ After registering, write a CLAUDE.md in the new group's folder with the agent's 
   },
 );
 
+const ACHIEVEMENTS_DIR = path.join(IPC_DIR, 'achievements');
+
+server.tool(
+  'unlock_achievement',
+  `Unlock a gamification achievement for the user. Call this when the user experiences a feature for the first time. Each achievement can only be unlocked once — duplicates are silently ignored.
+
+Available achievement IDs:
+- first_contact: User sent their first message
+- clockwork: Set up a scheduled task
+- proactive: Agent sent a proactive message
+- researcher: Agent searched the web
+- good_memory: Agent recalled something from a prior session
+- dashboard: Sent a rich card, table, or chart
+- plugged_in: Connected an external service
+- on_watch: Set up a polling task
+- audit_trail: User asked for activity summary
+- librarian: Read from Confluence or wiki
+- ticket_machine: Created or updated a ticket
+- night_shift: Scheduled task ran while user was away
+- browser_bot: Agent navigated a website
+- assembly_line: 3+ scheduled tasks created
+- apprentice: Taught agent a multi-step task
+- specialist: Created a triggered @-mention agent
+- cross_talk: Used triggered agent from another chat
+- thread_weaver: Continued conversation in a thread
+- sentinel: Set up a website/API monitor
+- diff_detective: Sent a diff showing changes
+- architect: 3+ active agent groups
+- team_player: Used agent teams
+- commander: Created an agent from another agent
+- template_creator: Saved a custom template`,
+  {
+    achievement_id: z.string().describe('The achievement ID to unlock'),
+  },
+  async (args) => {
+    const data = {
+      type: 'achievement',
+      achievementId: args.achievement_id,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(ACHIEVEMENTS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Achievement "${args.achievement_id}" unlock requested.` }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

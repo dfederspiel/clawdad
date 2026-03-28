@@ -71,45 +71,93 @@
   color: var(--pixel-orange);
 }
 
-/* Achievement toast */
+/* Tier dots in game HUD */
+.game-hud-tiers {
+  display: flex;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.tier-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #5e6275;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.tier-dot.tier-complete {
+  border-color: var(--pixel-gold);
+  color: var(--pixel-gold);
+  background: rgba(240, 192, 64, 0.1);
+}
+
+/* Achievement toast — enhanced */
 .achievement-toast {
   position: fixed;
   top: 20px;
   right: 20px;
   z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 20px;
+  padding: 16px 20px;
   background: #1e2130;
   border: 2px solid var(--pixel-gold);
   box-shadow:
-    0 0 20px rgba(240, 192, 64, 0.2),
+    0 0 30px rgba(240, 192, 64, 0.25),
     inset -1px -1px 0 rgba(0, 0, 0, 0.3),
     inset 1px 1px 0 rgba(255, 255, 255, 0.06);
-  animation: toast-in 0.4s ease-out, toast-out 0.4s ease-in 3.6s forwards;
+  animation: toast-in 0.4s ease-out, toast-out 0.4s ease-in 5.6s forwards;
+  min-width: 280px;
+  max-width: 360px;
 }
 
-.achievement-toast-icon {
-  font-size: 24px;
-}
-
-.achievement-toast-text {
+.achievement-toast-header {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
 }
 
-.achievement-toast-title {
+.achievement-toast-badge {
   font-family: 'Press Start 2P', monospace;
-  font-size: 9px;
+  font-size: 8px;
   color: var(--pixel-gold);
   text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.achievement-toast-xp {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  color: var(--pixel-green);
+}
+
+.achievement-toast-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.achievement-toast-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e0e2ee;
 }
 
 .achievement-toast-desc {
   font-size: 12px;
   color: #8b8fa3;
+}
+
+.achievement-toast-progress {
+  margin-top: 8px;
+  font-size: 10px;
+  color: #5e6275;
+  font-family: monospace;
 }
 
 @keyframes toast-in {
@@ -120,4 +168,209 @@
 @keyframes toast-out {
   from { transform: translateX(0); opacity: 1; }
   to { transform: translateX(120%); opacity: 0; }
+}
+
+/* Achievement panel — full overlay */
+.ach-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ach-panel {
+  background: #1a1c2e;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  width: 90vw;
+  max-width: 720px;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.ach-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.ach-panel-header h2 {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 14px;
+  color: var(--pixel-gold);
+  margin: 0;
+}
+
+.ach-close {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #8b8fa3;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  font-family: monospace;
+  font-size: 14px;
+}
+
+.ach-close:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e0e2ee;
+}
+
+/* Summary bar */
+.ach-summary {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.ach-summary-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.ach-summary-value {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 14px;
+  color: var(--pixel-gold);
+}
+
+.ach-summary-label {
+  font-size: 10px;
+  color: #5e6275;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ach-xp-bar {
+  height: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+
+.ach-xp-fill {
+  height: 100%;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--pixel-gold) 0px,
+    var(--pixel-gold) 4px,
+    rgba(0, 0, 0, 0.15) 4px,
+    rgba(0, 0, 0, 0.15) 6px
+  );
+  transition: width 0.5s ease;
+}
+
+/* Tier sections */
+.ach-tier {
+  margin-bottom: 24px;
+}
+
+.ach-tier-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.ach-tier-label {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
+  color: #e0e2ee;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.ach-tier-desc {
+  font-size: 11px;
+  color: #5e6275;
+}
+
+.ach-tier-count {
+  font-family: monospace;
+  font-size: 12px;
+  color: #8b8fa3;
+  white-space: nowrap;
+}
+
+.ach-tier-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+/* Achievement cards */
+.ach-card {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.ach-card.ach-unlocked {
+  border-color: rgba(240, 192, 64, 0.3);
+  background: rgba(240, 192, 64, 0.04);
+}
+
+.ach-card.ach-locked {
+  opacity: 0.6;
+}
+
+.ach-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.ach-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e0e2ee;
+}
+
+.ach-locked .ach-card-name {
+  color: #5e6275;
+}
+
+.ach-card-xp {
+  font-family: monospace;
+  font-size: 10px;
+  color: var(--pixel-green);
+}
+
+.ach-locked .ach-card-xp {
+  color: #3a3d4e;
+}
+
+.ach-card-body {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.ach-card-desc {
+  color: #8b8fa3;
+}
+
+.ach-card-hint {
+  color: #5e6275;
+  font-style: italic;
+}
+
+.ach-card-date {
+  margin-top: 6px;
+  font-size: 10px;
+  color: #3a3d4e;
+  font-family: monospace;
 }
