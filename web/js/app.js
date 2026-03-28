@@ -4,6 +4,10 @@ import { html } from 'htm/preact';
 import * as api from './api.js';
 import { App } from './components/App.js';
 import { checkAchievements } from './components/blocks/AchievementToast.js';
+import {
+  THEMES, applyTheme, getThemeByName, validateThemeJson,
+  buildExportJson, getCurrentColors,
+} from './themes.js';
 
 // --- Global State (signals) ---
 
@@ -350,6 +354,98 @@ pollTelemetry();
 setInterval(pollStatus, 5000);
 setInterval(pollTasks, 10000);
 setInterval(pollTelemetry, 30000);
+
+// --- Theme ---
+
+export const currentTheme = signal('dark');
+export const customThemes = signal([]); // user-imported themes
+
+function loadTheme() {
+  // localStorage for instant restore (no flash)
+  const saved = localStorage.getItem('clawdad-theme');
+  const customJson = localStorage.getItem('clawdad-custom-themes');
+  if (customJson) {
+    try { customThemes.value = JSON.parse(customJson); } catch { /* ignore */ }
+  }
+  if (saved) {
+    currentTheme.value = saved;
+    const preset = getThemeByName(saved);
+    if (preset) {
+      applyTheme(preset.colors);
+    } else {
+      const custom = customThemes.value.find((t) => t.name === saved);
+      if (custom) applyTheme(custom.colors);
+    }
+  }
+}
+
+export function setTheme(name) {
+  const preset = getThemeByName(name);
+  const custom = customThemes.value.find((t) => t.name === name);
+  const theme = preset || custom;
+  if (!theme) return;
+  applyTheme(theme.colors);
+  currentTheme.value = name;
+  localStorage.setItem('clawdad-theme', name);
+  // Also persist to config API (best-effort)
+  api.saveConfig({ theme: name }).catch(() => {});
+}
+
+export function exportTheme() {
+  const colors = getCurrentColors();
+  const json = buildExportJson(currentTheme.value, colors);
+  const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `clawdad-theme-${currentTheme.value}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export function importTheme(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const json = JSON.parse(reader.result);
+        const error = validateThemeJson(json);
+        if (error) return reject(new Error(error));
+        const name = json.name || 'custom';
+        const theme = { name, label: json.name || 'Custom', colors: json.colors };
+        // Add to custom themes (replace if same name)
+        const existing = customThemes.value.filter((t) => t.name !== name);
+        customThemes.value = [...existing, theme];
+        localStorage.setItem('clawdad-custom-themes', JSON.stringify(customThemes.value));
+        applyTheme(theme.colors);
+        currentTheme.value = name;
+        localStorage.setItem('clawdad-theme', name);
+        api.saveConfig({ theme: name }).catch(() => {});
+        resolve(theme);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsText(file);
+  });
+}
+
+export function removeCustomTheme(name) {
+  // Never remove built-in presets
+  if (getThemeByName(name)) return;
+  customThemes.value = customThemes.value.filter((t) => t.name !== name);
+  localStorage.setItem('clawdad-custom-themes', JSON.stringify(customThemes.value));
+  // If the removed theme was active, fall back to dark
+  if (currentTheme.value === name) setTheme('dark');
+}
+
+export function getAllThemes() {
+  return [...THEMES, ...customThemes.value];
+}
+
+// Apply saved theme before render
+loadTheme();
 
 // --- Render ---
 

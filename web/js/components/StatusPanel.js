@@ -23,7 +23,7 @@ export function StatusPanel() {
   return html`
     <div class="border-t border-border">
       <!-- Containers -->
-      <div class="px-4 py-2.5 border-b border-border/50">
+      <div class="px-4 py-2.5 border-b border-border">
         <div class="flex items-center justify-between">
           <span class="text-[11px] font-medium uppercase tracking-wider text-txt-muted">Containers</span>
           <span class="text-xs font-mono ${activeContainers > 0 ? 'text-accent' : 'text-txt-muted'}">
@@ -47,7 +47,7 @@ export function StatusPanel() {
 
       <!-- Tasks toggle -->
       <button
-        class="w-full px-4 py-2 flex items-center justify-between text-left hover:bg-bg-hover transition-colors border-b border-border/50"
+        class="w-full px-4 py-2 flex items-center justify-between text-left hover:bg-bg-hover transition-colors border-b border-border"
         onClick=${() => toggle('tasks')}
       >
         <span class="text-[11px] font-medium uppercase tracking-wider text-txt-muted">Tasks</span>

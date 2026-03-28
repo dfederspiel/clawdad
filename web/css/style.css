@@ -1,7 +1,7 @@
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #2a2d3e; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 /* Typing dots animation */
 .typing-dot {
@@ -9,7 +9,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #5e6275;
+  background: var(--txt-muted);
   animation: typing-bounce 1.4s infinite ease-in-out both;
 }
 .typing-dot:nth-child(1) { animation-delay: 0s; }
@@ -27,14 +27,14 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 /* Markdown prose inside assistant messages */
 .prose code {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg3);
   padding: 1px 5px;
   border-radius: 3px;
   font-size: 13px;
 }
 
 .prose pre {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--bg);
   padding: 10px 12px;
   border-radius: 6px;
   overflow-x: auto;
@@ -63,6 +63,6 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 }
 
 .prose a {
-  color: #6c8aff;
+  color: var(--accent);
   text-decoration: underline;
 }

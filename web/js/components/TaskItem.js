@@ -107,7 +107,7 @@ export function TaskItem({ task }) {
       </div>
 
       ${showLogs && logs && html`
-        <div class="mt-2 ml-3.5 border-l border-border/50 pl-2.5">
+        <div class="mt-2 ml-3.5 border-l border-border pl-2.5">
           ${logs.length === 0
             ? html`<div class="text-[10px] text-txt-muted">No runs yet.</div>`
             : logs.slice(0, 5).map(
