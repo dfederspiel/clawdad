@@ -224,6 +224,7 @@ function unregisterGroup(jid: string, group: RegisteredGroup): void {
   }
 
   // Clean up in-memory state
+  queue.deleteGroup(jid);
   delete registeredGroups[jid];
   delete sessions[group.folder];
   delete lastAgentTimestamp[jid];

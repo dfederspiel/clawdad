@@ -1,16 +1,18 @@
 import { html } from 'htm/preact';
+import { useState } from 'preact/hooks';
 import { selectedGroup, selectedJid, clearChat, messages } from '../app.js';
 import { MessageList } from './MessageList.js';
 import { ChatInput } from './ChatInput.js';
+import { ConfirmDialog } from './ConfirmDialog.js';
 
 export function ChatView({ onOpenSidebar }) {
   const group = selectedGroup.value;
   const hasMessages = messages.value.length > 0;
+  const [clearOpen, setClearOpen] = useState(false);
 
-  function handleClear() {
-    if (confirm('Clear all messages in this chat?')) {
-      clearChat(selectedJid.value);
-    }
+  function handleClearConfirm() {
+    clearChat(selectedJid.value);
+    setClearOpen(false);
   }
 
   return html`
@@ -31,12 +33,22 @@ export function ChatView({ onOpenSidebar }) {
         ${hasMessages && html`
           <button
             class="text-xs text-txt-muted hover:text-err transition-colors"
-            onClick=${handleClear}
+            onClick=${() => setClearOpen(true)}
           >Clear chat</button>
         `}
       </div>
       <${MessageList} />
       <${ChatInput} />
     </div>
+
+    <${ConfirmDialog}
+      open=${clearOpen}
+      title="Clear chat?"
+      message="This removes all messages in this conversation. This cannot be undone."
+      confirmLabel="Clear"
+      destructive=${true}
+      onConfirm=${handleClearConfirm}
+      onCancel=${() => setClearOpen(false)}
+    />
   `;
 }
