@@ -341,6 +341,81 @@ After registering, write a CLAUDE.md in the new group's folder with the agent's 
   },
 );
 
+// --- Web Search via Brave Search API ---
+
+const BRAVE_API_KEY = process.env.BRAVE_SEARCH_API_KEY || '';
+const CREDENTIALS_DIR = path.join(IPC_DIR, 'credentials');
+
+server.tool(
+  'web_search',
+  `Search the web using Brave Search. Returns titles, URLs, and snippets for the top results.
+Use this for finding current information, news, research, or anything that needs up-to-date web data.
+Requires a Brave Search API key — register one with register-credential.sh if not set up yet.`,
+  {
+    query: z.string().describe('The search query'),
+    count: z.number().optional().default(5).describe('Number of results to return (max 20)'),
+  },
+  async (args) => {
+    const apiKey = BRAVE_API_KEY;
+    if (!apiKey) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: 'Web search is not configured. Register a Brave Search API key:\n\n'
+            + '1. Get a free API key at https://brave.com/search/api/\n'
+            + '2. Register it: /workspace/scripts/register-credential.sh brave "YOUR_API_KEY" --wait\n\n'
+            + 'The key will be available on next container restart.',
+        }],
+        isError: true,
+      };
+    }
+
+    const count = Math.min(args.count ?? 5, 20);
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(args.query)}&count=${count}`;
+
+    try {
+      const resp = await fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+          'Accept-Encoding': 'gzip',
+          'X-Subscription-Token': apiKey,
+        },
+      });
+
+      if (!resp.ok) {
+        const body = await resp.text();
+        return {
+          content: [{ type: 'text' as const, text: `Search failed (HTTP ${resp.status}): ${body.slice(0, 200)}` }],
+          isError: true,
+        };
+      }
+
+      const data = await resp.json() as {
+        web?: { results?: Array<{ title: string; url: string; description: string }> };
+        query?: { original: string };
+      };
+      const results = data.web?.results || [];
+
+      if (results.length === 0) {
+        return { content: [{ type: 'text' as const, text: `No results found for "${args.query}".` }] };
+      }
+
+      const formatted = results.map((r: { title: string; url: string; description: string }, i: number) =>
+        `${i + 1}. **${r.title}**\n   ${r.url}\n   ${r.description}`,
+      ).join('\n\n');
+
+      return {
+        content: [{ type: 'text' as const, text: `Search results for "${args.query}":\n\n${formatted}` }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Search error: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
 const ACHIEVEMENTS_DIR = path.join(IPC_DIR, 'achievements');
 
 server.tool(
