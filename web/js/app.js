@@ -106,6 +106,15 @@ api.onSSE('user_message', (data) => {
   // Ignore echo for normal messages — optimistic update already shows them
 });
 
+api.onSSE('messages_cleared', (data) => {
+  if (data.jid === selectedJid.value) {
+    messages.value = [];
+    threadMeta.value = {};
+    openThreads.value = {};
+    threadTyping.value = {};
+  }
+});
+
 // --- Actions ---
 
 export async function loadGroups() {
@@ -238,6 +247,12 @@ export async function loadTriggers() {
     const data = await api.getTriggers();
     triggers.value = data.triggers;
   } catch { /* ignore */ }
+}
+
+export async function clearChat(jid) {
+  if (!jid) return;
+  await api.clearMessages(jid);
+  // Local state cleared by SSE messages_cleared handler
 }
 
 export async function deleteGroup(folder, jid) {
