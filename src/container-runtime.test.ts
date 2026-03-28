@@ -32,9 +32,9 @@ const groupFolders = fs
   .filter((d) => d.isDirectory())
   .map((d) => d.name);
 
-/** Build a container name from a group folder name (reverse of the parsing in cleanupOrphans). */
+/** Build a container name from a group folder name (mirrors container-runner safeName logic). */
 function containerName(folder: string, ts = '111'): string {
-  return `nanoclaw-${folder.replace(/_/g, '-')}-${ts}`;
+  return `nanoclaw-${folder.replace(/[^a-zA-Z0-9-]/g, '-')}-${ts}`;
 }
 
 beforeEach(() => {
