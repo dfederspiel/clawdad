@@ -1020,6 +1020,18 @@ async function main(): Promise<void> {
         }
       }
     },
+    storeChatMetadata: (jid, timestamp, name, channel, isGroup) => {
+      storeChatMetadata(jid, timestamp, name, channel, isGroup);
+    },
+    onGroupRegistered: (jid) => {
+      // Broadcast to web UI so sidebar updates immediately
+      for (const ch of channels) {
+        if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
+          (ch as any).broadcastGroupsChanged();
+          break;
+        }
+      }
+    },
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();

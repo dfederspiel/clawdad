@@ -1,7 +1,0 @@
-{
-  "_comment": "Site Monitor configuration. The agent guides you through adding sites to watch.",
-
-  "monitors": [],
-  "default_interval_minutes": 30,
-  "alert_style": "diff"
-}
