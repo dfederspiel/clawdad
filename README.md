@@ -21,14 +21,14 @@ Under the hood, ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoc
 ## Quick Start
 
 ```bash
-git clone git@github.com:bd-polaris/bd-nanoclaw.git
-cd bd-nanoclaw
+git clone git@github.com:dfederspiel/clawdad.git
+cd clawdad
 claude
 ```
 
 Then tell Claude: **"Help me get set up"** (or run `/setup`).
 
-Claude handles everything: installing dependencies, configuring Docker, registering your API credentials, building the agent container, and starting the web UI.
+Claude handles everything: installing dependencies, configuring Docker, registering your Anthropic API credentials, building the agent container, and starting the web UI.
 
 > **Prerequisite:** [Claude Code](https://claude.com/product/claude-code) must be installed. Everything else is handled by setup.
 
