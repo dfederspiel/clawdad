@@ -117,10 +117,10 @@ export function Sidebar({ open, onClose }) {
             )}
       </div>
       <${StatusPanel} />
-      <${NewGroupDialog} open=${dialogOpen} onClose=${() => setDialogOpen(false)} />
     </aside>
 
-    <!-- Delete confirmation rendered outside sidebar so it centers on the page -->
+    <!-- Dialogs rendered outside sidebar so they center on the page -->
+    <${NewGroupDialog} open=${dialogOpen} onClose=${() => setDialogOpen(false)} />
     <${ConfirmDialog}
       open=${!!deleteTarget}
       title=${`Delete "${deleteTarget?.name}"?`}

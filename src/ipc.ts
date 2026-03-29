@@ -30,6 +30,14 @@ export interface IpcDeps {
   ) => void;
   onTasksChanged: () => void;
   onAchievement?: (achievement: AchievementDef, group: string) => void;
+  onGroupRegistered?: (jid: string) => void;
+  storeChatMetadata?: (
+    jid: string,
+    timestamp: string,
+    name: string,
+    channel: string,
+    isGroup: boolean,
+  ) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -537,6 +545,16 @@ export async function processTaskIpc(
           requiresTrigger: data.requiresTrigger,
           isMain: existingGroup?.isMain,
         });
+        // Create chat metadata so messages can be stored (foreign key)
+        const channel = data.jid.startsWith('web:') ? 'web' : 'unknown';
+        deps.storeChatMetadata?.(
+          data.jid,
+          new Date().toISOString(),
+          data.name,
+          channel,
+          true,
+        );
+        deps.onGroupRegistered?.(data.jid);
       } else {
         logger.warn(
           { data },

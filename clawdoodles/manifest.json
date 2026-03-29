@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "activePack": "starter",
+  "packs": {
+    "starter": {
+      "path": "packs/starter",
+      "description": "The default set — approachable templates that teach agent fundamentals"
+    },
+    "team-ops": {
+      "path": "packs/team-ops",
+      "description": "Engineering team workflows — bug triage, deployments, status reports"
+    }
+  },
+  "blocks": [
+    { "id": "first-run", "file": "blocks/first-run.md", "teaches": "Config check pattern, guided onboarding", "complexity": "beginner" },
+    { "id": "scheduling", "file": "blocks/scheduling.md", "teaches": "Cron and interval task scheduling", "complexity": "beginner" },
+    { "id": "web-search", "file": "blocks/web-search.md", "teaches": "WebSearch and WebFetch for information gathering", "complexity": "beginner" },
+    { "id": "browser-automation", "file": "blocks/browser-automation.md", "teaches": "agent-browser for real web browsing and interaction", "complexity": "intermediate" },
+    { "id": "rich-output", "file": "blocks/rich-output.md", "teaches": "Cards, tables, stats, alerts for structured output", "complexity": "beginner" },
+    { "id": "credential-management", "file": "blocks/credential-management.md", "teaches": "Secure credential registration and API auth", "complexity": "intermediate" },
+    { "id": "event-logging", "file": "blocks/event-logging.md", "teaches": "Structured event logging to JSONL", "complexity": "beginner" },
+    { "id": "proactive-messaging", "file": "blocks/proactive-messaging.md", "teaches": "Agents sending messages on their own", "complexity": "beginner" },
+    { "id": "achievements", "file": "blocks/achievements.md", "teaches": "Gamification via unlock_achievement", "complexity": "beginner" },
+    { "id": "cross-chat-triggers", "file": "blocks/cross-chat-triggers.md", "teaches": "@-mention triggers and thread conversations", "complexity": "advanced" },
+    { "id": "api-integration", "file": "blocks/api-integration.md", "teaches": "HTTP API calls via api.sh wrappers", "complexity": "intermediate" },
+    { "id": "file-persistence", "file": "blocks/file-persistence.md", "teaches": "State files and history tracking", "complexity": "beginner" },
+    { "id": "progressive-discovery", "file": "blocks/progressive-discovery.md", "teaches": "Suggesting features over time", "complexity": "beginner" },
+    { "id": "action-buttons", "file": "blocks/action-buttons.md", "teaches": "Clickable buttons for user choices", "complexity": "beginner" }
+  ],
+  "fragments": [
+    { "id": "first-run-check", "file": "fragments/first-run-check.md" },
+    { "id": "persistence-section", "file": "fragments/persistence-section.md" },
+    { "id": "communication-style", "file": "fragments/communication-style.md" },
+    { "id": "interactive-commands", "file": "fragments/interactive-commands.md" }
+  ]
+}

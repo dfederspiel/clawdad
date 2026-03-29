@@ -124,7 +124,7 @@ export class WebChannel implements Channel {
     this.opts.onChatMetadata(
       jid,
       new Date().toISOString(),
-      'General',
+      'ClawDad',
       'web',
       true,
     );
@@ -196,6 +196,10 @@ export class WebChannel implements Channel {
     });
   }
 
+  broadcastGroupsChanged(): void {
+    this.broadcast('groups_changed', {});
+  }
+
   // --- HTTP Request Handler ---
 
   private async handleRequest(
@@ -264,19 +268,21 @@ export class WebChannel implements Channel {
 
     // GET /api/templates — list available group templates
     if (method === 'GET' && url.pathname === '/api/templates') {
-      const templatesDir = path.resolve(process.cwd(), 'templates');
+      const seen = new Set<string>();
       const templates: {
         id: string;
         name: string;
         description: string;
         tier: string;
       }[] = [];
-      if (fs.existsSync(templatesDir)) {
-        for (const entry of fs.readdirSync(templatesDir, {
-          withFileTypes: true,
-        })) {
-          if (!entry.isDirectory()) continue;
-          const metaPath = path.join(templatesDir, entry.name, 'meta.json');
+
+      // Helper: scan a directory for template folders with meta.json
+      const scanDir = (dir: string) => {
+        if (!fs.existsSync(dir)) return;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (!entry.isDirectory() || seen.has(entry.name)) continue;
+          seen.add(entry.name);
+          const metaPath = path.join(dir, entry.name, 'meta.json');
           let name = entry.name;
           let description = '';
           let tier = 'recipe';
@@ -292,7 +298,21 @@ export class WebChannel implements Channel {
           }
           templates.push({ id: entry.name, name, description, tier });
         }
+      };
+
+      // Read active pack from manifest, scan its templates
+      const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
+      let activePack = 'starter';
+      try {
+        const manifest = JSON.parse(
+          fs.readFileSync(path.join(clawdoodlesDir, 'manifest.json'), 'utf-8'),
+        );
+        activePack = manifest.activePack || 'starter';
+      } catch {
+        /* use default */
       }
+      scanDir(path.join(clawdoodlesDir, 'packs', activePack));
+
       return this.json(res, 200, { templates });
     }
 
@@ -354,10 +374,10 @@ export class WebChannel implements Channel {
 
       // Copy template files BEFORE registration so the template CLAUDE.md
       // is in place before onRegisterGroup writes the default one.
-      if (template && /^[a-z0-9-]+$/.test(template)) {
-        const templateDir = path.resolve(process.cwd(), 'templates', template);
-        const groupDir = path.resolve(process.cwd(), 'groups', group.folder);
-        if (fs.existsSync(templateDir)) {
+      if (template) {
+        const templateDir = this.resolveTemplateDir(template);
+        if (templateDir && fs.existsSync(templateDir)) {
+          const groupDir = path.resolve(process.cwd(), 'groups', group.folder);
           fs.mkdirSync(groupDir, { recursive: true });
           for (const file of fs.readdirSync(templateDir)) {
             const src = path.join(templateDir, file);
@@ -833,6 +853,23 @@ export class WebChannel implements Channel {
   }
 
   // --- Helpers ---
+
+  /** Resolve a template ID to its directory in the active pack. */
+  private resolveTemplateDir(template: string): string | null {
+    if (!/^[a-z0-9-]+$/.test(template)) return null;
+    const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
+    let activePack = 'starter';
+    try {
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(clawdoodlesDir, 'manifest.json'), 'utf-8'),
+      );
+      activePack = manifest.activePack || 'starter';
+    } catch {
+      /* use default */
+    }
+    const dir = path.join(clawdoodlesDir, 'packs', activePack, template);
+    return fs.existsSync(dir) ? dir : null;
+  }
 
   private json(res: http.ServerResponse, status: number, data: unknown): void {
     res.writeHead(status, { 'Content-Type': 'application/json' });

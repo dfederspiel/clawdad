@@ -128,8 +128,8 @@ export function OnboardingGuide({ onCustom, compact = false }) {
 
   // Template picker — shown in both full and compact modes
   return html`
-    <div class="flex-1 flex items-center justify-center p-8">
-      <div class="max-w-2xl w-full">
+    <div class="flex-1 overflow-y-auto p-8">
+      <div class="max-w-2xl w-full mx-auto">
         <div class="text-center mb-8">
           ${compact ? html`
             <p class="text-sm text-txt-2">

@@ -76,6 +76,7 @@ export const registerAnthropic = (key, customEndpoint) =>
     body: { key, customEndpoint },
   });
 
+
 // Status & telemetry
 export const getStatus = () => fetchJson('/api/status');
 export const getTasks = () => fetchJson('/api/tasks');

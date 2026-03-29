@@ -1,0 +1,5 @@
+{
+  "name": "Command Center",
+  "description": "A meta-agent that manages other agents. Create agents programmatically, orchestrate teams, and master the platform.",
+  "tier": "recipe"
+}

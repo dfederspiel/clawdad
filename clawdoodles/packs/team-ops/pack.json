@@ -1,0 +1,21 @@
+{
+  "name": "Team Ops",
+  "description": "Agent templates for engineering teams. Bug triage, deployment pipelines, and status reporting — teach your team agent-driven workflows.",
+  "author": "ClawDad",
+  "version": "1.0.0",
+  "tiers": {
+    "recipe": "Team workflows that connect to Jira, GitHub, GitLab, and CI/CD pipelines"
+  },
+  "achievements": {
+    "connections": [
+      { "id": "plugged_in", "name": "Plugged In", "description": "Connected an external service (Jira, GitHub, etc.)", "xp": 15 },
+      { "id": "ticket_machine", "name": "Ticket Machine", "description": "Created or updated a Jira ticket via agent", "xp": 20 },
+      { "id": "librarian", "name": "Librarian", "description": "Agent read from Confluence or wiki", "xp": 15 }
+    ],
+    "operations": [
+      { "id": "on_watch", "name": "On Watch", "description": "Set up a polling task for project monitoring", "xp": 20 },
+      { "id": "night_shift", "name": "Night Shift", "description": "Scheduled task ran while you were away", "xp": 25 },
+      { "id": "audit_trail", "name": "Audit Trail", "description": "Reviewed the agent's activity log", "xp": 15 }
+    ]
+  }
+}

@@ -135,6 +135,10 @@ api.onSSE('messages_cleared', (data) => {
   }
 });
 
+api.onSSE('groups_changed', () => {
+  loadGroups();
+});
+
 // --- Actions ---
 
 export async function loadGroups() {
