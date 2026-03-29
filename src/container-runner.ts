@@ -259,10 +259,8 @@ async function buildContainerArgs(
   const PASSTHROUGH_ENV_PREFIXES = [
     'ANTHROPIC_BASE_URL', // Custom API endpoint (not the secret — just the URL)
     'CLAUDE_MODEL', // Model override for LiteLLM proxy compatibility
-    'HARNESS_',
     'GITLAB_',
     'GITHUB_',
-    'BLACKDUCK_',
     'LAUNCHDARKLY_',
     'FIGMA_',
     'ATLASSIAN_',

@@ -1,4 +1,4 @@
-# ClawDad (bd-nanoclaw)
+# ClawDad
 
 Agent orchestrator running Claude in isolated containers. Web UI is the primary interface. Based on [NanoClaw](https://github.com/qwibitai/nanoclaw).
 

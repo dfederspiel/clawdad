@@ -12,31 +12,26 @@
     { "id": "1234", "name": "my-project", "branch": "main" }
   ],
 
-  "harness_account_id": "",
-  "harness_org": "my-org",
-  "harness_project": "my-project",
-  "harness_services": [
-    { "identifier": "myService", "name": "my-service", "gitlab_project_id": "1234" }
-  ],
-  "harness_environments": [
-    { "identifier": "dev", "type": "PreProduction", "description": "Development" },
-    { "identifier": "stg", "type": "PreProduction", "description": "Staging" },
-    { "identifier": "prd", "type": "Production", "description": "Production" }
-  ],
-  "harness_pipelines": [
-    { "identifier": "deployToDev", "description": "Deploy to dev", "is_default": true },
-    { "identifier": "deployToProd", "description": "Deploy to production" }
-  ],
+  "cd_platform": "harness",
+  "cd_config": {
+    "_comment": "Platform-specific fields — the agent asks for these during setup"
+  },
 
-  "blackduck_url": "https://your-blackduck-instance.example.com",
-  "blackduck_projects": [
-    { "name": "my-project", "id": "uuid-here" }
-  ],
+  "security_scanner": "snyk",
+  "security_config": {
+    "_comment": "Scanner-specific fields — the agent asks for these during setup"
+  },
 
   "launchdarkly_project": "my-project",
   "launchdarkly_environments": [
     { "key": "test", "name": "Development", "critical": false },
     { "key": "production", "name": "Production", "critical": true }
+  ],
+
+  "environments": [
+    { "name": "dev", "type": "PreProduction" },
+    { "name": "staging", "type": "PreProduction" },
+    { "name": "production", "type": "Production" }
   ],
 
   "e2e_test_host": "https://test-runner.example.com",

@@ -3,7 +3,7 @@
 #
 # Usage: api.sh <SERVICE> <METHOD> <URL> [CURL_ARGS...]
 #
-# SERVICE is a label for grouping logs (e.g., gitlab, harness, blackduck, launchdarkly, atlassian, webb)
+# SERVICE is a label for grouping logs (e.g., gitlab, launchdarkly, atlassian, github)
 # METHOD is the HTTP method (GET, POST, PUT, PATCH, DELETE)
 # URL is the full URL (unlike atlassian-api.sh, this takes the complete URL)
 #
@@ -16,13 +16,10 @@
 #   api.sh gitlab GET "$GITLAB_URL/api/v4/projects/9634/pipelines?per_page=5" \
 #     -H "PRIVATE-TOKEN: $GITLAB_TOKEN"
 #
-#   api.sh harness POST "https://app.harness.io/pipeline/api/pipeline/execute/..." \
-#     -H "x-api-key: $HARNESS_API_KEY" -H "Content-Type: application/yaml" -d '...'
-#
-#   api.sh atlassian GET "https://blackduck.atlassian.net/rest/api/3/issue/POLUIG-1234"
+#   api.sh atlassian GET "https://your-domain.atlassian.net/rest/api/3/issue/PROJ-1234"
 #     (auth injected by OneCLI gateway, or pass -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" if set)
 #
-#   api.sh launchdarkly GET "https://app.launchdarkly.com/api/v2/flags/polaris-nextgen/my-flag" \
+#   api.sh launchdarkly GET "https://app.launchdarkly.com/api/v2/flags/my-project/my-flag" \
 #     -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415"
 
 set -euo pipefail

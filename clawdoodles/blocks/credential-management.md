@@ -18,7 +18,7 @@ Use the `request_credential` MCP tool to trigger a secure browser popup:
 
 ```
 Use request_credential with:
-- service: "atlassian" (or "github", "gitlab", "harness", "launchdarkly", or custom name)
+- service: "atlassian" (or "github", "gitlab", "launchdarkly", or custom name)
 - host_pattern: "*.atlassian.net" (optional — uses service default if omitted)
 - description: "Why this credential is needed — shown to the user"
 - email: "user@example.com" (required for Atlassian Basic auth)
