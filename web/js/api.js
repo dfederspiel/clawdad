@@ -42,6 +42,7 @@ export function onSSE(event, cb) {
 export const getGroups = () => fetchJson('/api/groups');
 export const getTemplates = () => fetchJson('/api/templates');
 export const getConfig = () => fetchJson('/api/config');
+export const getPack = () => fetchJson('/api/pack');
 export const saveConfig = (data) =>
   fetchJson('/api/config', { method: 'POST', body: data });
 

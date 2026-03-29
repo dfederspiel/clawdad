@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useState, useRef, useEffect } from 'preact/hooks';
-import { credentialRequest } from '../app.js';
+import { credentialRequest, credentialQueue } from '../app.js';
 import * as api from '../api.js';
 
 const SERVICE_META = {
@@ -75,7 +75,7 @@ export function CredentialModal() {
       });
       setSuccess(true);
       setTimeout(() => {
-        credentialRequest.value = null;
+        advanceQueue();
         setSuccess(false);
       }, 1500);
     } catch (err) {
@@ -85,8 +85,18 @@ export function CredentialModal() {
     }
   }
 
+  function advanceQueue() {
+    const queue = credentialQueue.value;
+    if (queue.length > 0) {
+      credentialRequest.value = queue[0];
+      credentialQueue.value = queue.slice(1);
+    } else {
+      credentialRequest.value = null;
+    }
+  }
+
   function handleCancel() {
-    credentialRequest.value = null;
+    advanceQueue();
   }
 
   if (!request) return null;

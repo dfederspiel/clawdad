@@ -48,12 +48,18 @@ Parse the user's request to determine which operation:
 
 1. Ask: "What's this pack for?" (theme, audience, purpose)
 2. Ask: "How many templates?" (recommend 9 — 3 per tier)
-3. Create `clawdoodles/packs/{name}/pack.json` with metadata
+3. Ask: "What information should be collected during onboarding?" — these become `setup` fields in pack.json. The web UI renders them as a wizard before showing templates. Values are saved to `groups/global/user-config.json` and merged into every new group's `agent-config.json`.
+   - Each step has a title, subtitle, and array of fields
+   - Fields have: key, label, placeholder, type (text/timezone/secret), required (boolean)
+   - The Starter Pack only asks for name + timezone
+   - Team Ops asks for name, role, team, org, Atlassian, GitHub, GitLab
+   - **Never collect secrets in setup fields** — use `request_credential` MCP tool at runtime instead
 4. Design achievement definitions for the pack:
    - Group into categories (e.g., "first_steps", "core_skills", "mastery")
    - Each achievement needs: id, name, description, xp
    - Achievements should tell a progression story
-5. Scaffold empty template directories
+5. Create `clawdoodles/packs/{name}/pack.json` with metadata, setup, and achievements
+6. Scaffold empty template directories
 
 ### `/clawdoodles add [template]` — Add a template to the active pack
 

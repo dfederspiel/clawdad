@@ -21,7 +21,8 @@ export const unread = signal({}); // { [jid]: count }
 export const threadMeta = signal({}); // { [messageId]: ThreadInfo }
 export const openThreads = signal({}); // { [threadId]: Message[] }
 export const threadTyping = signal({}); // { [threadId]: boolean }
-export const credentialRequest = signal(null); // { service, hostPattern, description, email, groupFolder }
+export const credentialQueue = signal([]); // queued credential requests
+export const credentialRequest = signal(null); // current active request
 
 export const selectedGroup = computed(() =>
   groups.value.find((g) => g.jid === selectedJid.value) || null,
@@ -141,7 +142,12 @@ api.onSSE('groups_changed', () => {
 });
 
 api.onSSE('credential_request', (data) => {
-  credentialRequest.value = data;
+  // Queue requests — show one at a time
+  if (credentialRequest.value) {
+    credentialQueue.value = [...credentialQueue.value, data];
+  } else {
+    credentialRequest.value = data;
+  }
 });
 
 // --- Actions ---
