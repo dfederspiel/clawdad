@@ -77,6 +77,13 @@ export const registerAnthropic = (key, customEndpoint) =>
   });
 
 
+// Credential registration (agent-triggered popup)
+export const registerCredential = (service, key, opts = {}) =>
+  fetchJson('/api/register-credential', {
+    method: 'POST',
+    body: { service, key, email: opts.email, hostPattern: opts.hostPattern, groupFolder: opts.groupFolder },
+  });
+
 // Status & telemetry
 export const getStatus = () => fetchJson('/api/status');
 export const getTasks = () => fetchJson('/api/tasks');

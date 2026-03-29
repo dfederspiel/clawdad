@@ -1,7 +1,7 @@
 ---
 id: credential-management
-teaches: "Secure credential registration, OneCLI vault, API authentication"
-tools: [register-credential.sh]
+teaches: "Secure credential registration via browser popup, OneCLI vault"
+tools: [request_credential]
 complexity: intermediate
 depends_on: [first-run]
 ---
@@ -10,41 +10,35 @@ depends_on: [first-run]
 
 Agents never see or store raw API keys. Credentials go into an encrypted vault and are injected automatically at request time by the credential proxy.
 
-### Registering credentials
+**CRITICAL: Never ask users to paste secrets in chat.** Use the `request_credential` MCP tool instead — it opens a secure popup in the browser.
 
-Use the IPC-based registration script:
+### Requesting credentials
 
-```bash
-# Register an Atlassian API token
-/workspace/scripts/register-credential.sh atlassian "TOKEN_VALUE" \
-  --email "user@example.com" \
-  --host-pattern "*.atlassian.net" \
-  --wait
+Use the `request_credential` MCP tool to trigger a secure browser popup:
 
-# Register a GitHub token
-/workspace/scripts/register-credential.sh github "ghp_xxxx" --wait
-
-# Register a generic API key
-/workspace/scripts/register-credential.sh my-service "API_KEY" \
-  --host-pattern "api.example.com" \
-  --wait
+```
+Use request_credential with:
+- service: "atlassian" (or "github", "gitlab", "harness", "launchdarkly", or custom name)
+- host_pattern: "*.atlassian.net" (optional — uses service default if omitted)
+- description: "Why this credential is needed — shown to the user"
+- email: "user@example.com" (required for Atlassian Basic auth)
 ```
 
-The `--wait` flag blocks until the host confirms registration.
+The tool:
+1. Opens a popup in the user's browser with pre-filled metadata
+2. User enters their secret in the form (you never see it)
+3. Secret goes directly to the encrypted vault
+4. Tool returns success/failure — then you can make API calls
 
 ### Teaching credential security
 
-When walking a user through credential setup, emphasize security:
+When walking a user through credential setup, explain the flow:
 
-> I'll register this securely — it goes into an encrypted vault, not a config file. I never see or store the raw token after registration. It's injected automatically when I make API requests.
-
-:::blocks
-[{"type":"alert","level":"success","title":"Credential Registered","body":"Your credentials are stored in an encrypted vault and injected at request time. The agent never sees the raw token — it's handled by the credential proxy."}]
-:::
+> I'll open a secure form for you to enter your API token. I never see the secret — it goes straight into an encrypted vault and is injected automatically when I make API requests.
 
 ### Verifying a connection
 
-After registering credentials, always verify they work:
+After the credential is registered, verify it works:
 
 ```bash
 # Verify Atlassian
@@ -54,7 +48,7 @@ After registering credentials, always verify they work:
 GH_TOKEN=$GITHUB_TOKEN gh api user
 ```
 
-Show the verification result to build confidence:
+Show the verification result:
 
 :::blocks
 [{"type":"alert","level":"success","title":"Connected!","body":"Authenticated as **[name]**. The connection is working."}]
@@ -62,8 +56,14 @@ Show the verification result to build confidence:
 
 ### When credentials fail
 
-If an API call fails with 401/403, guide the user through re-registration:
+If an API call fails with 401/403, guide the user to re-register:
 
-:::blocks
-[{"type":"alert","level":"error","title":"Authentication Failed","body":"The stored credential was rejected. This usually means the token expired or was revoked.\n\nLet's register a new one."}]
-:::
+> The stored credential was rejected — it may have expired. I'll open the form again so you can enter a new one.
+
+Then call `request_credential` again.
+
+### CLI fallback
+
+For advanced cases or if the popup doesn't work:
+
+> If you prefer, you can register credentials from the CLI: `onecli secrets create --name SERVICE --type generic --host-pattern PATTERN`

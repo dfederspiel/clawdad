@@ -40,25 +40,25 @@ Walk through setup **one step at a time**. Each step teaches a concept.
 
 **Step 2: Connect the service (credential registration)**
 
-Based on their answer, walk through credential registration. This is the key learning moment.
+Based on their answer, connect to the service. **NEVER ask the user to paste API keys or tokens in chat.** Use the `request_credential` MCP tool instead — it opens a secure popup in the browser where the user enters their secret directly into the vault.
 
 **For Jira:**
 
-> To connect to Jira, I need two things:
-> 1. Your Atlassian instance URL (e.g., `https://your-team.atlassian.net`)
-> 2. An API token — you can create one at [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+> To connect to Jira, I need your Atlassian instance URL (e.g., `https://your-team.atlassian.net`) and your email.
 >
 > What's your Atlassian instance URL?
 
-After they provide the URL, ask for the API token and their email:
+After they provide the URL and email, trigger the secure credential popup:
 
-> Now I need your API token and the email you use for Atlassian. I'll register these securely — they go into an encrypted vault, not into any config file. I never see or store the raw token after registration.
-
-Once they provide credentials, register them:
-
-```bash
-/workspace/scripts/register-credential.sh atlassian "TOKEN_VALUE" --email "user@example.com" --host-pattern "*.atlassian.net" --wait
 ```
+Use the request_credential MCP tool:
+- service: "atlassian"
+- host_pattern: "*.atlassian.net" (or their custom instance hostname)
+- description: "Jira API token for project tracking. Create one at id.atlassian.com/manage-profile/security/api-tokens"
+- email: "user@example.com" (the email they provided)
+```
+
+This opens a popup in the browser. The user enters their API token there — you never see it. Wait for the tool to return before continuing.
 
 Then verify the connection:
 
@@ -69,22 +69,23 @@ Then verify the connection:
 Show the result:
 
 :::blocks
-[{"type":"alert","level":"success","title":"Connected to Jira!","body":"Authenticated as **[Display Name]**.\n\nYour credentials are stored in an encrypted vault and injected at request time. The agent never sees the raw token — it's handled by the credential proxy."}]
+[{"type":"alert","level":"success","title":"Connected to Jira!","body":"Authenticated as **[Display Name]**.\n\nYour credentials are stored in an encrypted vault and injected at request time. The agent never sees the raw token."}]
 :::
 
 **Unlock achievement: `plugged_in`** — Call `unlock_achievement` with `achievement_id: "plugged_in"`.
 
 **For GitHub:**
 
-> To connect to GitHub, I need a Personal Access Token (PAT). You can create one at [github.com/settings/tokens](https://github.com/settings/tokens) — I need `repo` scope at minimum.
->
-> Paste your token and I'll register it securely.
+> To connect to GitHub, I'll open a secure form for you to enter a Personal Access Token.
 
-```bash
-/workspace/scripts/register-credential.sh github "ghp_xxxx" --wait
+```
+Use the request_credential MCP tool:
+- service: "github"
+- description: "GitHub Personal Access Token for repo monitoring. Create at github.com/settings/tokens (repo scope minimum)"
 ```
 
-Verify:
+Wait for the tool to return, then verify:
+
 ```bash
 GH_TOKEN=$GITHUB_TOKEN gh api user
 ```

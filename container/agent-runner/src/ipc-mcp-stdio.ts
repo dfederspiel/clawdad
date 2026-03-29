@@ -391,6 +391,81 @@ Available achievement IDs:
   },
 );
 
+// --- Credential request (triggers browser popup — agent never sees the secret) ---
+
+const CREDENTIALS_DIR = path.join(IPC_DIR, 'credentials');
+
+server.tool(
+  'request_credential',
+  `Request the user to register a credential via the web UI. A popup appears in the browser with pre-filled metadata — the user only enters the secret. You NEVER see the key.
+
+Use this instead of asking the user to paste secrets into chat. The credential is stored in an encrypted vault and injected automatically into API calls.
+
+Known services: atlassian, github, gitlab, harness, launchdarkly. For other services, provide a custom service name and host_pattern.`,
+  {
+    service: z.string().describe('Service name (e.g., "atlassian", "github", "gitlab", "harness", "launchdarkly", or a custom name)'),
+    host_pattern: z.string().optional().describe('Host pattern for the credential (e.g., "*.atlassian.net"). Uses service default if omitted.'),
+    description: z.string().describe('Why this credential is needed — shown to the user in the popup'),
+    email: z.string().optional().describe('Email address (required for Atlassian Basic auth)'),
+  },
+  async (args) => {
+    // Write IPC task — host picks this up and broadcasts to the browser
+    writeIpcFile(TASKS_DIR, {
+      type: 'request_credential',
+      service: args.service,
+      hostPattern: args.host_pattern,
+      description: args.description,
+      email: args.email,
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Poll for result (same pattern as register-credential.sh --wait)
+    const resultPath = path.join(CREDENTIALS_DIR, `result-${args.service}.json`);
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        if (fs.existsSync(resultPath)) {
+          const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+          fs.unlinkSync(resultPath);
+          if (result.success) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Credential "${args.service}" registered successfully. You can now make API calls to ${args.host_pattern || 'the service'}.`,
+                },
+              ],
+            };
+          }
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Credential registration failed: ${result.message}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      } catch {
+        // File may not exist yet — keep polling
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: 'Credential registration timed out (2 minutes). Ask the user to try again, or register via CLI: onecli secrets create',
+        },
+      ],
+      isError: true,
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

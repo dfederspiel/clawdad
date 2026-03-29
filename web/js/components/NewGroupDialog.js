@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useState, useRef, useEffect } from 'preact/hooks';
-import { createGroup, handleSend } from '../app.js';
+import { createGroup } from '../app.js';
 import * as api from '../api.js';
 
 const TIER_META = {
@@ -34,7 +34,8 @@ function TemplateCard({ template, onSelect, creating }) {
 export function NewGroupDialog({ open, onClose }) {
   const dialogRef = useRef(null);
   const [templates, setTemplates] = useState([]);
-  const [view, setView] = useState('pick'); // 'pick' | 'custom'
+  const [view, setView] = useState('pick'); // 'pick' | 'name' | 'custom'
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [agentType, setAgentType] = useState('standalone');
   const [name, setName] = useState('');
   const [folder, setFolder] = useState('');
@@ -65,8 +66,35 @@ export function NewGroupDialog({ open, onClose }) {
     setSubmitting(true);
     setError('');
     try {
-      await createGroup(template.name, template.id, template.id);
-      await handleSend('Hello! Help me get set up.');
+      const result = await createGroup(template.name, template.id, template.id);
+      await api.sendMessage(result.jid, 'Hello! Help me get set up.');
+      resetForm();
+      onClose();
+    } catch (err) {
+      // If group already exists, let the user pick a custom name
+      if (err.message && err.message.includes('already exists')) {
+        setSelectedTemplate(template);
+        setName(template.name + ' 2');
+        setFolder(slugify(template.name + ' 2'));
+        setManual(false);
+        setError('');
+        setView('name');
+      } else {
+        setError(err.message);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleNamedTemplateCreate(e) {
+    e.preventDefault();
+    if (!name.trim() || !folder.trim() || !selectedTemplate || submitting) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const result = await createGroup(name.trim(), folder.trim(), selectedTemplate.id);
+      await api.sendMessage(result.jid, 'Hello! Help me get set up.');
       resetForm();
       onClose();
     } catch (err) {
@@ -103,6 +131,7 @@ export function NewGroupDialog({ open, onClose }) {
     setFolder('');
     setDescription('');
     setTrigger('');
+    setSelectedTemplate(null);
     setAgentType('standalone');
     setManual(false);
     setView('pick');
@@ -123,10 +152,10 @@ export function NewGroupDialog({ open, onClose }) {
           }
         : {};
 
-      await createGroup(name.trim(), folder.trim(), undefined, opts);
+      const result = await createGroup(name.trim(), folder.trim(), undefined, opts);
 
       if (agentType === 'standalone' && description.trim()) {
-        await handleSend(description.trim());
+        await api.sendMessage(result.jid, description.trim());
       }
 
       resetForm();
@@ -143,12 +172,11 @@ export function NewGroupDialog({ open, onClose }) {
     ? 'bg-accent text-bg border-accent font-semibold'
     : 'bg-bg-3 text-txt-2 border-border hover:border-accent/50';
 
-  if (!open && !dialogRef.current?.open) return null;
-
   return html`
     <dialog
       ref=${dialogRef}
-      class="bg-bg-2 text-txt border border-border rounded-xl p-0 backdrop:bg-black/60 ${view === 'pick' ? 'max-w-2xl' : 'max-w-md'} w-full max-h-[85vh] flex flex-col"
+      class="bg-bg-2 text-txt border border-border rounded-xl p-0 backdrop:bg-black/60 ${view === 'pick' ? 'max-w-2xl' : 'max-w-md'} w-full max-h-[85vh] flex flex-col overflow-hidden"
+      style=${{ display: open ? undefined : 'none' }}
       onClose=${() => { resetForm(); onClose(); }}
       onClick=${(e) => { if (e.target === dialogRef.current) { resetForm(); onClose(); } }}
     >
@@ -211,6 +239,59 @@ export function NewGroupDialog({ open, onClose }) {
           </div>
         </div>
 
+      ` : view === 'name' ? html`
+        <form onSubmit=${handleNamedTemplateCreate} class="p-6 flex flex-col gap-4">
+          <div>
+            <h2 class="text-lg font-semibold">Name Your Agent</h2>
+            <p class="text-xs text-txt-2 mt-1">
+              A <span class="text-txt font-medium">${selectedTemplate?.name}</span> agent already exists. Pick a different name for this one.
+            </p>
+          </div>
+
+          <label class="flex flex-col gap-1.5">
+            <span class="text-sm text-txt-2">Name</span>
+            <input
+              type="text"
+              class="bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent"
+              placeholder="e.g. Project Tracker (Work)"
+              value=${name}
+              onInput=${onNameInput}
+              required
+            />
+          </label>
+
+          <label class="flex flex-col gap-1.5">
+            <span class="text-sm text-txt-2">Folder ID</span>
+            <input
+              type="text"
+              class="bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent font-mono"
+              placeholder="e.g. project-tracker-work"
+              pattern="[A-Za-z0-9][A-Za-z0-9_-]*"
+              value=${folder}
+              onInput=${onFolderInput}
+              required
+            />
+          </label>
+
+          ${error && html`<p class="text-sm text-err">${error}</p>`}
+
+          <div class="flex justify-end gap-3 mt-2">
+            <button
+              type="button"
+              class="px-4 py-2 text-sm text-txt-2 hover:text-txt transition-colors"
+              onClick=${() => { setView('pick'); setError(''); }}
+            >
+              Back
+            </button>
+            <button
+              type="submit"
+              class="px-4 py-2 bg-accent text-bg font-semibold rounded-lg text-sm hover:brightness-110 disabled:opacity-40 transition-all"
+              disabled=${!name.trim() || !folder.trim() || submitting}
+            >
+              ${submitting ? 'Creating...' : 'Create'}
+            </button>
+          </div>
+        </form>
       ` : html`
         <form onSubmit=${onSubmit} class="p-6 flex flex-col gap-4">
           <div class="flex items-center justify-between">
