@@ -1,0 +1,5 @@
+{
+  "name": "Dashboard",
+  "description": "Pull data from multiple sources into one view. Learn rich output blocks, multi-source aggregation, and scheduled reporting.",
+  "tier": "recipe"
+}

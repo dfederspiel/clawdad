@@ -37,3 +37,6 @@ ecosystem.config.cjs
 .nanoclaw/
 
 agents-sdk-docs
+
+# Clawdoodles — AI-generated templates (runtime output)
+clawdoodles/generated/

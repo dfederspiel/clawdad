@@ -77,8 +77,8 @@ WantedBy=${isSystem ? 'multi-user.target' : 'default.target'}`;
 
 describe('serviceLabel', () => {
   it('derives label from directory name', () => {
-    expect(serviceLabel('/home/user/bd-nanoclaw')).toBe(
-      'com.nanoclaw.bd-nanoclaw',
+    expect(serviceLabel('/home/user/clawdad')).toBe(
+      'com.nanoclaw.clawdad',
     );
   });
 

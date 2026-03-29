@@ -1,0 +1,40 @@
+{
+  "name": "Starter Pack",
+  "description": "The default Clawdoodle set. Teaches agent fundamentals through approachable scenarios — scheduling, web browsing, monitoring, and orchestration.",
+  "author": "ClawDad",
+  "version": "1.0.0",
+  "setup": [
+    {
+      "title": "About You",
+      "subtitle": "So your agents know who they're working for.",
+      "fields": [
+        { "key": "user_name", "label": "Name", "placeholder": "Jane Smith", "required": true },
+        { "key": "timezone", "label": "Timezone", "placeholder": "America/New_York", "type": "timezone" }
+      ]
+    }
+  ],
+  "tiers": {
+    "beginner": "Getting Started — learn the basics, each template guides you step by step",
+    "advanced": "Advanced — power features like triggers, monitoring, and orchestration",
+    "recipe": "Recipes — pre-built workflows that combine multiple agent capabilities"
+  },
+  "achievements": {
+    "first_steps": [
+      { "id": "first_contact", "name": "First Contact", "description": "Sent your first message to an agent", "xp": 10 },
+      { "id": "clockwork", "name": "Clockwork", "description": "Set up your first scheduled task", "xp": 15 },
+      { "id": "dashboard", "name": "Dashboard", "description": "Received rich output (cards, tables, stats)", "xp": 10 }
+    ],
+    "core_skills": [
+      { "id": "researcher", "name": "Researcher", "description": "Agent searched the web for you", "xp": 15 },
+      { "id": "browser_bot", "name": "Browser Bot", "description": "Agent browsed a real website", "xp": 15 },
+      { "id": "proactive", "name": "Proactive", "description": "Agent sent you a message on its own", "xp": 20 },
+      { "id": "sentinel", "name": "Sentinel", "description": "Agent detected a change and alerted you", "xp": 20 }
+    ],
+    "mastery": [
+      { "id": "good_memory", "name": "Good Memory", "description": "Agent recalled your preferences from a prior session", "xp": 20 },
+      { "id": "specialist", "name": "Specialist", "description": "Created a triggered @-mention agent", "xp": 25 },
+      { "id": "architect", "name": "Architect", "description": "Running 3 or more active agent groups", "xp": 30 },
+      { "id": "commander", "name": "Commander", "description": "Created an agent from another agent", "xp": 30 }
+    ]
+  }
+}
