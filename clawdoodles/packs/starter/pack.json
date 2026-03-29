@@ -3,6 +3,16 @@
   "description": "The default Clawdoodle set. Teaches agent fundamentals through approachable scenarios — scheduling, web browsing, monitoring, and orchestration.",
   "author": "ClawDad",
   "version": "1.0.0",
+  "setup": [
+    {
+      "title": "About You",
+      "subtitle": "So your agents know who they're working for.",
+      "fields": [
+        { "key": "user_name", "label": "Name", "placeholder": "Jane Smith", "required": true },
+        { "key": "timezone", "label": "Timezone", "placeholder": "America/New_York", "type": "timezone" }
+      ]
+    }
+  ],
   "tiers": {
     "beginner": "Getting Started — learn the basics, each template guides you step by step",
     "advanced": "Advanced — power features like triggers, monitoring, and orchestration",

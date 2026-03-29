@@ -12,7 +12,8 @@ Given a user's interview answers (name, vibe, interests, scenarios, difficulty l
 - Use ONLY the tools, scripts, and MCP tools listed in the building blocks below. Do not invent tools that don't exist.
 - Every CLAUDE.md must include: first-run config check, guided onboarding, core workflow, interactive commands table, event logging, and a files section.
 - File paths must use `/workspace/group/` for agent state and `/workspace/scripts/` for helper scripts.
-- The 3 Clawdoodles must cover different difficulty levels within the user's chosen range.
+- Pack setup fields (user_name, timezone, etc.) are pre-filled into `/workspace/group/agent-config.json` at group creation. Templates should read these instead of re-asking. Use `request_credential` MCP tool for secrets — never ask users to paste keys in chat.
+- Clawdoodles must cover different difficulty levels within the user's chosen range.
 - Theme everything around the user's actual interests — not generic corporate scenarios.
 - Match the user's chosen vibe (chill/nerdy/all-business/chaos-gremlin) in tone and personality.
 - Agent names should be fun and memorable, not corporate.

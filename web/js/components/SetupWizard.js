@@ -1,52 +1,80 @@
 import { html } from 'htm/preact';
-import { useState } from 'preact/hooks';
+import { useState, useEffect } from 'preact/hooks';
 import * as api from '../api.js';
 
-const DEV_STEP = {
-  title: 'Developer Tools',
-  subtitle: 'Key files and commands for working on the codebase.',
-  info: true, // No form fields — just reference info
-  fields: [],
-};
-
-const STEPS = [
-  {
-    title: 'About You',
-    subtitle: 'So your agents know who they\'re working for.',
-    fields: [
-      { key: 'user_name', label: 'Name', placeholder: 'Jane Smith', required: true },
-      { key: 'user_role', label: 'Role', placeholder: 'Senior Engineer' },
-      { key: 'team', label: 'Team', placeholder: 'Platform' },
-      { key: 'organization', label: 'Organization', placeholder: 'Acme Corp' },
-    ],
-  },
-  {
-    title: 'Atlassian',
-    subtitle: 'For Jira and Confluence access. Skip if you don\'t use Atlassian.',
-    fields: [
-      { key: 'atlassian_instance', label: 'Instance URL', placeholder: 'https://your-team.atlassian.net' },
-      { key: 'atlassian_email', label: 'Email', placeholder: 'you@company.com' },
-      { key: 'jira_project_key', label: 'Jira project key', placeholder: 'PROJ' },
-    ],
-  },
-  {
-    title: 'Source Code',
-    subtitle: 'Where your repos live. Both are optional.',
-    fields: [
-      { key: 'github_org', label: 'GitHub org', placeholder: 'my-org' },
-      { key: 'gitlab_url', label: 'GitLab URL', placeholder: 'https://gitlab.example.com' },
-    ],
-  },
-];
+// Guess timezone from browser
+function guessTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return '';
+  }
+}
 
 export function SetupWizard({ onComplete, userPath }) {
-  // Append dev step if user chose the developer path
-  const steps = userPath === 'developer' ? [...STEPS, DEV_STEP] : STEPS;
-
+  const [steps, setSteps] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [step, setStep] = useState(0);
   const [data, setData] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  // Load setup fields from active pack
+  useEffect(() => {
+    api.getPack().then((pack) => {
+      const packSteps = pack.setup || [];
+
+      // Append dev step if developer path
+      if (userPath === 'developer') {
+        packSteps.push({
+          title: 'Developer Tools',
+          subtitle: 'Key files and commands for working on the codebase.',
+          info: true,
+          fields: [],
+        });
+      }
+
+      // Fallback if pack has no setup fields
+      if (packSteps.length === 0) {
+        packSteps.push({
+          title: 'About You',
+          subtitle: "So your agents know who they're working for.",
+          fields: [
+            { key: 'user_name', label: 'Name', placeholder: 'Jane Smith', required: true },
+          ],
+        });
+      }
+
+      setSteps(packSteps);
+
+      // Pre-fill timezone if there's a timezone field
+      const hasTimezone = packSteps.some((s) =>
+        s.fields?.some((f) => f.type === 'timezone' || f.key === 'timezone'),
+      );
+      if (hasTimezone) {
+        setData((d) => ({ ...d, timezone: guessTimezone() }));
+      }
+
+      setLoading(false);
+    }).catch(() => {
+      setSteps([{
+        title: 'About You',
+        subtitle: "So your agents know who they're working for.",
+        fields: [
+          { key: 'user_name', label: 'Name', placeholder: 'Jane Smith', required: true },
+        ],
+      }]);
+      setLoading(false);
+    });
+  }, [userPath]);
+
+  if (loading) {
+    return html`
+      <div class="flex-1 flex items-center justify-center">
+        <p class="text-sm text-txt-muted">Loading...</p>
+      </div>
+    `;
+  }
 
   const current = steps[step];
   const isLast = step === steps.length - 1;
@@ -57,7 +85,7 @@ export function SetupWizard({ onComplete, userPath }) {
   }
 
   function canAdvance() {
-    // Only block if required fields on current step are empty
+    if (!current.fields) return true;
     return current.fields
       .filter((f) => f.required)
       .every((f) => (data[f.key] || '').trim());
@@ -65,11 +93,9 @@ export function SetupWizard({ onComplete, userPath }) {
 
   async function handleNext() {
     if (isLast) {
-      // Save and finish
       setSaving(true);
       setError('');
       try {
-        // Filter out empty values
         const config = {};
         for (const [k, v] of Object.entries(data)) {
           if (typeof v === 'string' && v.trim()) config[k] = v.trim();
@@ -129,7 +155,7 @@ export function SetupWizard({ onComplete, userPath }) {
                     <tr><td class="py-0.5 text-accent font-mono">src/container-runner.ts</td><td>Spawns agent containers</td></tr>
                     <tr><td class="py-0.5 text-accent font-mono">src/channels/web.ts</td><td>Web UI channel + API</td></tr>
                     <tr><td class="py-0.5 text-accent font-mono">src/health.ts</td><td>Prerequisite checks</td></tr>
-                    <tr><td class="py-0.5 text-accent font-mono">templates/</td><td>Agent templates</td></tr>
+                    <tr><td class="py-0.5 text-accent font-mono">clawdoodles/</td><td>Packs and templates</td></tr>
                     <tr><td class="py-0.5 text-accent font-mono">container/</td><td>Agent container image</td></tr>
                   </table>
                 </div>
@@ -151,9 +177,9 @@ export function SetupWizard({ onComplete, userPath }) {
                         ${field.label}${field.required ? ' *' : ''}
                       </label>
                       <input
-                        type="text"
+                        type=${field.type === 'secret' ? 'password' : 'text'}
                         class="w-full bg-bg-2 border border-border rounded-lg px-3 py-2 text-sm text-txt placeholder-txt-muted focus:outline-none focus:border-accent/50 transition-colors"
-                        placeholder=${field.placeholder}
+                        placeholder=${field.placeholder || ''}
                         value=${data[field.key] || ''}
                         onInput=${(e) => updateField(field.key, e.target.value)}
                         onKeyDown=${(e) => e.key === 'Enter' && canAdvance() && handleNext()}
@@ -178,7 +204,7 @@ export function SetupWizard({ onComplete, userPath }) {
               : null}
           </div>
           <div class="flex items-center gap-3">
-            ${!current.fields.some((f) => f.required)
+            ${current.fields && !current.fields.some((f) => f.required)
               ? html`
                   <button
                     class="text-sm text-txt-muted hover:text-txt transition-colors"

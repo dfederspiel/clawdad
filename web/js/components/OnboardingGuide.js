@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
-import { createGroup, handleSend } from '../app.js';
+import { createGroup } from '../app.js';
 import * as api from '../api.js';
 import { PrerequisiteCheck } from './PrerequisiteCheck.js';
 import { SetupWizard } from './SetupWizard.js';
@@ -83,9 +83,9 @@ export function OnboardingGuide({ onCustom, compact = false }) {
     setCreating(true);
     setError('');
     try {
-      await createGroup(template.name, template.id, template.id);
-      // Kickstart the agent — triggers its first-run setup flow
-      await handleSend('Hello! Help me get set up.');
+      const result = await createGroup(template.name, template.id, template.id);
+      // Kickstart the agent — send directly to avoid optimistic duplicate
+      await api.sendMessage(result.jid, 'Hello! Help me get set up.');
     } catch (err) {
       setError(err.message);
     } finally {

@@ -3,10 +3,20 @@
 </p>
 
 <p align="center">
-  An AI agent orchestrator that runs Claude in isolated containers. Managed via web UI, powered by Claude Code.
+  A hands-on platform for building and running Claude agents — built on <a href="https://github.com/qwibitai/nanoclaw">NanoClaw</a>.
 </p>
 
 ---
+
+## What is ClawDad?
+
+Most agent platforms treat you as a consumer — pick a template, click run, hope for the best. ClawDad takes a different approach: it helps you **build intuition for how AI agents work** by making you a participant in their creation.
+
+The web UI at `http://localhost:3456` gives you a local environment to create agents, chat with them, and watch them work — no Slack, WhatsApp, or any other connector required. **Packs** provide guided scenarios that walk you through building agents step by step, teaching you what good instructions look like, how to scope agent capabilities, and when to give an agent more or less autonomy. You're not just filling in a form — you're learning to think in agents.
+
+As you build that intuition, ClawDad grows with you. Advanced users graduate to building agents directly in Claude Code's CLI, where you have full control over instructions, tools, and container configuration. The web UI stays useful as a dashboard for monitoring tasks, reviewing execution history, and chatting with running agents.
+
+Under the hood, ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoclaw), which handles the hard parts: Docker container isolation, credential injection via OneCLI Agent Vault, and the Claude Agent SDK runtime.
 
 ## Quick Start
 
@@ -18,40 +28,36 @@ claude
 
 Then tell Claude: **"Help me get set up"** (or run `/setup`).
 
-Claude handles everything: installing dependencies, configuring Docker, registering your API credentials through the LiteLLM proxy, building the agent container, and starting the web UI.
+Claude handles everything: installing dependencies, configuring Docker, registering your API credentials, building the agent container, and starting the web UI.
 
 > **Prerequisite:** [Claude Code](https://claude.com/product/claude-code) must be installed. Everything else is handled by setup.
 
-## What You Get
+## The Web UI
 
-**Template agents** that run in isolated Docker containers, each with their own workspace:
+The dashboard at `http://localhost:3456` serves two roles:
 
-| Template | What it does |
-|----------|-------------|
-| **Deployments** | Monitors Harness pipelines, checks security gates, tracks e2e results |
-| **Updates** | Pulls Jira activity, drafts weekly status updates, creates retroactive tickets |
-| **Bug Triage** | Scans for untriaged bugs, searches for root causes, labels and comments |
+**For learning and creating:**
+- **Packs** — guided scenarios that walk you through building agents for specific use cases (ops, triage, reporting). Each pack teaches agent design patterns as you go.
+- **Create agents** — build from pack templates or start from scratch. Each agent runs in its own isolated Docker container.
 
-**Web dashboard** at `http://localhost:3456`:
-- Create agents from templates
-- Chat with agents directly
-- Review scheduled tasks and execution history
-- Monitor container status and telemetry
+**For day-to-day use:**
+- **Chat locally** — talk to your agents right in the browser. No need to set up Slack, WhatsApp, or any other messaging platform.
+- **Monitor tasks** — see scheduled jobs, execution history, and container status at a glance.
+- **Manage credentials** — register API keys through the UI instead of the CLI.
 
-**Scheduled tasks** — agents can set up recurring jobs (daily check-ins, weekly reports, pipeline monitoring) that run automatically.
+The web UI uses Preact + HTM with no build step. Edit files in `web/` and refresh the browser.
 
 ## How It Works
 
 ```
-Web UI  ──>  Orchestrator  ──>  Docker Container (Claude Agent SDK)  ──>  Response
-                  │
-              SQLite DB
-              (messages, tasks, sessions)
+Browser  ──>  Web UI (Preact)  ──>  Orchestrator (Node.js)  ──>  Docker Container (Claude Agent SDK)
+                                          │
+                                      SQLite DB
+                                      (messages, tasks, sessions)
 ```
 
 - **Agents run in Docker containers** with filesystem isolation. Each agent only sees its own workspace.
 - **Credentials flow through OneCLI Agent Vault** — a local gateway that intercepts outbound HTTPS and injects API keys at request time. Agents never see raw tokens.
-- **The web UI is the primary interface.** No messaging apps required. Chat, create agents, and manage tasks from your browser.
 - **Claude Code is the admin tool.** Use it to add templates, tune agent behavior, configure integrations, or debug issues.
 
 ## Prerequisites
@@ -65,12 +71,6 @@ Web UI  ──>  Orchestrator  ──>  Docker Container (Claude Agent SDK)  ─
 
 The `/setup` skill checks all prerequisites and walks you through fixing anything that's missing.
 
-## Adding Agents
-
-**From the web UI:** Click through the template picker to create a new agent. The agent runs in its own container and walks you through any template-specific configuration in chat.
-
-**Custom agents:** Ask Claude Code to create a new template. Templates live in `templates/` — each is a folder with a `CLAUDE.md` (agent instructions), `meta.json` (name/description), and optionally an `agent-config.json` or helper scripts.
-
 ## Credentials
 
 API credentials are managed by [OneCLI Agent Vault](https://github.com/onecli/onecli). The vault runs locally and intercepts outbound HTTPS from containers, injecting credentials per host pattern.
@@ -80,41 +80,27 @@ onecli secrets list                     # See registered credentials
 onecli secrets create --name Anthropic \
   --type anthropic \
   --value YOUR_KEY \
-  --host-pattern llm.labs.blackduck.com  # Or api.anthropic.com for direct API
+  --host-pattern api.anthropic.com
 ```
 
-**LiteLLM proxy:** If your team uses a LiteLLM proxy, set `ANTHROPIC_BASE_URL` in `.env` and use the proxy hostname as the OneCLI `--host-pattern`. Setup guides you through this.
+You can also register credentials through the web UI's credential modal during setup or at any time from the dashboard.
 
-## Updating
+## Extending with Skills
 
-To pull the latest code and restart your running instance:
+ClawDad inherits NanoClaw's skill system. Add capabilities by merging skill branches:
 
-```bash
-cd bd-nanoclaw
-claude
-# Then say "update" or /update
-```
+| Skill | What it adds |
+|-------|-------------|
+| `/add-whatsapp` | WhatsApp channel |
+| `/add-telegram` | Telegram channel |
+| `/add-slack` | Slack channel |
+| `/add-discord` | Discord channel |
+| `/add-voice-transcription` | Voice message transcription |
+| `/customize` | Interactive guide for adding integrations |
 
-Claude pulls the latest code, rebuilds if needed, and restarts your service. Web UI changes (HTML/CSS/JS) take effect on browser refresh without a restart.
+Run `/setup` for first-time configuration, `/update` to pull latest code and restart, or `/debug` for troubleshooting.
 
-## Development Workflows
-
-### Testing the onboarding flow
-
-To test what a new user experiences, clone a fresh copy and run through setup:
-
-```bash
-git clone git@github.com:bd-polaris/bd-nanoclaw.git /tmp/test-clawdad
-cd /tmp/test-clawdad
-claude
-# Then say "help me get set up" or /setup
-```
-
-Delete `/tmp/test-clawdad` and re-clone to start over. Multiple instances can run in parallel — setup auto-detects port conflicts and assigns the next free port.
-
-### Developing ClawDad
-
-For working on the orchestrator, templates, skills, or container runtime:
+## Development
 
 ```bash
 npm run dev          # Run with hot reload
@@ -123,33 +109,17 @@ npm run build        # Compile TypeScript
 npm test             # Run tests
 ```
 
-Key files: `src/index.ts` (orchestrator), `src/container-runner.ts` (container spawning), `src/channels/web.ts` (web UI + API), `src/health.ts` (prerequisite checks), `templates/` (agent templates).
-
-### Developing the web UI
-
-The web UI lives in `web/` and uses Preact + HTM (no build step). Edit files and refresh the browser — changes are immediate.
-
-```
-web/
-├── js/
-│   ├── app.js              # Main app shell and routing
-│   ├── api.js              # API client functions
-│   └── components/         # Preact components
-│       ├── OnboardingGuide.js   # First-boot flow
-│       ├── PrerequisiteCheck.js # Health check cards
-│       ├── SetupWizard.js       # Configuration wizard
-│       └── ...
-├── css/                    # Stylesheets
-└── index.html              # Entry point
-```
-
-The web UI talks to the orchestrator via REST endpoints defined in `src/channels/web.ts`. To add a new API endpoint, add a route handler there and a corresponding function in `web/js/api.js`.
+Key paths:
+- `src/` — orchestrator (TypeScript)
+- `web/` — frontend (Preact + HTM, no build step)
+- `container/` — agent container image and runtime skills
+- `.claude/skills/` — Claude Code skills (setup, debug, customize, etc.)
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for skill types, PR guidelines, and the contribution model.
 
 ## Upstream
 
-bd-nanoclaw is based on [NanoClaw](https://github.com/qwibitai/nanoclaw). To pull upstream updates, use the `/update-nanoclaw` skill.
+ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoclaw) by [Qwibit](https://github.com/qwibitai). The core container runtime, agent SDK integration, credential vault, and skill system all come from NanoClaw. Use `/update-nanoclaw` to pull upstream updates.
 
 ## License
 

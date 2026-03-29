@@ -327,6 +327,32 @@ export class WebChannel implements Channel {
       return this.json(res, 200, { templates });
     }
 
+    // GET /api/pack — active pack metadata (including setup fields)
+    if (method === 'GET' && url.pathname === '/api/pack') {
+      const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
+      let activePack = 'starter';
+      try {
+        const manifest = JSON.parse(
+          fs.readFileSync(path.join(clawdoodlesDir, 'manifest.json'), 'utf-8'),
+        );
+        activePack = manifest.activePack || 'starter';
+      } catch {
+        /* use default */
+      }
+      const packPath = path.join(
+        clawdoodlesDir,
+        'packs',
+        activePack,
+        'pack.json',
+      );
+      try {
+        const pack = JSON.parse(fs.readFileSync(packPath, 'utf-8'));
+        return this.json(res, 200, pack);
+      } catch {
+        return this.json(res, 200, { name: activePack, setup: [] });
+      }
+    }
+
     // GET /api/config — global user config
     if (method === 'GET' && url.pathname === '/api/config') {
       const configPath = path.join(GROUPS_DIR, 'global', 'user-config.json');
