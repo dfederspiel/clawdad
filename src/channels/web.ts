@@ -10,6 +10,7 @@ import {
   AchievementDef,
 } from '../achievements.js';
 import {
+  DATA_DIR,
   GROUPS_DIR,
   WEB_UI_PORT,
   WEB_UI_ENABLED,
@@ -198,6 +199,16 @@ export class WebChannel implements Channel {
 
   broadcastGroupsChanged(): void {
     this.broadcast('groups_changed', {});
+  }
+
+  broadcastCredentialRequest(request: {
+    service: string;
+    hostPattern?: string;
+    description?: string;
+    email?: string;
+    groupFolder: string;
+  }): void {
+    this.broadcast('credential_request', request);
   }
 
   // --- HTTP Request Handler ---
@@ -785,6 +796,53 @@ export class WebChannel implements Channel {
           error: 'Failed to register key. Is OneCLI running?',
         });
       }
+    }
+
+    // POST /api/register-credential — register any credential via IPC→OneCLI
+    // Used by the CredentialModal when an agent requests a credential via popup
+    if (method === 'POST' && url.pathname === '/api/register-credential') {
+      const remote = req.socket.remoteAddress;
+      if (
+        remote !== '127.0.0.1' &&
+        remote !== '::1' &&
+        remote !== '::ffff:127.0.0.1'
+      ) {
+        return this.json(res, 403, { error: 'Localhost only' });
+      }
+
+      const body = await this.readBody(req);
+      const { service, key, email, hostPattern, groupFolder } = body;
+      if (!service || !key) {
+        return this.json(res, 400, {
+          error: 'service and key are required',
+        });
+      }
+
+      // Write to IPC credentials dir — the existing IPC poll loop
+      // picks it up, runs OneCLI, and writes the result file
+      const targetFolder = groupFolder || 'web_general';
+      const credDir = path.join(DATA_DIR, 'ipc', targetFolder, 'credentials');
+      fs.mkdirSync(credDir, { recursive: true });
+
+      const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+      const filepath = path.join(credDir, filename);
+      const tempPath = `${filepath}.tmp`;
+      fs.writeFileSync(
+        tempPath,
+        JSON.stringify({
+          service,
+          value: key,
+          email: email || undefined,
+          hostPattern: hostPattern || undefined,
+        }),
+      );
+      fs.renameSync(tempPath, filepath);
+
+      logger.info(
+        { service, groupFolder: targetFolder },
+        'Credential registration requested via web UI',
+      );
+      return this.json(res, 200, { ok: true });
     }
 
     this.json(res, 404, { error: 'Not found' });

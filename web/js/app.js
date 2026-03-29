@@ -21,6 +21,7 @@ export const unread = signal({}); // { [jid]: count }
 export const threadMeta = signal({}); // { [messageId]: ThreadInfo }
 export const openThreads = signal({}); // { [threadId]: Message[] }
 export const threadTyping = signal({}); // { [threadId]: boolean }
+export const credentialRequest = signal(null); // { service, hostPattern, description, email, groupFolder }
 
 export const selectedGroup = computed(() =>
   groups.value.find((g) => g.jid === selectedJid.value) || null,
@@ -137,6 +138,10 @@ api.onSSE('messages_cleared', (data) => {
 
 api.onSSE('groups_changed', () => {
   loadGroups();
+});
+
+api.onSSE('credential_request', (data) => {
+  credentialRequest.value = data;
 });
 
 // --- Actions ---

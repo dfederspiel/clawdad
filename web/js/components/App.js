@@ -6,6 +6,7 @@ import { ChatView } from './ChatView.js';
 import { OnboardingGuide } from './OnboardingGuide.js';
 import { AchievementToast } from './blocks/AchievementToast.js';
 import { AchievementPanel } from './AchievementPanel.js';
+import { CredentialModal } from './CredentialModal.js';
 
 export function App() {
   const group = selectedGroup.value;
@@ -19,6 +20,7 @@ export function App() {
         <main class="flex-1 flex flex-col min-w-0">
           <${OnboardingGuide} />
         </main>
+        <${CredentialModal} />
       </div>
     `;
   }
@@ -33,6 +35,7 @@ export function App() {
       </main>
       <${AchievementToast} />
       <${AchievementPanel} />
+      <${CredentialModal} />
     </div>
   `;
 }
