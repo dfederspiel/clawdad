@@ -216,7 +216,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
         if (fs.existsSync(credentialsDir)) {
           const credFiles = fs
             .readdirSync(credentialsDir)
-            .filter((f) => f.endsWith('.json'));
+            .filter((f) => f.endsWith('.json') && !f.startsWith('result-'));
           for (const file of credFiles) {
             const filePath = path.join(credentialsDir, file);
             try {
@@ -623,12 +623,6 @@ const CREDENTIAL_SERVICES: Record<
     headerName: 'Authorization',
     valueFormat: 'token {value}',
     defaultHostPattern: '*.github.com',
-  },
-  harness: {
-    type: 'generic',
-    headerName: 'x-api-key',
-    valueFormat: '{value}',
-    defaultHostPattern: 'app.harness.io',
   },
   launchdarkly: {
     type: 'generic',

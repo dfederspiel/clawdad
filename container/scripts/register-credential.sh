@@ -8,7 +8,7 @@
 #   register-credential.sh <SERVICE> <VALUE> [OPTIONS]
 #
 # Required:
-#   SERVICE   Service name: atlassian, gitlab, github, harness, launchdarkly
+#   SERVICE   Service name: atlassian, gitlab, github, launchdarkly
 #   VALUE     The API token / PAT / key
 #
 # Options:
@@ -48,8 +48,8 @@ done
 
 # Validate service
 case "$SERVICE" in
-  atlassian|gitlab|github|harness|launchdarkly) ;;
-  *) echo "Unknown service: $SERVICE (valid: atlassian, gitlab, github, harness, launchdarkly)" >&2; exit 1 ;;
+  atlassian|gitlab|github|launchdarkly) ;;
+  *) echo "Unknown service: $SERVICE (valid: atlassian, gitlab, github, launchdarkly)" >&2; exit 1 ;;
 esac
 
 # Atlassian requires email

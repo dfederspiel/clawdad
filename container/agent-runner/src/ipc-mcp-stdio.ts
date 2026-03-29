@@ -401,9 +401,9 @@ server.tool(
 
 Use this instead of asking the user to paste secrets into chat. The credential is stored in an encrypted vault and injected automatically into API calls.
 
-Known services: atlassian, github, gitlab, harness, launchdarkly. For other services, provide a custom service name and host_pattern.`,
+Known services: atlassian, github, gitlab, launchdarkly. For other services, provide a custom service name and host_pattern.`,
   {
-    service: z.string().describe('Service name (e.g., "atlassian", "github", "gitlab", "harness", "launchdarkly", or a custom name)'),
+    service: z.string().describe('Service name (e.g., "atlassian", "github", "gitlab", "launchdarkly", or a custom name)'),
     host_pattern: z.string().optional().describe('Host pattern for the credential (e.g., "*.atlassian.net"). Uses service default if omitted.'),
     description: z.string().describe('Why this credential is needed — shown to the user in the popup'),
     email: z.string().optional().describe('Email address (required for Atlassian Basic auth)'),

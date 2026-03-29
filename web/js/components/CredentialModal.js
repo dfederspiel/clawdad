@@ -20,11 +20,6 @@ const SERVICE_META = {
     help: 'Create at Settings > Access Tokens',
     defaultHost: 'gitlab.com',
   },
-  harness: {
-    label: 'Harness API Key',
-    help: 'From Account Settings > API Keys',
-    defaultHost: 'app.harness.io',
-  },
   launchdarkly: {
     label: 'LaunchDarkly API Key',
     help: 'From Account Settings > Authorization',
