@@ -1,0 +1,5 @@
+{
+  "watchlist": [],
+  "check_interval_minutes": 60,
+  "alert_on": "price_drop"
+}

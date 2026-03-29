@@ -117,7 +117,7 @@ onecli secrets create \
 
 ## Adding Other Service Credentials
 
-For non-Anthropic services (GitLab, Harness, Jira, etc.), use `--type generic` with the correct HTTP header:
+For non-Anthropic services (GitLab, Jira, etc.), use `--type generic` with the correct HTTP header:
 
 ```bash
 # GitLab (PRIVATE-TOKEN header)
@@ -128,14 +128,6 @@ onecli secrets create \
   --host-pattern gitlab.example.com \
   --header-name PRIVATE-TOKEN
 
-# Harness (x-api-key header)
-onecli secrets create \
-  --name Harness \
-  --type generic \
-  --value your-harness-key \
-  --host-pattern app.harness.io \
-  --header-name x-api-key
-
 # Atlassian/Jira (Basic auth via Authorization header)
 # Value must be base64(email:api-token) — OneCLI adds the "Basic " prefix via --value-format
 ENCODED=$(echo -n 'you@example.com:your-api-token' | base64)
@@ -143,7 +135,7 @@ onecli secrets create \
   --name Atlassian \
   --type generic \
   --value "$ENCODED" \
-  --host-pattern your-team.atlassian.net \
+  --host-pattern your-domain.atlassian.net \
   --header-name Authorization \
   --value-format "Basic {value}"
 
@@ -155,12 +147,12 @@ onecli secrets create \
   --host-pattern api.github.com \
   --header-name Authorization
 
-# Black Duck (Authorization: token header)
+# Custom Service (Authorization header — adapt header-name and value to your service)
 onecli secrets create \
-  --name BlackDuck \
+  --name MyService \
   --type generic \
-  --value "token your-bd-token" \
-  --host-pattern your-instance.blackduck.com \
+  --value "your-api-key" \
+  --host-pattern api.example.com \
   --header-name Authorization
 
 # LaunchDarkly (Authorization header)
@@ -184,10 +176,8 @@ The passthrough list includes variables matching these prefixes:
 | Prefix | Example Variables |
 |--------|-------------------|
 | `ANTHROPIC_BASE_URL` | Custom API endpoint URL |
-| `HARNESS_` | `HARNESS_ACCOUNT_ID` |
 | `GITLAB_` | `GITLAB_URL` |
 | `GITHUB_` | `GITHUB_ORG` |
-| `BLACKDUCK_` | `BLACKDUCK_URL` |
 | `LAUNCHDARKLY_` | `LAUNCHDARKLY_PROJECT` |
 | `FIGMA_` | `FIGMA_API_KEY` |
 | `ATLASSIAN_` | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL` |
@@ -246,7 +236,7 @@ curl -sf http://127.0.0.1:10254/health
 onecli secrets delete --id $(onecli secrets list | python3 -c "import sys,json; print(next(s['id'] for s in json.load(sys.stdin) if s['name']=='Atlassian'))")
 ENCODED=$(echo -n 'you@example.com:your-api-token' | base64)
 onecli secrets create --name Atlassian --type generic --value "$ENCODED" \
-  --host-pattern your-team.atlassian.net --header-name Authorization \
+  --host-pattern your-domain.atlassian.net --header-name Authorization \
   --value-format "Basic {value}"
 ```
 
@@ -286,7 +276,6 @@ onecli secrets create  --->  OneCLI Vault  --->  Injected at request time
 | `atlassian` | `Authorization: Basic {base64(email:token)}` | `*.atlassian.net` |
 | `gitlab` | `PRIVATE-TOKEN` | `gitlab.com` |
 | `github` | `Authorization: token {value}` | `*.github.com` |
-| `harness` | `x-api-key` | `app.harness.io` |
 | `launchdarkly` | `Authorization` | `app.launchdarkly.com` |
 
 ### Container-Side Script
@@ -301,8 +290,6 @@ onecli secrets create  --->  OneCLI Vault  --->  Injected at request time
 # GitHub
 /workspace/scripts/register-credential.sh github "ghp_xxxx" --wait
 
-# Harness
-/workspace/scripts/register-credential.sh harness "pat.xxxx" --wait
 ```
 
 The `--wait` flag blocks until the host confirms registration (up to 30s).

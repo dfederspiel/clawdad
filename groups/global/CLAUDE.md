@@ -156,7 +156,7 @@ Standard Markdown works: `**bold**`, `*italic*`, `[links](url)`, `# headings`.
 
 ## Credential Registration
 
-If you need API credentials for a service (Atlassian, GitLab, GitHub, Harness, LaunchDarkly), you can register them securely via IPC. The token is stored in the host's credential vault and injected into API requests automatically — it's never saved to a config file.
+If you need API credentials for a service (Atlassian, GitLab, GitHub, LaunchDarkly), you can register them securely via IPC. The token is stored in the host's credential vault and injected into API requests automatically — it's never saved to a config file.
 
 ```bash
 # Atlassian (requires --email for basic auth)
@@ -167,9 +167,6 @@ If you need API credentials for a service (Atlassian, GitLab, GitHub, Harness, L
 
 # GitHub
 /workspace/scripts/register-credential.sh github "ghp_xxxx" --wait
-
-# Harness
-/workspace/scripts/register-credential.sh harness "pat.xxxx" --wait
 
 # LaunchDarkly
 /workspace/scripts/register-credential.sh launchdarkly "api-xxxx" --wait

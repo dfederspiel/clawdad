@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sync web UI channel files between nanoclaw instances.
 # Usage: ./scripts/sync-web-ui.sh <target-repo>
-# Example: ./scripts/sync-web-ui.sh ~/code/bd-nanoclaw
+# Example: ./scripts/sync-web-ui.sh ~/code/clawdad
 
 set -euo pipefail
 

@@ -22,7 +22,7 @@ import { emitStatus } from './status.js';
 
 /**
  * Derive a unique service label from the project directory.
- * e.g. /Users/alice/code/bd-nanoclaw → "com.nanoclaw.bd-nanoclaw"
+ * e.g. /Users/alice/code/clawdad     → "com.nanoclaw.clawdad"
  *      /tmp/test-clawdad            → "com.nanoclaw.test-clawdad"
  *
  * Exported so verify.ts and tests can use the same logic.

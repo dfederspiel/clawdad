@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
-import { createGroup, handleSend } from '../app.js';
+import { createGroup } from '../app.js';
 import * as api from '../api.js';
 import { PrerequisiteCheck } from './PrerequisiteCheck.js';
 import { SetupWizard } from './SetupWizard.js';
@@ -83,9 +83,9 @@ export function OnboardingGuide({ onCustom, compact = false }) {
     setCreating(true);
     setError('');
     try {
-      await createGroup(template.name, template.id, template.id);
-      // Kickstart the agent — triggers its first-run setup flow
-      await handleSend('Hello! Help me get set up.');
+      const result = await createGroup(template.name, template.id, template.id);
+      // Kickstart the agent — send directly to avoid optimistic duplicate
+      await api.sendMessage(result.jid, 'Hello! Help me get set up.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -128,8 +128,8 @@ export function OnboardingGuide({ onCustom, compact = false }) {
 
   // Template picker — shown in both full and compact modes
   return html`
-    <div class="flex-1 flex items-center justify-center p-8">
-      <div class="max-w-2xl w-full">
+    <div class="flex-1 overflow-y-auto p-8">
+      <div class="max-w-2xl w-full mx-auto">
         <div class="text-center mb-8">
           ${compact ? html`
             <p class="text-sm text-txt-2">

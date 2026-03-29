@@ -98,7 +98,7 @@ AskUserQuestion: How do you connect to Claude?
 
 ### LiteLLM proxy path
 
-AskUserQuestion: "What's your LiteLLM proxy URL?" with placeholder `https://llm.labs.blackduck.com`.
+AskUserQuestion: "What's your LiteLLM proxy URL?" with placeholder `https://your-litellm-proxy.example.com`.
 
 Then ask: "What API key should I use for the proxy?" (They can paste it directly — handle gracefully.)
 
