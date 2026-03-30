@@ -367,6 +367,7 @@ async function runQuery(
   let lastAssistantUuid: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
+  const assistantTexts: string[] = [];
 
   // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
@@ -444,6 +445,15 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+      // Collect text from assistant messages for fallback if no result message arrives
+      const assistantMsg = message as { message?: { content?: { type: string; text?: string }[] } };
+      if (assistantMsg.message?.content) {
+        for (const block of assistantMsg.message.content) {
+          if (block.type === 'text' && block.text) {
+            assistantTexts.push(block.text);
+          }
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -470,6 +480,20 @@ async function runQuery(
 
   ipcPolling = false;
   log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
+
+  // If no result was emitted but we have assistant text, send it as the result
+  // This handles cases where the agent uses interactive elements (action buttons, rich blocks)
+  // and the SDK doesn't generate a result message because it's waiting for user input
+  if (resultCount === 0 && assistantTexts.length > 0) {
+    const combinedText = assistantTexts.join('\n\n');
+    log(`No result message received, using collected assistant text (${combinedText.length} chars)`);
+    writeOutput({
+      status: 'success',
+      result: combinedText,
+      newSessionId
+    });
+  }
+
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }
 

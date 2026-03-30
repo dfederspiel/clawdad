@@ -250,6 +250,13 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
+  // Pass model override for LiteLLM proxy routing (e.g., bedrock/us.anthropic.claude-opus-4-6-v1)
+  const envConfig = readEnvFile(['CLAUDE_MODEL']);
+  const claudeModel = process.env.CLAUDE_MODEL || envConfig.CLAUDE_MODEL;
+  if (claudeModel) {
+    args.push('-e', `CLAUDE_MODEL=${claudeModel}`);
+  }
+
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 

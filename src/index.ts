@@ -4,6 +4,7 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  DATA_DIR,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
@@ -30,6 +31,7 @@ import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
   PROXY_BIND_HOST,
+  stopContainer,
 } from './container-runtime.js';
 import {
   createThread,
@@ -71,7 +73,6 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import { checkGateway } from './health.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -1001,13 +1002,6 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
-
-  // Startup gateway probe + periodic recovery (survives laptop sleep/wake)
-  ensureGatewayHealthy().catch(() => {});
-  setInterval(
-    () => ensureGatewayHealthy().catch(() => {}),
-    GATEWAY_CHECK_INTERVAL,
-  );
 
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');

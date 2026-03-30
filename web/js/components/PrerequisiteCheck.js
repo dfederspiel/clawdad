@@ -163,9 +163,9 @@ export function PrerequisiteCheck({ onReady }) {
     return 'Docker not found';
   }
 
-  function onecliStatus() {
+  function credentialProxyStatus() {
     if (!health) return 'loading';
-    return health.onecli.status === 'running' ? 'ok' : 'error';
+    return health.credential_proxy.status === 'configured' ? 'ok' : 'error';
   }
 
   function anthropicStatus() {
@@ -212,16 +212,16 @@ export function PrerequisiteCheck({ onReady }) {
             `}
           <//>
 
-          <!-- OneCLI -->
+          <!-- Credential Proxy -->
           <${StatusCard}
-            title="OneCLI Gateway"
-            status=${onecliStatus()}
-            detail=${health?.onecli.status === 'running' ? 'Gateway running' : 'Gateway not reachable'}
+            title="Credentials"
+            status=${credentialProxyStatus()}
+            detail=${health?.credential_proxy.status === 'configured' ? 'Credentials configured in .env' : 'No credentials found'}
           >
-            ${health?.onecli.status === 'not_found' && html`
+            ${health?.credential_proxy.status === 'missing' && html`
               <div class="text-xs text-txt-muted space-y-1">
-                <p>Install and start OneCLI:</p>
-                <code class="block bg-bg px-2 py-1 rounded text-[10px] select-all">npm i -g @onecli-sh/cli && onecli start</code>
+                <p>Add your API key to .env:</p>
+                <code class="block bg-bg px-2 py-1 rounded text-[10px] select-all">echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env</code>
               </div>
             `}
           <//>
