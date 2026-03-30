@@ -55,22 +55,27 @@ function checkDocker(): HealthStatus['docker'] {
   }
 }
 
-function checkOneCLI(): Promise<HealthStatus['onecli']> {
+/** Returns true if the OneCLI gateway is responding on its health endpoint. */
+export function checkGateway(): Promise<boolean> {
   return new Promise((resolve) => {
     const url = new URL('/api/health', ONECLI_URL);
     const req = http.get(url, { timeout: 3000 }, (res) => {
-      // Any response means the gateway is up
       res.resume();
-      resolve({ status: 'running', url: ONECLI_URL });
+      resolve(true);
     });
-    req.on('error', () => {
-      resolve({ status: 'not_found', url: ONECLI_URL });
-    });
+    req.on('error', () => resolve(false));
     req.on('timeout', () => {
       req.destroy();
-      resolve({ status: 'not_found', url: ONECLI_URL });
+      resolve(false);
     });
   });
+}
+
+function checkOneCLI(): Promise<HealthStatus['onecli']> {
+  return checkGateway().then((healthy) => ({
+    status: healthy ? 'running' : 'not_found',
+    url: ONECLI_URL,
+  }));
 }
 
 function checkAnthropic(): HealthStatus['anthropic'] {
