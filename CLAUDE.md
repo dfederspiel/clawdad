@@ -4,7 +4,7 @@ Agent orchestrator running Claude in isolated containers. Web UI is the primary 
 
 ## Getting Started
 
-New users should run `claude` in the terminal and say "help me get set up" (or `/setup`). Claude walks through everything: Node.js, OneCLI, Docker, LiteLLM/Anthropic credentials, container build, and web UI start. No manual `npm install` needed.
+New users should run `claude` in the terminal and say "help me get set up" (or `/setup`). Claude walks through everything: Node.js, OneCLI, Docker, Anthropic credentials, container build, and web UI start. No manual `npm install` needed.
 
 The web UI runs at `http://localhost:3456`. Most users interact through:
 - **Web UI** — chat with agents, create from templates, review tasks
@@ -59,7 +59,7 @@ Run `./scripts/reset.sh` to wipe all runtime state and return to a clean templat
 
 ## Skills
 
-Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxonomy and guidelines.
+Four types of skills exist in ClawDad. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxonomy and guidelines.
 
 - **Feature skills** — merge a `skill/*` branch to add capabilities (e.g. `/add-telegram`, `/add-slack`)
 - **Utility skills** — ship code files alongside SKILL.md (e.g. `/claw`)
@@ -91,12 +91,12 @@ npm run build        # Compile TypeScript
 ./container/build.sh # Rebuild agent container
 ```
 
-Service management:
+Service management (if installed as a service via `/setup`):
 ```bash
 # macOS (launchd)
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
+launchctl load ~/Library/LaunchAgents/com.clawdad.plist
+launchctl unload ~/Library/LaunchAgents/com.clawdad.plist
+launchctl kickstart -k gui/$(id -u)/com.clawdad  # restart
 
 # Linux (systemd)
 systemctl --user start nanoclaw

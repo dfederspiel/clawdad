@@ -159,6 +159,55 @@ Clickable buttons the user can press. Clicking sends `[action: button_id]` as a 
 | `buttons` | yes | Array of `{ id, label, style? }` objects |
 | `style` | no | `primary` (blue), `danger` (red), `default` (gray) |
 
+### form
+Interactive form for collecting structured input from the user. Renders as labeled fields with a submit button. When submitted, sends a structured `[form: id]...[/form]` message back to you.
+
+```json
+{ "type": "form", "id": "project-setup", "title": "Project Configuration", "fields": [{ "name": "repo_url", "label": "Repository URL", "type": "text", "required": true, "placeholder": "https://github.com/..." }, { "name": "environment", "label": "Environment", "type": "select", "options": ["dev", "staging", "prod"] }, { "name": "auto_deploy", "label": "Enable auto-deploy", "type": "checkbox" }, { "name": "notes", "label": "Additional notes", "type": "textarea" }], "submitLabel": "Configure" }
+```
+
+**When to use:** Collecting multiple pieces of non-secret information at once — configuration, preferences, project details, onboarding data. Much better UX than asking questions one at a time. For secrets (API keys, tokens), use the credential popup instead.
+
+When submitted, you'll receive a message like:
+```
+[form: project-setup]
+repo_url: https://github.com/user/repo
+environment: staging
+auto_deploy: true
+notes: Use the beta branch
+[/form]
+```
+
+If the user cancels:
+```
+[form: project-setup]
+cancelled: true
+[/form]
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | yes | Unique identifier — used in the response tag |
+| `title` | no | Header text above the form |
+| `description` | no | Muted help text below the title |
+| `fields` | yes | Array of field objects (see below) |
+| `submitLabel` | no | Submit button text (default: "Submit") |
+| `cancelLabel` | no | Cancel button text (default: "Cancel", set to `false` to hide) |
+
+**Field types:**
+
+| Type | Description | Extra fields |
+|------|-------------|-------------|
+| `text` | Single-line text input | `placeholder` |
+| `email` | Email input with validation | `placeholder` |
+| `url` | URL input with validation | `placeholder` |
+| `number` | Numeric input | `placeholder` |
+| `select` | Dropdown menu | `options` (array of strings or `{ value, label }` objects) |
+| `checkbox` | Boolean toggle | — |
+| `textarea` | Multi-line text | `placeholder` |
+
+**Common field properties:** `name` (required), `label` (required), `type`, `required`, `default`, `placeholder`, `helpText`
+
 ## Combining blocks
 
 You can include multiple blocks in one fence, and interleave fences with prose:

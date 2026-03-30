@@ -345,7 +345,7 @@ Common gate types (configure based on your setup):
 
 ## Monitoring with schedule_task
 
-Use the `schedule_task` NanoClaw MCP tool to create polling observers:
+Use the `schedule_task` ClawDad MCP tool to create polling observers:
 
 - **Wait for new release**: Poll releases every 2 min until new version appears
 - **Wait for CI pipeline**: Poll pipeline status every 2 min until success/failure

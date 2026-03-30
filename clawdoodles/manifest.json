@@ -25,7 +25,8 @@
     { "id": "api-integration", "file": "blocks/api-integration.md", "teaches": "HTTP API calls via api.sh wrappers", "complexity": "intermediate" },
     { "id": "file-persistence", "file": "blocks/file-persistence.md", "teaches": "State files and history tracking", "complexity": "beginner" },
     { "id": "progressive-discovery", "file": "blocks/progressive-discovery.md", "teaches": "Suggesting features over time", "complexity": "beginner" },
-    { "id": "action-buttons", "file": "blocks/action-buttons.md", "teaches": "Clickable buttons for user choices", "complexity": "beginner" }
+    { "id": "action-buttons", "file": "blocks/action-buttons.md", "teaches": "Clickable buttons for user choices", "complexity": "beginner" },
+    { "id": "forms", "file": "blocks/forms.md", "teaches": "Interactive forms for structured input collection", "complexity": "beginner" }
   ],
   "fragments": [
     { "id": "first-run-check", "file": "fragments/first-run-check.md" },
