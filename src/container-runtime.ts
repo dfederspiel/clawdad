@@ -10,34 +10,7 @@ import path from 'path';
 import { logger } from './logger.js';
 
 /** The container runtime binary name. */
-export const CONTAINER_RUNTIME_BIN = 'container';
-
-/**
- * IP address containers use to reach the host machine.
- * Apple Container VMs use a bridge network (192.168.64.x); the host is at the gateway.
- * Detected from the bridge0 interface, falling back to 192.168.64.1.
- */
-export const CONTAINER_HOST_GATEWAY = detectHostGateway();
-
-function detectHostGateway(): string {
-  // Apple Container on macOS: containers reach the host via the bridge network gateway
-  const ifaces = os.networkInterfaces();
-  const bridge = ifaces['bridge100'] || ifaces['bridge0'];
-  if (bridge) {
-    const ipv4 = bridge.find((a) => a.family === 'IPv4');
-    if (ipv4) return ipv4.address;
-  }
-  // Fallback: Apple Container's default gateway
-  return '192.168.64.1';
-}
-
-/**
- * Address the credential proxy binds to.
- * Binds to the bridge interface IP so only Apple Container VMs can reach it.
- * Never 0.0.0.0 — that would expose credentials to the local network.
- */
-export const PROXY_BIND_HOST =
-  process.env.CREDENTIAL_PROXY_HOST || CONTAINER_HOST_GATEWAY;
+export const CONTAINER_RUNTIME_BIN = 'docker';
 
 /** Hostname containers use to reach the host machine. */
 export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
@@ -129,10 +102,10 @@ export function ensureContainerRuntimeRunning(): boolean {
         '║  Agents cannot run without a container runtime. To fix:        ║',
       );
       console.error(
-        '║  1. Ensure Apple Container is installed                        ║',
+        '║  1. Ensure Docker is installed                                 ║',
       );
       console.error(
-        '║  2. Run: container system start                                ║',
+        '║  2. Run: docker system start (or open Docker Desktop)          ║',
       );
       console.error(
         '║  3. Restart NanoClaw                                           ║',
@@ -143,6 +116,7 @@ export function ensureContainerRuntimeRunning(): boolean {
       throw new Error('Container runtime is required but failed to start');
     }
   }
+  return true;
 }
 
 /**
