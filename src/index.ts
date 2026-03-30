@@ -71,6 +71,11 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import {
+  extractSessionCommand,
+  handleSessionCommand,
+  isSessionCommandAllowed,
+} from './session-commands.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -290,10 +295,45 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return true;
   }
 
-  // For non-main groups, check if trigger is required and present.
-  // Skip this check for thread replies — the user is continuing a
-  // conversation with the triggered agent without re-triggering.
-  if (!isMainGroup && group.requiresTrigger !== false && !isThreadReply) {
+  // --- Session command interception (before trigger check) ---
+  const cmdResult = await handleSessionCommand({
+    missedMessages,
+    isMainGroup,
+    groupName: group.name,
+    triggerPattern: getTriggerPattern(group.trigger),
+    timezone: TIMEZONE,
+    deps: {
+      sendMessage: (text) => channel.sendMessage(chatJid, text),
+      setTyping: (typing) =>
+        channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
+      runAgent: (prompt, onOutput) =>
+        runAgent(group, prompt, chatJid, onOutput),
+      closeStdin: () => queue.closeStdin(chatJid),
+      advanceCursor: (ts) => {
+        lastAgentTimestamp[chatJid] = ts;
+        saveState();
+      },
+      formatMessages,
+      canSenderInteract: (msg) => {
+        const hasTrigger = getTriggerPattern(group.trigger).test(
+          msg.content.trim(),
+        );
+        const reqTrigger = !isMainGroup && group.requiresTrigger !== false;
+        return (
+          isMainGroup ||
+          !reqTrigger ||
+          (hasTrigger &&
+            (msg.is_from_me ||
+              isTriggerAllowed(chatJid, msg.sender, loadSenderAllowlist())))
+        );
+      },
+    },
+  });
+  if (cmdResult.handled) return cmdResult.success;
+  // --- End session command interception ---
+
+  // For non-main groups, check if trigger is required and present
+  if (!isMainGroup && group.requiresTrigger !== false) {
     const triggerPattern = getTriggerPattern(group.trigger);
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
@@ -301,7 +341,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         triggerPattern.test(m.content.trim()) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
-    if (!hasTrigger) return true;
+    if (!hasTrigger) {
+      return true;
+    }
   }
   const originJid = pendingOrigin?.originJid;
   const threadId = pendingOrigin?.threadId;
@@ -632,6 +674,37 @@ async function startMessageLoop(): Promise<void> {
           }
 
           const isMainGroup = group.isMain === true;
+
+          // --- Session command interception (message loop) ---
+          // Scan ALL messages in the batch for a session command.
+          const loopCmdMsg = groupMessages.find(
+            (m) =>
+              extractSessionCommand(
+                m.content,
+                getTriggerPattern(group.trigger),
+              ) !== null,
+          );
+
+          if (loopCmdMsg) {
+            // Only close active container if the sender is authorized — otherwise an
+            // untrusted user could kill in-flight work by sending /compact (DoS).
+            // closeStdin no-ops internally when no container is active.
+            if (
+              isSessionCommandAllowed(
+                isMainGroup,
+                loopCmdMsg.is_from_me === true,
+              )
+            ) {
+              queue.closeStdin(chatJid);
+            }
+            // Enqueue so processGroupMessages handles auth + cursor advancement.
+            // Don't pipe via IPC — slash commands need a fresh container with
+            // string prompt (not MessageStream) for SDK recognition.
+            queue.enqueueMessageCheck(chatJid);
+            continue;
+          }
+          // --- End session command interception ---
+
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
