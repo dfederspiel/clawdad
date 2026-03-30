@@ -5,7 +5,7 @@ description: Add WhatsApp emoji reaction support — receive, send, store, and s
 
 # Add Reactions
 
-This skill adds emoji reaction support to ClawDad's WhatsApp channel: receive and store reactions, send reactions from the container agent via MCP tool, and query reaction history from SQLite.
+This skill adds emoji reaction support to NanoClaw's WhatsApp channel: receive and store reactions, send reactions from the container agent via MCP tool, and query reaction history from SQLite.
 
 ## Phase 1: Pre-flight
 
@@ -76,12 +76,12 @@ npm run build
 
 Linux:
 ```bash
-systemctl --user restart clawdad
+systemctl --user restart nanoclaw
 ```
 
 macOS:
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.clawdad
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 ```
 
 ### Test receiving reactions
@@ -102,7 +102,7 @@ Ask the agent to react to a message via the `react_to_message` MCP tool. Check y
 
 ### Reactions not appearing in database
 
-- Check ClawDad logs for `Failed to process reaction` errors
+- Check NanoClaw logs for `Failed to process reaction` errors
 - Verify the chat is registered
 - Confirm the service is running
 
