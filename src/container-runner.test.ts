@@ -15,7 +15,17 @@ vi.mock('./config.js', () => ({
   DATA_DIR: '/tmp/nanoclaw-test-data',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
+  OLLAMA_ADMIN_TOOLS: false,
+  ONECLI_URL: 'http://127.0.0.1:10254',
   TIMEZONE: 'America/Los_Angeles',
+}));
+
+// Mock @onecli-sh/sdk — dynamic import, defaults to unavailable
+const mockApplyContainerConfig = vi.fn(async () => false);
+vi.mock('@onecli-sh/sdk', () => ({
+  OneCLI: vi.fn().mockImplementation(() => ({
+    applyContainerConfig: mockApplyContainerConfig,
+  })),
 }));
 
 // Mock logger
@@ -100,7 +110,11 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import {
+  runContainerAgent,
+  ContainerOutput,
+  _resetOneCLI,
+} from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -129,6 +143,7 @@ describe('container-runner timeout behavior', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     fakeProc = createFakeProcess();
+    _resetOneCLI();
   });
 
   afterEach(() => {
@@ -143,6 +158,11 @@ describe('container-runner timeout behavior', () => {
       () => {},
       onOutput,
     );
+
+    // Let async buildContainerArgs resolve (chained awaits need multiple microtask flushes)
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
 
     // Emit output with a result
     emitOutputMarker(fakeProc, {
@@ -180,6 +200,9 @@ describe('container-runner timeout behavior', () => {
       onOutput,
     );
 
+    // Let async buildContainerArgs resolve
+    await vi.advanceTimersByTimeAsync(0);
+
     // No output emitted — fire the hard timeout
     await vi.advanceTimersByTimeAsync(1830000);
 
@@ -202,6 +225,9 @@ describe('container-runner timeout behavior', () => {
       () => {},
       onOutput,
     );
+
+    // Let async buildContainerArgs resolve
+    await vi.advanceTimersByTimeAsync(0);
 
     // Emit output
     emitOutputMarker(fakeProc, {

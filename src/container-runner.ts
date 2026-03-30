@@ -16,6 +16,7 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   OLLAMA_ADMIN_TOOLS,
+  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -52,7 +53,27 @@ function logContainerEvent(
     // Best-effort — don't break container lifecycle on logging failure
   }
 }
+import type { OneCLI } from '@onecli-sh/sdk';
 import { RegisteredGroup } from './types.js';
+
+// Lazy-loaded OneCLI singleton — null means SDK is unavailable
+let onecliInstance: OneCLI | null | undefined;
+async function getOneCLI(): Promise<OneCLI | null> {
+  if (onecliInstance !== undefined) return onecliInstance;
+  try {
+    const mod = await import('@onecli-sh/sdk');
+    onecliInstance = new mod.OneCLI({ url: ONECLI_URL });
+    return onecliInstance;
+  } catch {
+    onecliInstance = null;
+    return null;
+  }
+}
+
+/** @internal Reset singleton for testing */
+export function _resetOneCLI(): void {
+  onecliInstance = undefined;
+}
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -335,11 +356,11 @@ function buildVolumeMounts(
   return mounts;
 }
 
-function buildContainerArgs(
+async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   isMain: boolean,
-): string[] {
+): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
@@ -350,14 +371,64 @@ function buildContainerArgs(
     args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
   }
 
-  // Route API traffic through the credential proxy (containers never see real secrets)
-  args.push(
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-  );
+  // --- Credential injection: OneCLI preferred, native proxy fallback ---
+  //
+  // OneCLI mode: applyContainerConfig() adds HTTPS_PROXY, CA certs, and
+  //   ANTHROPIC_API_KEY from the vault. The HTTPS proxy intercepts ALL
+  //   outbound HTTPS and injects credentials for every registered service.
+  //
+  // Native proxy mode: containers point ANTHROPIC_BASE_URL at a local HTTP
+  //   proxy that injects Anthropic credentials only. Other service credentials
+  //   are passed as env vars and consumed by auth-args.sh in the container.
+  let onecliApplied = false;
+  const onecli = await getOneCLI();
+  if (onecli) {
+    try {
+      onecliApplied = await onecli.applyContainerConfig(args);
+      if (onecliApplied) {
+        logger.info('Using OneCLI gateway for credential injection');
+        // Pass the real ANTHROPIC_BASE_URL from .env so the SDK targets
+        // the correct endpoint (e.g., a custom LiteLLM proxy). OneCLI's
+        // HTTPS proxy intercepts the outbound request and injects the key.
+        const baseUrlEnv = readEnvFile(['ANTHROPIC_BASE_URL']);
+        const baseUrl =
+          process.env.ANTHROPIC_BASE_URL || baseUrlEnv.ANTHROPIC_BASE_URL;
+        if (baseUrl && !args.some((a) => a.startsWith('ANTHROPIC_BASE_URL='))) {
+          args.push('-e', `ANTHROPIC_BASE_URL=${baseUrl}`);
+        }
+      }
+    } catch (err) {
+      logger.debug(
+        { err },
+        'OneCLI applyContainerConfig failed, falling back to native proxy',
+      );
+    }
+  }
+
+  if (!onecliApplied) {
+    // Native credential proxy fallback — only handles Anthropic API traffic.
+    // Route all Anthropic requests through our local proxy which injects credentials.
+    args.push(
+      '-e',
+      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    );
+
+    // Mirror the host's auth method with a placeholder value.
+    // API key mode: SDK sends x-api-key, proxy replaces with real key.
+    // OAuth mode:   SDK exchanges placeholder token for temp API key,
+    //               proxy injects real OAuth token on that exchange request.
+    const authMode = detectAuthMode();
+    if (authMode === 'api-key') {
+      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+    } else {
+      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    }
+  }
 
   // Pass through instance-specific environment variables from .env to the container.
-  // These are non-secret service keys the agent needs for API calls.
+  // In OneCLI mode: provides non-secret config (URLs, account IDs) — secrets are
+  // injected by the HTTPS proxy. In native mode: provides both config AND secrets
+  // consumed by auth-args.sh for API authentication.
   const PASSTHROUGH_ENV_PREFIXES = [
     'HARNESS_',
     'BLACKDUCK_',
@@ -385,17 +456,6 @@ function buildContainerArgs(
   );
   for (const [key, value] of Object.entries(envVars)) {
     args.push('-e', `${key}=${value}`);
-  }
-
-  // Mirror the host's auth method with a placeholder value.
-  // API key mode: SDK sends x-api-key, proxy replaces with real key.
-  // OAuth mode:   SDK exchanges placeholder token for temp API key,
-  //               proxy injects real OAuth token on that exchange request.
-  const authMode = detectAuthMode();
-  if (authMode === 'api-key') {
-    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
-  } else {
-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
   // Pass model override for LiteLLM proxy routing (e.g., bedrock/us.anthropic.claude-opus-4-6-v1)
@@ -452,7 +512,11 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
+  const containerArgs = await buildContainerArgs(
+    mounts,
+    containerName,
+    input.isMain,
+  );
 
   logger.debug(
     {
