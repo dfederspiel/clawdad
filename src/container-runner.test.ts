@@ -202,6 +202,8 @@ describe('container-runner timeout behavior', () => {
 
     // Let async buildContainerArgs resolve
     await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
 
     // No output emitted — fire the hard timeout
     await vi.advanceTimersByTimeAsync(1830000);
@@ -227,6 +229,8 @@ describe('container-runner timeout behavior', () => {
     );
 
     // Let async buildContainerArgs resolve
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);
 
     // Emit output
