@@ -10,7 +10,34 @@ import path from 'path';
 import { logger } from './logger.js';
 
 /** The container runtime binary name. */
-export const CONTAINER_RUNTIME_BIN = 'docker';
+export const CONTAINER_RUNTIME_BIN = 'container';
+
+/**
+ * IP address containers use to reach the host machine.
+ * Apple Container VMs use a bridge network (192.168.64.x); the host is at the gateway.
+ * Detected from the bridge0 interface, falling back to 192.168.64.1.
+ */
+export const CONTAINER_HOST_GATEWAY = detectHostGateway();
+
+function detectHostGateway(): string {
+  // Apple Container on macOS: containers reach the host via the bridge network gateway
+  const ifaces = os.networkInterfaces();
+  const bridge = ifaces['bridge100'] || ifaces['bridge0'];
+  if (bridge) {
+    const ipv4 = bridge.find((a) => a.family === 'IPv4');
+    if (ipv4) return ipv4.address;
+  }
+  // Fallback: Apple Container's default gateway
+  return '192.168.64.1';
+}
+
+/**
+ * Address the credential proxy binds to.
+ * Binds to the bridge interface IP so only Apple Container VMs can reach it.
+ * Never 0.0.0.0 — that would expose credentials to the local network.
+ */
+export const PROXY_BIND_HOST =
+  process.env.CREDENTIAL_PROXY_HOST || CONTAINER_HOST_GATEWAY;
 
 /** Hostname containers use to reach the host machine. */
 export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
@@ -55,7 +82,10 @@ export function readonlyMountArgs(
   hostPath: string,
   containerPath: string,
 ): string[] {
-  return ['-v', `${hostPath}:${containerPath}:ro`];
+  return [
+    '--mount',
+    `type=bind,source=${hostPath},target=${containerPath},readonly`,
+  ];
 }
 
 /** Stop a container by name. Uses execFileSync to avoid shell injection. */
@@ -63,7 +93,7 @@ export function stopContainer(name: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
     throw new Error(`Invalid container name: ${name}`);
   }
-  execSync(`${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`, { stdio: 'pipe' });
+  execSync(`${CONTAINER_RUNTIME_BIN} stop ${name}`, { stdio: 'pipe' });
 }
 
 /**
@@ -74,18 +104,44 @@ export function stopContainer(name: string): void {
  */
 export function ensureContainerRuntimeRunning(): boolean {
   try {
-    execSync(`${CONTAINER_RUNTIME_BIN} info`, {
-      stdio: 'pipe',
-      timeout: 10000,
-    });
+    execSync(`${CONTAINER_RUNTIME_BIN} system status`, { stdio: 'pipe' });
     logger.debug('Container runtime already running');
-    return true;
-  } catch (err) {
-    logger.warn(
-      { err },
-      'Container runtime not reachable — agents will not run until Docker is started',
-    );
-    return false;
+  } catch {
+    logger.info('Starting container runtime...');
+    try {
+      execSync(`${CONTAINER_RUNTIME_BIN} system start`, {
+        stdio: 'pipe',
+        timeout: 30000,
+      });
+      logger.info('Container runtime started');
+    } catch (err) {
+      logger.error({ err }, 'Failed to start container runtime');
+      console.error(
+        '\n╔════════════════════════════════════════════════════════════════╗',
+      );
+      console.error(
+        '║  FATAL: Container runtime failed to start                      ║',
+      );
+      console.error(
+        '║                                                                ║',
+      );
+      console.error(
+        '║  Agents cannot run without a container runtime. To fix:        ║',
+      );
+      console.error(
+        '║  1. Ensure Apple Container is installed                        ║',
+      );
+      console.error(
+        '║  2. Run: container system start                                ║',
+      );
+      console.error(
+        '║  3. Restart NanoClaw                                           ║',
+      );
+      console.error(
+        '╚════════════════════════════════════════════════════════════════╝\n',
+      );
+      throw new Error('Container runtime is required but failed to start');
+    }
   }
 }
 
