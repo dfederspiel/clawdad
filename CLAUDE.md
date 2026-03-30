@@ -102,6 +102,12 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
 systemctl --user start nanoclaw
 systemctl --user stop nanoclaw
 systemctl --user restart nanoclaw
+
+# Windows — both services start on login via scripts/start-clawdad.bat
+# (installed to the Windows Startup folder)
+# To start manually:
+node dist/index.js >> logs/clawdad.log 2>&1 &          # Web UI (Windows)
+wsl -d Ubuntu -- sleep infinity                          # WSL (triggers systemd → Discord + Gmail)
 ```
 
 ## Windows Setup Notes
@@ -132,7 +138,26 @@ curl -s http://127.0.0.1:10254/api/secrets
 node dist/index.js > logs/clawdad.log 2>&1 &
 ```
 
-**Service auto-start:** The built-in service setup (`npx tsx setup/index.ts --step service`) only supports macOS (launchd) and Linux (systemd). On Windows, start manually after reboot or create a Windows Task Scheduler entry.
+**Service auto-start:** On Windows, both instances start on login via `scripts/start-clawdad.bat` (copied to the Startup folder). This starts the Windows web UI and boots WSL, which triggers `nanoclaw.service` via systemd. To verify after reboot:
+```bash
+curl -sf http://localhost:3456/health    # Windows web UI
+wsl -d Ubuntu -e bash -ic "systemctl --user status nanoclaw.service"  # WSL Discord + Gmail
+```
+
+## Multi-Instance Architecture
+
+This install runs two separate instances:
+
+| Instance | Location | Channels | Trigger | Auto-start |
+|----------|----------|----------|---------|------------|
+| Windows | `C:\Users\david\code\clawdad-home` | Web UI (`:3456`) | `@DavidAF` | Startup folder bat |
+| WSL Ubuntu | `/home/david/code/nanoclaw` | Discord, Gmail | `@Andy` | systemd user service |
+
+**Important:** The Discord bot token can only have one active gateway connection. Starting multiple instances that include Discord will cause the bot to appear offline. Only the WSL nanoclaw instance should run Discord.
+
+**WSL gotcha:** Node is installed via Linuxbrew (`/home/linuxbrew/.linuxbrew/bin/node`) and is not in the non-interactive PATH. The systemd unit uses the full path. If starting manually, use `bash -ic` or the full node path.
+
+**Stale WSL services:** There are inactive systemd units (`com-nanoclaw-clawdad-test.service`, `com-nanoclaw-test2.service`) pointing at test repos. These are disabled. Only `nanoclaw.service` should be enabled.
 
 ## Troubleshooting
 
