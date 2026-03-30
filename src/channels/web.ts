@@ -285,6 +285,8 @@ export class WebChannel implements Channel {
         name: string;
         description: string;
         tier: string;
+        triggerScope?: string;
+        trigger?: string;
       }[] = [];
 
       // Helper: scan a directory for template folders with meta.json
@@ -297,17 +299,28 @@ export class WebChannel implements Channel {
           let name = entry.name;
           let description = '';
           let tier = 'recipe';
+          let triggerScope: string | undefined;
+          let trigger: string | undefined;
           if (fs.existsSync(metaPath)) {
             try {
               const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
               name = meta.name || name;
               description = meta.description || '';
               tier = meta.tier || 'recipe';
+              triggerScope = meta.triggerScope || undefined;
+              trigger = meta.trigger || undefined;
             } catch {
               /* use defaults */
             }
           }
-          templates.push({ id: entry.name, name, description, tier });
+          templates.push({
+            id: entry.name,
+            name,
+            description,
+            tier,
+            triggerScope,
+            trigger,
+          });
         }
       };
 
@@ -453,24 +466,14 @@ export class WebChannel implements Channel {
             }
           }
 
-          // Map global fields into agent-config fields used by templates
-          if (globalConfig.user_name)
-            agentConfig.user_name = globalConfig.user_name;
-          if (globalConfig.user_role)
-            agentConfig.user_role = globalConfig.user_role;
-          if (globalConfig.team) agentConfig.team_name = globalConfig.team;
-          if (globalConfig.organization)
-            agentConfig.organization = globalConfig.organization;
-          if (globalConfig.atlassian_instance)
-            agentConfig.atlassian_instance = globalConfig.atlassian_instance;
-          if (globalConfig.atlassian_email)
-            agentConfig.atlassian_email = globalConfig.atlassian_email;
-          if (globalConfig.jira_project_key)
-            agentConfig.jira_project_key = globalConfig.jira_project_key;
-          if (globalConfig.github_org)
-            agentConfig.github_org = globalConfig.github_org;
-          if (globalConfig.gitlab_url)
-            agentConfig.gitlab_url = globalConfig.gitlab_url;
+          // Merge all global config fields into agent-config.
+          // Pack setup[] defines what to collect; templates define what to read.
+          // The web channel is just a passthrough — no field-specific knowledge.
+          for (const [key, value] of Object.entries(globalConfig)) {
+            if (value != null && value !== '') {
+              agentConfig[key] = value;
+            }
+          }
 
           fs.writeFileSync(
             agentConfigPath,
