@@ -1,6 +1,10 @@
 /**
  * Achievement system — definitions, storage, and unlock logic.
  *
+ * Built-in achievements cover platform-level features (scheduling, threads,
+ * agent creation, streaks). Pack-specific achievements (e.g. Jira integration,
+ * Confluence reads) are loaded from the active pack's pack.json at startup.
+ *
  * Achievements are stored in groups/global/achievements.json and
  * broadcast via SSE when unlocked.
  */
@@ -18,18 +22,22 @@ export interface AchievementDef {
   name: string;
   description: string;
   hint: string; // shown when locked — guides discovery
-  tier: 'foundations' | 'builder' | 'mastery' | 'meta';
+  tier: string; // pack category group (e.g. 'first_steps', 'core_skills') or 'meta'
   xp: number;
 }
 
-export const ACHIEVEMENTS: AchievementDef[] = [
-  // Tier 1 — Foundations (Daily Briefing + Project Tracker)
+/**
+ * Built-in platform achievements — always available regardless of active pack.
+ * These cover core platform features, not domain-specific integrations.
+ */
+const BUILTIN_ACHIEVEMENTS: AchievementDef[] = [
+  // Platform features every pack can unlock
   {
     id: 'first_contact',
     name: 'First Contact',
     description: 'Sent your first message to an agent',
     hint: 'Send a message to any agent',
-    tier: 'foundations',
+    tier: 'platform',
     xp: 10,
   },
   {
@@ -37,7 +45,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     name: 'Clockwork',
     description: 'Set up your first scheduled task',
     hint: 'Ask an agent to do something on a schedule',
-    tier: 'foundations',
+    tier: 'platform',
     xp: 50,
   },
   {
@@ -45,15 +53,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     name: 'Proactive',
     description: 'Received a message an agent sent on its own',
     hint: 'Wait for an agent to reach out to you',
-    tier: 'foundations',
-    xp: 25,
-  },
-  {
-    id: 'researcher',
-    name: 'Researcher',
-    description: 'Had an agent search the web',
-    hint: 'Ask an agent to look something up online',
-    tier: 'foundations',
+    tier: 'platform',
     xp: 25,
   },
   {
@@ -61,97 +61,31 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     name: 'Good Memory',
     description: 'Agent recalled something from a previous session',
     hint: 'Come back later and see if your agent remembers',
-    tier: 'foundations',
+    tier: 'platform',
     xp: 25,
-  },
-  {
-    id: 'dashboard',
-    name: 'Dashboard',
-    description: 'Received a rich card, table, or chart',
-    hint: 'Ask for data in a visual format',
-    tier: 'foundations',
-    xp: 25,
-  },
-  {
-    id: 'plugged_in',
-    name: 'Plugged In',
-    description: 'Connected your first external service',
-    hint: 'Connect Jira, GitHub, or another service',
-    tier: 'foundations',
-    xp: 50,
-  },
-  {
-    id: 'on_watch',
-    name: 'On Watch',
-    description: 'Set up a polling task that reported back',
-    hint: 'Have an agent monitor something and report',
-    tier: 'foundations',
-    xp: 50,
-  },
-  {
-    id: 'audit_trail',
-    name: 'Audit Trail',
-    description: 'Reviewed what an agent has done',
-    hint: 'Ask an agent "what have you done?"',
-    tier: 'foundations',
-    xp: 25,
-  },
-  {
-    id: 'librarian',
-    name: 'Librarian',
-    description: 'Agent read from Confluence or a wiki',
-    hint: 'Connect to Confluence and ask about a page',
-    tier: 'foundations',
-    xp: 25,
-  },
-  {
-    id: 'ticket_machine',
-    name: 'Ticket Machine',
-    description: 'Agent created or updated a ticket',
-    hint: 'Have an agent create a Jira ticket for you',
-    tier: 'foundations',
-    xp: 50,
   },
   {
     id: 'night_shift',
     name: 'Night Shift',
     description: 'A scheduled task ran while you were away',
     hint: 'Schedule a task and check back later',
-    tier: 'foundations',
+    tier: 'platform',
     xp: 50,
   },
-
-  // Tier 2 — Builder (Workflow Builder + Specialist + Site Monitor)
   {
-    id: 'browser_bot',
-    name: 'Browser Bot',
-    description: 'Agent navigated a real website',
-    hint: 'Have an agent browse a website for you',
-    tier: 'builder',
-    xp: 75,
-  },
-  {
-    id: 'assembly_line',
-    name: 'Assembly Line',
-    description: 'Created a workflow with 3+ scheduled tasks',
-    hint: 'Build a multi-step automated workflow',
-    tier: 'builder',
-    xp: 75,
-  },
-  {
-    id: 'apprentice',
-    name: 'Apprentice',
-    description: 'Taught an agent a new multi-step task',
-    hint: 'Walk an agent through a repeatable process',
-    tier: 'builder',
-    xp: 75,
+    id: 'thread_weaver',
+    name: 'Thread Weaver',
+    description: 'Continued a conversation in a thread',
+    hint: 'Reply to an agent in a thread',
+    tier: 'platform',
+    xp: 50,
   },
   {
     id: 'specialist',
     name: 'Specialist',
     description: 'Created a triggered @-mention agent',
     hint: 'Create an agent you can summon with @',
-    tier: 'builder',
+    tier: 'platform',
     xp: 75,
   },
   {
@@ -159,41 +93,31 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     name: 'Cross-Talk',
     description: 'Used a triggered agent from a different chat',
     hint: 'Use @mention to call an agent from another chat',
-    tier: 'builder',
+    tier: 'platform',
     xp: 75,
   },
   {
-    id: 'thread_weaver',
-    name: 'Thread Weaver',
-    description: 'Continued a conversation in a thread',
-    hint: 'Reply to an agent in a thread',
-    tier: 'builder',
-    xp: 50,
-  },
-  {
-    id: 'sentinel',
-    name: 'Sentinel',
-    description: 'Set up a website or API monitor',
-    hint: 'Have an agent watch a URL for changes',
-    tier: 'builder',
+    id: 'assembly_line',
+    name: 'Assembly Line',
+    description: 'Created a workflow with 3+ scheduled tasks',
+    hint: 'Build a multi-step automated workflow',
+    tier: 'platform',
     xp: 75,
   },
   {
-    id: 'diff_detective',
-    name: 'Diff Detective',
-    description: 'Received a diff showing what changed',
-    hint: 'Get a before/after comparison from an agent',
-    tier: 'builder',
-    xp: 50,
+    id: 'apprentice',
+    name: 'Apprentice',
+    description: 'Taught an agent a new multi-step task',
+    hint: 'Walk an agent through a repeatable process',
+    tier: 'platform',
+    xp: 75,
   },
-
-  // Tier 3 — Mastery (Command Center)
   {
     id: 'architect',
     name: 'Architect',
     description: 'Running 3+ active agent groups',
     hint: 'Create and run multiple agents',
-    tier: 'mastery',
+    tier: 'platform',
     xp: 100,
   },
   {
@@ -201,7 +125,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     name: 'Team Player',
     description: 'Used agent teams (sub-agents)',
     hint: 'Have an agent spawn helpers',
-    tier: 'mastery',
+    tier: 'platform',
     xp: 100,
   },
   {
@@ -209,7 +133,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     name: 'Commander',
     description: 'Created an agent from another agent',
     hint: 'Let an agent create a new agent for you',
-    tier: 'mastery',
+    tier: 'platform',
     xp: 100,
   },
   {
@@ -217,35 +141,11 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     name: 'Template Creator',
     description: 'Saved a custom template',
     hint: 'Build something worth reusing',
-    tier: 'mastery',
+    tier: 'platform',
     xp: 150,
   },
 
   // Meta achievements (aggregate, checked via telemetry)
-  {
-    id: 'foundations_complete',
-    name: 'Foundation Graduate',
-    description: 'Unlocked all Foundation achievements',
-    hint: 'Complete all 12 Foundation achievements',
-    tier: 'meta',
-    xp: 200,
-  },
-  {
-    id: 'builder_complete',
-    name: 'Master Builder',
-    description: 'Unlocked all Builder achievements',
-    hint: 'Complete all 8 Builder achievements',
-    tier: 'meta',
-    xp: 300,
-  },
-  {
-    id: 'mastery_complete',
-    name: 'Grand Architect',
-    description: 'Unlocked all Mastery achievements',
-    hint: 'Complete all 4 Mastery achievements',
-    tier: 'meta',
-    xp: 500,
-  },
   {
     id: 'centurion',
     name: 'Centurion',
@@ -270,10 +170,107 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     tier: 'meta',
     xp: 250,
   },
+  {
+    id: 'pack_complete',
+    name: 'Completionist',
+    description: 'Unlocked every achievement in the active pack',
+    hint: 'Unlock all non-meta achievements',
+    tier: 'meta',
+    xp: 500,
+  },
 ];
 
-const ACHIEVEMENT_IDS = new Set(ACHIEVEMENTS.map((a) => a.id));
-const ACHIEVEMENT_MAP = new Map(ACHIEVEMENTS.map((a) => [a.id, a]));
+// --- Mutable runtime state (built-ins + pack achievements) ---
+
+let allAchievements: AchievementDef[] = [...BUILTIN_ACHIEVEMENTS];
+let achievementIds: Set<string> = new Set(allAchievements.map((a) => a.id));
+let achievementMap: Map<string, AchievementDef> = new Map(
+  allAchievements.map((a) => [a.id, a]),
+);
+
+function rebuildIndex(): void {
+  achievementIds = new Set(allAchievements.map((a) => a.id));
+  achievementMap = new Map(allAchievements.map((a) => [a.id, a]));
+}
+
+/**
+ * Load achievements from a pack.json file and merge with built-ins.
+ * Pack achievements are added alongside built-ins; if a pack defines an ID
+ * that conflicts with a built-in, the built-in wins (with a warning log).
+ */
+export function loadPackAchievements(packJsonPath: string): void {
+  let packJson: {
+    name?: string;
+    achievements?: Record<
+      string,
+      {
+        id: string;
+        name: string;
+        description: string;
+        hint?: string;
+        xp?: number;
+      }[]
+    >;
+  };
+  try {
+    packJson = JSON.parse(fs.readFileSync(packJsonPath, 'utf-8'));
+  } catch (err) {
+    logger.warn(
+      { err, path: packJsonPath },
+      'Failed to read pack.json for achievements',
+    );
+    return;
+  }
+
+  const packName = packJson.name || path.basename(path.dirname(packJsonPath));
+  if (!packJson.achievements) return;
+
+  // Reset to built-ins before loading (supports pack switching)
+  allAchievements = [...BUILTIN_ACHIEVEMENTS];
+  rebuildIndex();
+
+  let loaded = 0;
+  for (const [groupName, groupAchievements] of Object.entries(
+    packJson.achievements,
+  )) {
+    if (!Array.isArray(groupAchievements)) continue;
+    for (const ach of groupAchievements) {
+      if (achievementIds.has(ach.id)) {
+        // Built-in wins — skip silently (common for shared IDs like first_contact)
+        continue;
+      }
+      allAchievements.push({
+        id: ach.id,
+        name: ach.name,
+        description: ach.description,
+        hint: ach.hint || ach.description,
+        tier: groupName,
+        xp: ach.xp || 10,
+      });
+      loaded++;
+    }
+  }
+
+  rebuildIndex();
+  logger.info(
+    { pack: packName, packAchievements: loaded, total: allAchievements.length },
+    'Loaded pack achievements',
+  );
+}
+
+/**
+ * Get achievement list for passing to container agents.
+ * Excludes meta achievements (telemetry-driven, not agent-triggered).
+ */
+export function getAchievementsForContainer(): {
+  id: string;
+  name: string;
+  description: string;
+}[] {
+  return allAchievements
+    .filter((a) => a.tier !== 'meta')
+    .map((a) => ({ id: a.id, name: a.name, description: a.description }));
+}
 
 // --- State ---
 
@@ -347,7 +344,7 @@ export function unlockAchievement(
   id: string,
   group: string,
 ): AchievementDef | null {
-  if (!ACHIEVEMENT_IDS.has(id)) {
+  if (!achievementIds.has(id)) {
     logger.warn({ id }, 'Unknown achievement ID');
     return null;
   }
@@ -357,7 +354,7 @@ export function unlockAchievement(
     return null; // Already unlocked
   }
 
-  const def = ACHIEVEMENT_MAP.get(id)!;
+  const def = achievementMap.get(id)!;
   state.unlocked[id] = {
     unlockedAt: new Date().toISOString(),
     group,
@@ -367,7 +364,7 @@ export function unlockAchievement(
   saveState(state);
   logger.info({ achievement: id, xp: def.xp, group }, 'Achievement unlocked');
 
-  // Check if this completes a tier (meta achievements)
+  // Check if this completes all non-meta achievements (pack_complete)
   checkMetaAchievements(state);
 
   return def;
@@ -375,48 +372,24 @@ export function unlockAchievement(
 
 /**
  * Check and unlock meta achievements based on current state.
- * Returns array of newly unlocked meta achievements.
+ * Dynamically checks whether all non-meta achievements are unlocked.
  */
 function checkMetaAchievements(state: AchievementState): AchievementDef[] {
   const newlyUnlocked: AchievementDef[] = [];
 
-  const foundationsAll = ACHIEVEMENTS.filter(
-    (a) => a.tier === 'foundations',
-  ).every((a) => state.unlocked[a.id]);
-  if (foundationsAll && !state.unlocked['foundations_complete']) {
-    const def = ACHIEVEMENT_MAP.get('foundations_complete')!;
-    state.unlocked['foundations_complete'] = {
-      unlockedAt: new Date().toISOString(),
-      group: 'meta',
-    };
-    state.xp += def.xp;
-    newlyUnlocked.push(def);
-  }
-
-  const builderAll = ACHIEVEMENTS.filter((a) => a.tier === 'builder').every(
-    (a) => state.unlocked[a.id],
-  );
-  if (builderAll && !state.unlocked['builder_complete']) {
-    const def = ACHIEVEMENT_MAP.get('builder_complete')!;
-    state.unlocked['builder_complete'] = {
-      unlockedAt: new Date().toISOString(),
-      group: 'meta',
-    };
-    state.xp += def.xp;
-    newlyUnlocked.push(def);
-  }
-
-  const masteryAll = ACHIEVEMENTS.filter((a) => a.tier === 'mastery').every(
-    (a) => state.unlocked[a.id],
-  );
-  if (masteryAll && !state.unlocked['mastery_complete']) {
-    const def = ACHIEVEMENT_MAP.get('mastery_complete')!;
-    state.unlocked['mastery_complete'] = {
-      unlockedAt: new Date().toISOString(),
-      group: 'meta',
-    };
-    state.xp += def.xp;
-    newlyUnlocked.push(def);
+  // pack_complete: all non-meta achievements unlocked
+  const nonMeta = allAchievements.filter((a) => a.tier !== 'meta');
+  const allDone = nonMeta.every((a) => state.unlocked[a.id]);
+  if (allDone && nonMeta.length > 0 && !state.unlocked['pack_complete']) {
+    const def = achievementMap.get('pack_complete');
+    if (def) {
+      state.unlocked['pack_complete'] = {
+        unlockedAt: new Date().toISOString(),
+        group: 'meta',
+      };
+      state.xp += def.xp;
+      newlyUnlocked.push(def);
+    }
   }
 
   if (newlyUnlocked.length > 0) {
@@ -439,7 +412,7 @@ export function checkTelemetryAchievements(telemetry: {
   const newlyUnlocked: AchievementDef[] = [];
 
   if ((telemetry.totalMessages || 0) >= 100 && !state.unlocked['centurion']) {
-    const def = ACHIEVEMENT_MAP.get('centurion')!;
+    const def = achievementMap.get('centurion')!;
     state.unlocked['centurion'] = {
       unlockedAt: new Date().toISOString(),
       group: 'meta',
@@ -449,7 +422,7 @@ export function checkTelemetryAchievements(telemetry: {
   }
 
   if ((telemetry.currentStreak || 0) >= 7 && !state.unlocked['streak_7']) {
-    const def = ACHIEVEMENT_MAP.get('streak_7')!;
+    const def = achievementMap.get('streak_7')!;
     state.unlocked['streak_7'] = {
       unlockedAt: new Date().toISOString(),
       group: 'meta',
@@ -459,7 +432,7 @@ export function checkTelemetryAchievements(telemetry: {
   }
 
   if ((telemetry.currentStreak || 0) >= 30 && !state.unlocked['streak_30']) {
-    const def = ACHIEVEMENT_MAP.get('streak_30')!;
+    const def = achievementMap.get('streak_30')!;
     state.unlocked['streak_30'] = {
       unlockedAt: new Date().toISOString(),
       group: 'meta',
@@ -477,31 +450,26 @@ export function checkTelemetryAchievements(telemetry: {
 
 /**
  * Get achievement state for API response.
+ * Progress is grouped dynamically by tier (from pack categories + 'platform' + 'meta').
  */
 export function getAchievementResponse(): {
   definitions: AchievementDef[];
   state: AchievementState;
-  progress: {
-    foundations: { unlocked: number; total: number };
-    builder: { unlocked: number; total: number };
-    mastery: { unlocked: number; total: number };
-  };
+  progress: Record<string, { unlocked: number; total: number }>;
 } {
   const state = loadAchievements();
 
-  const countTier = (tier: AchievementDef['tier']) => {
-    const all = ACHIEVEMENTS.filter((a) => a.tier === tier);
-    const unlocked = all.filter((a) => state.unlocked[a.id]).length;
-    return { unlocked, total: all.length };
-  };
+  const progress: Record<string, { unlocked: number; total: number }> = {};
+  for (const ach of allAchievements) {
+    if (ach.tier === 'meta') continue;
+    if (!progress[ach.tier]) progress[ach.tier] = { unlocked: 0, total: 0 };
+    progress[ach.tier].total++;
+    if (state.unlocked[ach.id]) progress[ach.tier].unlocked++;
+  }
 
   return {
-    definitions: ACHIEVEMENTS,
+    definitions: allAchievements,
     state,
-    progress: {
-      foundations: countTier('foundations'),
-      builder: countTier('builder'),
-      mastery: countTier('mastery'),
-    },
+    progress,
   };
 }

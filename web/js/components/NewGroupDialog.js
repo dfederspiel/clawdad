@@ -31,7 +31,7 @@ function TemplateCard({ template, onSelect, creating }) {
   `;
 }
 
-export function NewGroupDialog({ open, onClose }) {
+export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
   const dialogRef = useRef(null);
   const [templates, setTemplates] = useState([]);
   const [view, setView] = useState('pick'); // 'pick' | 'name' | 'custom'
@@ -50,7 +50,7 @@ export function NewGroupDialog({ open, onClose }) {
       if (dialogRef.current && !dialogRef.current.open) {
         dialogRef.current.showModal();
       }
-      setView('pick');
+      setView(initialView);
       setError('');
       api.getTemplates().then((data) => setTemplates(data.templates || [])).catch(() => {});
     } else if (dialogRef.current?.open) {
@@ -66,7 +66,13 @@ export function NewGroupDialog({ open, onClose }) {
     setSubmitting(true);
     setError('');
     try {
-      const result = await createGroup(template.name, template.id, template.id);
+      const opts = {};
+      if (template.triggerScope) {
+        opts.triggerScope = template.triggerScope;
+        opts.trigger = template.trigger || `@${template.name}`;
+        opts.description = template.description || '';
+      }
+      const result = await createGroup(template.name, template.id, template.id, opts);
       await api.sendMessage(result.jid, 'Hello! Help me get set up.');
       resetForm();
       onClose();
@@ -296,13 +302,15 @@ export function NewGroupDialog({ open, onClose }) {
         <form onSubmit=${onSubmit} class="p-6 flex flex-col gap-4">
           <div class="flex items-center justify-between">
             <h2 class="text-lg font-semibold">Custom Agent</h2>
-            <button
-              type="button"
-              class="text-sm text-txt-muted hover:text-txt transition-colors"
-              onClick=${() => setView('pick')}
-            >
-              Back to templates
-            </button>
+            ${initialView !== 'custom' && html`
+              <button
+                type="button"
+                class="text-sm text-txt-muted hover:text-txt transition-colors"
+                onClick=${() => setView('pick')}
+              >
+                Back to templates
+              </button>
+            `}
           </div>
 
           <div class="flex flex-col gap-1.5">
