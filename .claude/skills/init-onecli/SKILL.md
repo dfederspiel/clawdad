@@ -164,7 +164,7 @@ Tell the user: "Migrated your Anthropic credentials from `.env` to the OneCLI Ag
 
 After handling Anthropic credentials (whether migrated or freshly registered), scan `.env` again for remaining credential variables that containers use for outbound API calls.
 
-**Important:** Only migrate credentials that containers use via outbound HTTPS. Channel tokens (`TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `DISCORD_BOT_TOKEN`) are used by the NanoClaw host process to connect to messaging platforms — they must stay in `.env`.
+**Important:** Only migrate credentials that containers use via outbound HTTPS. Channel tokens (`TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `DISCORD_BOT_TOKEN`) are used by the ClawDad host process to connect to messaging platforms — they must stay in `.env`.
 
 Known container-facing credentials:
 
@@ -248,16 +248,16 @@ npm run build
 If build fails, diagnose and fix. Common issue: `@onecli-sh/sdk` not installed — run `npm install` first.
 
 Restart the service:
-- macOS (launchd): `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
-- Linux (systemd): `systemctl --user restart nanoclaw`
-- WSL/manual: stop and re-run `bash start-nanoclaw.sh`
+- macOS (launchd): `launchctl kickstart -k gui/$(id -u)/com.clawdad`
+- Linux (systemd): `systemctl --user restart clawdad`
+- WSL/manual: stop and re-run `bash start-clawdad.sh`
 
 ## Phase 5: Verify
 
 Check logs for successful OneCLI integration:
 
 ```bash
-tail -30 logs/nanoclaw.log | grep -i "onecli\|gateway"
+tail -30 logs/clawdad.log | grep -i "onecli\|gateway"
 ```
 
 Expected: `OneCLI gateway config applied` messages when containers start.

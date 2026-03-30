@@ -52,15 +52,15 @@ npm run build
 ### Restart service
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
-# Linux: systemctl --user restart nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.clawdad  # macOS
+# Linux: systemctl --user restart clawdad
 ```
 
 ## Phase 3: Verify
 
 ### Integration Test
 
-1. Start NanoClaw in dev mode: `npm run dev`
+1. Start ClawDad in dev mode: `npm run dev`
 2. From the **main group** (self-chat), send exactly: `/compact`
 3. Verify:
    - The agent acknowledges compaction (e.g., "Conversation compacted.")
@@ -117,7 +117,7 @@ npm test
 
 - **Main-group or trusted/admin sender only.** The main group is the user's private self-chat and is trusted (see `docs/SECURITY.md`). Non-main groups are untrusted — a careless or malicious user could wipe the agent's short-term memory. However, the device owner (`is_from_me`) is always trusted and can compact from any group.
 - **No auto-compaction.** This skill implements manual compaction only. Automatic threshold-based compaction is a separate concern and should be a separate skill.
-- **No config file.** NanoClaw's philosophy is customization through code changes, not configuration sprawl.
+- **No config file.** ClawDad's philosophy is customization through code changes, not configuration sprawl.
 - **Transcript archived before compaction.** The existing `PreCompact` hook in the agent-runner archives the full transcript to `conversations/` before the SDK compacts it.
 - **Session continues after compaction.** This is not a destructive reset. The conversation continues with summarized context.
 

@@ -314,7 +314,7 @@ TELEGRAM_BOT_POOL=TOKEN1,TOKEN2,TOKEN3,...
 cp .env data/env/env
 ```
 
-Also add `TELEGRAM_BOT_POOL` to the launchd plist (`~/Library/LaunchAgents/com.nanoclaw.plist`) in the `EnvironmentVariables` dict if using launchd.
+Also add `TELEGRAM_BOT_POOL` to the launchd plist (`~/Library/LaunchAgents/com.clawdad.plist`) in the `EnvironmentVariables` dict if using launchd.
 
 ### Step 7: Rebuild and Restart
 
@@ -322,10 +322,10 @@ Also add `TELEGRAM_BOT_POOL` to the launchd plist (`~/Library/LaunchAgents/com.n
 npm run build
 ./container/build.sh  # Required — MCP tool changed
 # macOS:
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl unload ~/Library/LaunchAgents/com.clawdad.plist
+launchctl load ~/Library/LaunchAgents/com.clawdad.plist
 # Linux:
-# systemctl --user restart nanoclaw
+# systemctl --user restart clawdad
 ```
 
 Must use `unload/load` (macOS) or `restart` (Linux) because the service env vars changed.
@@ -342,7 +342,7 @@ Tell the user:
 > - Each subagent messaging from a different bot, renamed to their role
 > - Short, scannable messages from each agent
 >
-> Check logs: `tail -f logs/nanoclaw.log | grep -i pool`
+> Check logs: `tail -f logs/clawdad.log | grep -i pool`
 
 ## Architecture Notes
 
@@ -358,7 +358,7 @@ Tell the user:
 ### Pool bots not sending messages
 
 1. Verify tokens: `curl -s "https://api.telegram.org/botTOKEN/getMe"`
-2. Check pool initialized: `grep "Pool bot" logs/nanoclaw.log`
+2. Check pool initialized: `grep "Pool bot" logs/clawdad.log`
 3. Ensure all pool bots are members of the Telegram group
 4. Check Group Privacy is disabled for each pool bot
 
@@ -381,4 +381,4 @@ To remove Agent Swarm support while keeping basic Telegram:
 5. Remove `sender` param from MCP tool in `container/agent-runner/src/ipc-mcp-stdio.ts`
 6. Remove Agent Teams section from group CLAUDE.md files
 7. Remove `TELEGRAM_BOT_POOL` from `.env`, `data/env/env`, and launchd plist/systemd unit
-8. Rebuild: `npm run build && ./container/build.sh && launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist && launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist` (macOS) or `npm run build && ./container/build.sh && systemctl --user restart nanoclaw` (Linux)
+8. Rebuild: `npm run build && ./container/build.sh && launchctl unload ~/Library/LaunchAgents/com.clawdad.plist && launchctl load ~/Library/LaunchAgents/com.clawdad.plist` (macOS) or `npm run build && ./container/build.sh && systemctl --user restart clawdad` (Linux)
