@@ -68,6 +68,10 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import {
+  loadPackAchievements,
+  getAchievementsForContainer,
+} from './achievements.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -554,6 +558,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        achievements: getAchievementsForContainer(),
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -824,6 +829,27 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
+
+  // Load pack-defined achievements (merged with built-ins)
+  const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
+  let activePack = 'starter';
+  try {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(clawdoodlesDir, 'manifest.json'), 'utf-8'),
+    );
+    activePack = manifest.activePack || 'starter';
+  } catch {
+    /* use default */
+  }
+  const packJsonPath = path.join(
+    clawdoodlesDir,
+    'packs',
+    activePack,
+    'pack.json',
+  );
+  if (fs.existsSync(packJsonPath)) {
+    loadPackAchievements(packJsonPath);
+  }
 
   // Rebuild active threads map from DB
   for (const t of getAllThreads()) {
