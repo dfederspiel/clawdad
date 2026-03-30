@@ -232,7 +232,7 @@ gh pr create \
 [describe what was changed and why]
 
 ---
-_Automated fix from NanoClaw bug triage agent. Please review carefully._"
+_Automated fix from ClawDad bug triage agent. Please review carefully._"
 ```
 
 ### Safety Rules

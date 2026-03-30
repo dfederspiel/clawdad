@@ -1,18 +1,18 @@
 # Add Parallel AI Integration
 
-Adds Parallel AI MCP integration to NanoClaw for advanced web research capabilities.
+Adds Parallel AI MCP integration to ClawDad for advanced web research capabilities.
 
 ## What This Adds
 
 - **Quick Search** - Fast web lookups using Parallel Search API (free to use)
 - **Deep Research** - Comprehensive analysis using Parallel Task API (asks permission)
-- **Non-blocking Design** - Uses NanoClaw scheduler for result polling (no container blocking)
+- **Non-blocking Design** - Uses ClawDad scheduler for result polling (no container blocking)
 
 ## Prerequisites
 
 User must have:
 1. Parallel AI API key from https://platform.parallel.ai
-2. NanoClaw already set up and running
+2. ClawDad already set up and running
 3. Docker installed and running
 
 ## Implementation Steps
@@ -224,7 +224,7 @@ Build the container with updated agent runner:
 
 Verify the build:
 ```bash
-echo '{}' | docker run -i --entrypoint /bin/echo nanoclaw-agent:latest "Container OK"
+echo '{}' | docker run -i --entrypoint /bin/echo clawdad-agent:latest "Container OK"
 ```
 
 ### 7. Restart Service
@@ -233,15 +233,15 @@ Rebuild the main app and restart:
 
 ```bash
 npm run build
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
-# Linux: systemctl --user restart nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.clawdad  # macOS
+# Linux: systemctl --user restart clawdad
 ```
 
 Wait 3 seconds for service to start, then verify:
 ```bash
 sleep 3
-launchctl list | grep nanoclaw  # macOS
-# Linux: systemctl --user status nanoclaw
+launchctl list | grep clawdad  # macOS
+# Linux: systemctl --user status clawdad
 ```
 
 ### 8. Test Integration
@@ -257,7 +257,7 @@ Tell the user to test:
 
 Check logs to verify MCP servers loaded:
 ```bash
-tail -20 logs/nanoclaw.log
+tail -20 logs/clawdad.log
 ```
 
 Look for: `Parallel AI MCP servers configured`
@@ -276,7 +276,7 @@ Look for: `Parallel AI MCP servers configured`
 
 **Task polling not working:**
 - Verify scheduled task was created: `sqlite3 store/messages.db "SELECT * FROM scheduled_tasks"`
-- Check task runs: `tail -f logs/nanoclaw.log | grep "scheduled task"`
+- Check task runs: `tail -f logs/clawdad.log | grep "scheduled task"`
 - Ensure task prompt includes proper Parallel MCP tool names
 
 ## Uninstalling
@@ -287,4 +287,4 @@ To remove Parallel AI integration:
 2. Revert changes to container-runner.ts and agent-runner/src/index.ts
 3. Remove Web Research Tools section from groups/main/CLAUDE.md
 4. Rebuild: `./container/build.sh && npm run build`
-5. Restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux)
+5. Restart: `launchctl kickstart -k gui/$(id -u)/com.clawdad` (macOS) or `systemctl --user restart clawdad` (Linux)

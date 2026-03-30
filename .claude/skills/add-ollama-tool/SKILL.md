@@ -123,8 +123,8 @@ OLLAMA_HOST=http://your-ollama-host:11434
 ### Restart the service
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
-# Linux: systemctl --user restart nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.clawdad  # macOS
+# Linux: systemctl --user restart clawdad
 ```
 
 ## Phase 4: Verify
@@ -156,7 +156,7 @@ Run the watcher script for macOS notifications when Ollama is used:
 ### Check logs if needed
 
 ```bash
-tail -f logs/nanoclaw.log | grep -i ollama
+tail -f logs/clawdad.log | grep -i ollama
 ```
 
 Look for:
