@@ -73,6 +73,7 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { checkGateway } from './health.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -101,6 +102,27 @@ const channels: Channel[] = [];
 const queue = new GroupQueue();
 
 const onecli = new OneCLI({ url: ONECLI_URL });
+
+const GATEWAY_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Probes the OneCLI gateway and attempts recovery if it's down.
+ * The gateway dies on laptop sleep; applyContainerConfig with empty args
+ * triggers the SDK to restart it.
+ */
+async function ensureGatewayHealthy(): Promise<boolean> {
+  const healthy = await checkGateway();
+  if (healthy) return true;
+
+  logger.warn('OneCLI gateway unreachable, attempting recovery...');
+  const recovered = await onecli.applyContainerConfig([], {});
+  if (recovered) {
+    logger.info('OneCLI gateway recovered');
+  } else {
+    logger.error('OneCLI gateway recovery failed');
+  }
+  return recovered;
+}
 
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
   if (group.isMain) return;
@@ -1020,6 +1042,14 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
+
+  // Startup gateway probe + periodic recovery (survives laptop sleep/wake)
+  ensureGatewayHealthy().catch(() => {});
+  setInterval(
+    () => ensureGatewayHealthy().catch(() => {}),
+    GATEWAY_CHECK_INTERVAL,
+  );
+
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);
