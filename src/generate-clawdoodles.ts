@@ -7,7 +7,6 @@ import path from 'path';
 import https from 'https';
 import http from 'http';
 
-import { ONECLI_URL } from './config.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
 
@@ -128,26 +127,18 @@ async function callClaude(
   const apiKey = resolveApiKey();
   const baseUrl = resolveBaseUrl();
 
-  // Determine if we route through OneCLI proxy or direct
-  let targetUrl: string;
-  let headers: Record<string, string>;
-
-  if (apiKey) {
-    // Direct API call with key
-    targetUrl = `${baseUrl}/v1/messages`;
-    headers = {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    };
-  } else {
-    // Route through OneCLI proxy — it injects the API key
-    targetUrl = `${ONECLI_URL}/proxy/https/api.anthropic.com/v1/messages`;
-    headers = {
-      'Content-Type': 'application/json',
-      'anthropic-version': '2023-06-01',
-    };
+  if (!apiKey) {
+    throw new Error(
+      'No Anthropic API key found. Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in .env',
+    );
   }
+
+  const targetUrl = `${baseUrl}/v1/messages`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+  };
 
   const body = JSON.stringify({
     model: 'claude-sonnet-4-5-20250514',

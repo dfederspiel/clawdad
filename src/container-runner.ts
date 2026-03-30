@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
  */
-import { ChildProcess, exec, spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -11,20 +11,24 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
+  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
-  ONECLI_URL,
+  OLLAMA_ADMIN_TOOLS,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
+import { detectAuthMode } from './credential-proxy.js';
+import { validateAdditionalMounts } from './mount-security.js';
 import { readEnvFile } from './env.js';
 
 /** Append a structured event to a group's event-log.jsonl */
@@ -48,15 +52,7 @@ function logContainerEvent(
     // Best-effort — don't break container lifecycle on logging failure
   }
 }
-import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
-
-// OneCLI is optional — when not installed, containers run without credential injection.
-const onecli = await import('@onecli-sh/sdk')
-  .then((m) => new m.OneCLI({ url: ONECLI_URL }))
-  .catch(() => ({
-    applyContainerConfig: async () => false,
-  }));
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -107,16 +103,8 @@ function buildVolumeMounts(
       readonly: true,
     });
 
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the OneCLI gateway, never exposed to containers.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
+    // .env shadowing is handled inside the container entrypoint via mount --bind
+    // (Apple Container only supports directory mounts, not file mounts like /dev/null)
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -347,48 +335,34 @@ function buildVolumeMounts(
   return mounts;
 }
 
-async function buildContainerArgs(
+function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  agentIdentifier?: string,
-  extraEnv?: Record<string, string>,
-): Promise<string[]> {
+  isMain: boolean,
+): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  if (extraEnv) {
-    for (const [key, value] of Object.entries(extraEnv)) {
-      args.push('-e', `${key}=${value}`);
-    }
+  // Forward Ollama admin tools flag if enabled
+  if (OLLAMA_ADMIN_TOOLS) {
+    args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
   }
 
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
-  } else {
-    logger.error(
-      { containerName },
-      'OneCLI gateway not reachable — aborting container spawn',
-    );
-    throw new Error('OneCLI gateway not reachable');
-  }
+  // Route API traffic through the credential proxy (containers never see real secrets)
+  args.push(
+    '-e',
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+  );
 
-  // Pass through extra environment variables from .env to the container.
+  // Pass through instance-specific environment variables from .env to the container.
   // These are non-secret service keys the agent needs for API calls.
   const PASSTHROUGH_ENV_PREFIXES = [
-    'ANTHROPIC_BASE_URL', // Custom API endpoint (not the secret — just the URL)
-    'CLAUDE_MODEL', // Model override for LiteLLM proxy compatibility
     'HARNESS_',
+    'BLACKDUCK_',
     'GITLAB_',
     'GITHUB_',
-    'BLACKDUCK_',
     'LAUNCHDARKLY_',
     'FIGMA_',
     'ATLASSIAN_',
@@ -410,7 +384,25 @@ async function buildContainerArgs(
     }),
   );
   for (const [key, value] of Object.entries(envVars)) {
-    if (value) args.push('-e', `${key}=${value}`);
+    args.push('-e', `${key}=${value}`);
+  }
+
+  // Mirror the host's auth method with a placeholder value.
+  // API key mode: SDK sends x-api-key, proxy replaces with real key.
+  // OAuth mode:   SDK exchanges placeholder token for temp API key,
+  //               proxy injects real OAuth token on that exchange request.
+  const authMode = detectAuthMode();
+  if (authMode === 'api-key') {
+    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+  } else {
+    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Pass model override for LiteLLM proxy routing (e.g., bedrock/us.anthropic.claude-opus-4-6-v1)
+  const envConfig = readEnvFile(['CLAUDE_MODEL']);
+  const claudeModel = process.env.CLAUDE_MODEL || envConfig.CLAUDE_MODEL;
+  if (claudeModel) {
+    args.push('-e', `CLAUDE_MODEL=${claudeModel}`);
   }
 
   // Runtime-specific args for host gateway resolution
@@ -422,7 +414,14 @@ async function buildContainerArgs(
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
+    if (isMain) {
+      // Main containers start as root so the entrypoint can mount --bind
+      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
+      args.push('-e', `RUN_UID=${hostUid}`);
+      args.push('-e', `RUN_GID=${hostGid}`);
+    } else {
+      args.push('--user', `${hostUid}:${hostGid}`);
+    }
     args.push('-e', 'HOME=/home/node');
   }
 
@@ -453,28 +452,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
-
-  // Pass SSH agent socket path to blog containers for git push
-  const extraEnv: Record<string, string> = {};
-  if (group.folder === 'blog' && process.env.SSH_AUTH_SOCK) {
-    extraEnv.SSH_AUTH_SOCK = '/ssh-agent.sock';
-  }
-  let containerArgs: string[];
-  try {
-    containerArgs = await buildContainerArgs(
-      mounts,
-      containerName,
-      agentIdentifier,
-      Object.keys(extraEnv).length > 0 ? extraEnv : undefined,
-    );
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { status: 'error', result: null, error: msg };
-  }
+  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
 
   logger.debug(
     {
@@ -584,7 +562,12 @@ export async function runContainerAgent(
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
-        if (line) logger.debug({ container: group.folder }, line);
+        if (!line) continue;
+        if (line.includes('[OLLAMA]')) {
+          logger.info({ container: group.folder }, line);
+        } else {
+          logger.debug({ container: group.folder }, line);
+        }
       }
       // Don't reset timeout on stderr — SDK writes debug logs continuously.
       // Timeout only resets on actual output (OUTPUT_MARKER in stdout).
@@ -615,19 +598,15 @@ export async function runContainerAgent(
         { group: group.name, containerName },
         'Container timeout, stopping gracefully',
       );
-      exec(
-        `${CONTAINER_RUNTIME_BIN} stop -t 1 ${containerName}`,
-        { timeout: 15000 },
-        (err: Error | null) => {
-          if (err) {
-            logger.warn(
-              { group: group.name, containerName, err },
-              'Graceful stop failed, force killing',
-            );
-            container.kill('SIGKILL');
-          }
-        },
-      );
+      try {
+        stopContainer(containerName);
+      } catch (err) {
+        logger.warn(
+          { group: group.name, containerName, err },
+          'Graceful stop failed, force killing',
+        );
+        container.kill('SIGKILL');
+      }
     };
 
     let timeout = setTimeout(killOnTimeout, timeoutMs);

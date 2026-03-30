@@ -3,6 +3,7 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   DEFAULT_TRIGGER,
   getTriggerPattern,
@@ -10,10 +11,10 @@ import {
   IDLE_TIMEOUT,
   TRIGGER_IDLE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
-  ONECLI_URL,
   POLL_INTERVAL,
   TIMEZONE,
 } from './config.js';
+import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
   ChannelOpts,
@@ -29,6 +30,7 @@ import {
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
+  PROXY_BIND_HOST,
   stopContainer,
 } from './container-runtime.js';
 import {
@@ -57,6 +59,7 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
+import { ChannelType } from './text-styles.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -68,6 +71,11 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import {
+  extractSessionCommand,
+  handleSessionCommand,
+  isSessionCommandAllowed,
+} from './session-commands.js';
 import {
   loadPackAchievements,
   getAchievementsForContainer,
@@ -102,54 +110,6 @@ let broadcastThreadCreated:
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
-
-// OneCLI is optional — when not installed, agent ensure calls are silently skipped.
-const onecli = await import('@onecli-sh/sdk')
-  .then((m) => new m.OneCLI({ url: ONECLI_URL }))
-  .catch(() => ({
-    ensureAgent: async () => ({ created: false }),
-    applyContainerConfig: async () => false,
-  }));
-
-const GATEWAY_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
-
-/**
- * Probes the OneCLI gateway and attempts recovery if it's down.
- * The gateway dies on laptop sleep; applyContainerConfig with empty args
- * triggers the SDK to restart it.
- */
-async function ensureGatewayHealthy(): Promise<boolean> {
-  const healthy = await checkGateway();
-  if (healthy) return true;
-
-  logger.warn('OneCLI gateway unreachable, attempting recovery...');
-  const recovered = await onecli.applyContainerConfig([], {});
-  if (recovered) {
-    logger.info('OneCLI gateway recovered');
-  } else {
-    logger.error('OneCLI gateway recovery failed');
-  }
-  return recovered;
-}
-
-function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
-  if (group.isMain) return;
-  const identifier = group.folder.toLowerCase().replace(/_/g, '-');
-  onecli.ensureAgent({ name: group.name, identifier }).then(
-    (res: { created: boolean }) => {
-      logger.info(
-        { jid, identifier, created: res.created },
-        'OneCLI agent ensured',
-      );
-    },
-    (err: unknown) => {
-      logger.debug(
-        { jid, identifier, err: String(err) },
-        'OneCLI agent ensure skipped',
-      );
-    },
-  );
-}
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -231,9 +191,6 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
       logger.info({ folder: group.folder }, 'Created CLAUDE.md from template');
     }
   }
-
-  // Ensure a corresponding OneCLI agent exists (best-effort, non-blocking)
-  ensureOneCLIAgent(jid, group);
 
   logger.info(
     { jid, name: group.name, folder: group.folder },
@@ -343,10 +300,45 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return true;
   }
 
-  // For non-main groups, check if trigger is required and present.
-  // Skip this check for thread replies — the user is continuing a
-  // conversation with the triggered agent without re-triggering.
-  if (!isMainGroup && group.requiresTrigger !== false && !isThreadReply) {
+  // --- Session command interception (before trigger check) ---
+  const cmdResult = await handleSessionCommand({
+    missedMessages,
+    isMainGroup,
+    groupName: group.name,
+    triggerPattern: getTriggerPattern(group.trigger),
+    timezone: TIMEZONE,
+    deps: {
+      sendMessage: (text) => channel.sendMessage(chatJid, text),
+      setTyping: (typing) =>
+        channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
+      runAgent: (prompt, onOutput) =>
+        runAgent(group, prompt, chatJid, onOutput),
+      closeStdin: () => queue.closeStdin(chatJid),
+      advanceCursor: (ts) => {
+        lastAgentTimestamp[chatJid] = ts;
+        saveState();
+      },
+      formatMessages,
+      canSenderInteract: (msg) => {
+        const hasTrigger = getTriggerPattern(group.trigger).test(
+          msg.content.trim(),
+        );
+        const reqTrigger = !isMainGroup && group.requiresTrigger !== false;
+        return (
+          isMainGroup ||
+          !reqTrigger ||
+          (hasTrigger &&
+            (msg.is_from_me ||
+              isTriggerAllowed(chatJid, msg.sender, loadSenderAllowlist())))
+        );
+      },
+    },
+  });
+  if (cmdResult.handled) return cmdResult.success;
+  // --- End session command interception ---
+
+  // For non-main groups, check if trigger is required and present
+  if (!isMainGroup && group.requiresTrigger !== false) {
     const triggerPattern = getTriggerPattern(group.trigger);
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
@@ -354,7 +346,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         triggerPattern.test(m.content.trim()) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
-    if (!hasTrigger) return true;
+    if (!hasTrigger) {
+      return true;
+    }
   }
   const originJid = pendingOrigin?.originJid;
   const threadId = pendingOrigin?.threadId;
@@ -686,6 +680,37 @@ async function startMessageLoop(): Promise<void> {
           }
 
           const isMainGroup = group.isMain === true;
+
+          // --- Session command interception (message loop) ---
+          // Scan ALL messages in the batch for a session command.
+          const loopCmdMsg = groupMessages.find(
+            (m) =>
+              extractSessionCommand(
+                m.content,
+                getTriggerPattern(group.trigger),
+              ) !== null,
+          );
+
+          if (loopCmdMsg) {
+            // Only close active container if the sender is authorized — otherwise an
+            // untrusted user could kill in-flight work by sending /compact (DoS).
+            // closeStdin no-ops internally when no container is active.
+            if (
+              isSessionCommandAllowed(
+                isMainGroup,
+                loopCmdMsg.is_from_me === true,
+              )
+            ) {
+              queue.closeStdin(chatJid);
+            }
+            // Enqueue so processGroupMessages handles auth + cursor advancement.
+            // Don't pipe via IPC — slash commands need a fresh container with
+            // string prompt (not MessageStream) for SDK recognition.
+            queue.enqueueMessageCheck(chatJid);
+            continue;
+          }
+          // --- End session command interception ---
+
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
@@ -865,17 +890,18 @@ async function main(): Promise<void> {
     );
   }
 
-  // Ensure OneCLI agents exist for all registered groups.
-  // Recovers from missed creates (e.g. OneCLI was down at registration time).
-  for (const [jid, group] of Object.entries(registeredGroups)) {
-    ensureOneCLIAgent(jid, group);
-  }
-
   restoreRemoteControl();
+
+  // Start credential proxy (containers route API calls through this)
+  const proxyServer = await startCredentialProxy(
+    CREDENTIAL_PROXY_PORT,
+    PROXY_BIND_HOST,
+  );
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    proxyServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
@@ -1022,14 +1048,16 @@ async function main(): Promise<void> {
         logger.warn({ jid }, 'No channel owns JID, cannot send message');
         return;
       }
-      const text = formatOutbound(rawText);
+      const text = formatOutbound(rawText, channel.name as ChannelType);
       if (text) await channel.sendMessage(jid, text);
     },
   });
   startIpcWatcher({
-    sendMessage: (jid, text) => {
+    sendMessage: (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      const text = formatOutbound(rawText, channel.name as ChannelType);
+      if (!text) return Promise.resolve();
       return channel.sendMessage(jid, text);
     },
     registeredGroups: () => registeredGroups,
@@ -1092,13 +1120,6 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
-
-  // Startup gateway probe + periodic recovery (survives laptop sleep/wake)
-  ensureGatewayHealthy().catch(() => {});
-  setInterval(
-    () => ensureGatewayHealthy().catch(() => {}),
-    GATEWAY_CHECK_INTERVAL,
-  );
 
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');

@@ -368,6 +368,7 @@ async function runQuery(
   let lastAssistantUuid: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
+  const assistantTexts: string[] = [];
 
   // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
@@ -418,7 +419,7 @@ async function runQuery(
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        'mcp__gmail__*',
+        'mcp__ollama__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -436,9 +437,9 @@ async function runQuery(
             NANOCLAW_ACHIEVEMENTS: JSON.stringify(containerInput.achievements || []),
           },
         },
-        gmail: {
-          command: 'npx',
-          args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+        ollama: {
+          command: 'node',
+          args: [path.join(path.dirname(mcpServerPath), 'ollama-mcp-stdio.js')],
         },
       },
       hooks: {
@@ -452,6 +453,15 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+      // Collect text from assistant messages for fallback if no result message arrives
+      const assistantMsg = message as { message?: { content?: { type: string; text?: string }[] } };
+      if (assistantMsg.message?.content) {
+        for (const block of assistantMsg.message.content) {
+          if (block.type === 'text' && block.text) {
+            assistantTexts.push(block.text);
+          }
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -478,6 +488,20 @@ async function runQuery(
 
   ipcPolling = false;
   log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
+
+  // If no result was emitted but we have assistant text, send it as the result
+  // This handles cases where the agent uses interactive elements (action buttons, rich blocks)
+  // and the SDK doesn't generate a result message because it's waiting for user input
+  if (resultCount === 0 && assistantTexts.length > 0) {
+    const combinedText = assistantTexts.join('\n\n');
+    log(`No result message received, using collected assistant text (${combinedText.length} chars)`);
+    writeOutput({
+      status: 'success',
+      result: combinedText,
+      newSessionId
+    });
+  }
+
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }
 
@@ -570,6 +594,106 @@ async function main(): Promise<void> {
     log(`Draining ${pending.length} pending IPC messages into initial prompt`);
     prompt += '\n' + pending.join('\n');
   }
+
+  // --- Slash command handling ---
+  // Only known session slash commands are handled here. This prevents
+  // accidental interception of user prompts that happen to start with '/'.
+  const KNOWN_SESSION_COMMANDS = new Set(['/compact']);
+  const trimmedPrompt = prompt.trim();
+  const isSessionSlashCommand = KNOWN_SESSION_COMMANDS.has(trimmedPrompt);
+
+  if (isSessionSlashCommand) {
+    log(`Handling session command: ${trimmedPrompt}`);
+    let slashSessionId: string | undefined;
+    let compactBoundarySeen = false;
+    let hadError = false;
+    let resultEmitted = false;
+
+    try {
+      for await (const message of query({
+        prompt: trimmedPrompt,
+        options: {
+          cwd: '/workspace/group',
+          resume: sessionId,
+          systemPrompt: undefined,
+          allowedTools: [],
+          env: sdkEnv,
+          permissionMode: 'bypassPermissions' as const,
+          allowDangerouslySkipPermissions: true,
+          settingSources: ['project', 'user'] as const,
+          hooks: {
+            PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
+          },
+        },
+      })) {
+        const msgType = message.type === 'system'
+          ? `system/${(message as { subtype?: string }).subtype}`
+          : message.type;
+        log(`[slash-cmd] type=${msgType}`);
+
+        if (message.type === 'system' && message.subtype === 'init') {
+          slashSessionId = message.session_id;
+          log(`Session after slash command: ${slashSessionId}`);
+        }
+
+        // Observe compact_boundary to confirm compaction completed
+        if (message.type === 'system' && (message as { subtype?: string }).subtype === 'compact_boundary') {
+          compactBoundarySeen = true;
+          log('Compact boundary observed — compaction completed');
+        }
+
+        if (message.type === 'result') {
+          const resultSubtype = (message as { subtype?: string }).subtype;
+          const textResult = 'result' in message ? (message as { result?: string }).result : null;
+
+          if (resultSubtype?.startsWith('error')) {
+            hadError = true;
+            writeOutput({
+              status: 'error',
+              result: null,
+              error: textResult || 'Session command failed.',
+              newSessionId: slashSessionId,
+            });
+          } else {
+            writeOutput({
+              status: 'success',
+              result: textResult || 'Conversation compacted.',
+              newSessionId: slashSessionId,
+            });
+          }
+          resultEmitted = true;
+        }
+      }
+    } catch (err) {
+      hadError = true;
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      log(`Slash command error: ${errorMsg}`);
+      writeOutput({ status: 'error', result: null, error: errorMsg });
+    }
+
+    log(`Slash command done. compactBoundarySeen=${compactBoundarySeen}, hadError=${hadError}`);
+
+    // Warn if compact_boundary was never observed — compaction may not have occurred
+    if (!hadError && !compactBoundarySeen) {
+      log('WARNING: compact_boundary was not observed. Compaction may not have completed.');
+    }
+
+    // Only emit final session marker if no result was emitted yet and no error occurred
+    if (!resultEmitted && !hadError) {
+      writeOutput({
+        status: 'success',
+        result: compactBoundarySeen
+          ? 'Conversation compacted.'
+          : 'Compaction requested but compact_boundary was not observed.',
+        newSessionId: slashSessionId,
+      });
+    } else if (!hadError) {
+      // Emit session-only marker so host updates session tracking
+      writeOutput({ status: 'success', result: null, newSessionId: slashSessionId });
+    }
+    return;
+  }
+  // --- End slash command handling ---
 
   // Script phase: run script before waking agent
   if (containerInput.script && containerInput.isScheduledTask) {
