@@ -6,7 +6,7 @@
 import { execSync } from 'child_process';
 import http from 'http';
 
-import { CONTAINER_IMAGE, ONECLI_URL } from './config.js';
+import { CONTAINER_IMAGE } from './config.js';
 import { CONTAINER_RUNTIME_BIN } from './container-runtime.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
@@ -16,9 +16,8 @@ export interface HealthStatus {
     status: 'running' | 'not_running' | 'not_found';
     version?: string;
   };
-  onecli: {
-    status: 'running' | 'not_found';
-    url: string;
+  credential_proxy: {
+    status: 'configured' | 'missing';
   };
   anthropic: {
     status: 'configured' | 'missing';
@@ -55,57 +54,31 @@ function checkDocker(): HealthStatus['docker'] {
   }
 }
 
-/** Returns true if the OneCLI gateway is responding on its health endpoint. */
-export function checkGateway(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const url = new URL('/api/health', ONECLI_URL);
-    const req = http.get(url, { timeout: 3000 }, (res) => {
-      res.resume();
-      resolve(true);
-    });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => {
-      req.destroy();
-      resolve(false);
-    });
-  });
-}
-
-function checkOneCLI(): Promise<HealthStatus['onecli']> {
-  return checkGateway().then((healthy) => ({
-    status: healthy ? 'running' : 'not_found',
-    url: ONECLI_URL,
-  }));
+/** Checks if Anthropic credentials are configured in .env */
+function checkCredentialProxy(): HealthStatus['credential_proxy'] {
+  const envVars = readEnvFile([
+    'ANTHROPIC_API_KEY',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_AUTH_TOKEN',
+  ]);
+  const hasCredential =
+    !!envVars.ANTHROPIC_API_KEY ||
+    !!envVars.CLAUDE_CODE_OAUTH_TOKEN ||
+    !!envVars.ANTHROPIC_AUTH_TOKEN;
+  return { status: hasCredential ? 'configured' : 'missing' };
 }
 
 function checkAnthropic(): HealthStatus['anthropic'] {
-  try {
-    const output = execSync('onecli secrets list', {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-      timeout: 5000,
-    });
-    const secrets = JSON.parse(output);
-    // Look for a secret with hostPattern matching anthropic.
-    // Read ANTHROPIC_BASE_URL from .env since launchd/systemd won't have it in process.env.
-    const envVars = readEnvFile(['ANTHROPIC_BASE_URL']);
-    const baseUrl =
-      process.env.ANTHROPIC_BASE_URL || envVars.ANTHROPIC_BASE_URL;
-    const anthropicHost = baseUrl
-      ? new URL(baseUrl).hostname
-      : 'api.anthropic.com';
-    const found =
-      Array.isArray(secrets) &&
-      secrets.some(
-        (s: { hostPattern?: string }) =>
-          s.hostPattern &&
-          (s.hostPattern.includes('anthropic.com') ||
-            s.hostPattern.includes(anthropicHost)),
-      );
-    return { status: found ? 'configured' : 'missing' };
-  } catch {
-    return { status: 'missing' };
-  }
+  const envVars = readEnvFile([
+    'ANTHROPIC_API_KEY',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_AUTH_TOKEN',
+  ]);
+  const hasCredential =
+    !!envVars.ANTHROPIC_API_KEY ||
+    !!envVars.CLAUDE_CODE_OAUTH_TOKEN ||
+    !!envVars.ANTHROPIC_AUTH_TOKEN;
+  return { status: hasCredential ? 'configured' : 'missing' };
 }
 
 function checkContainerImage(): HealthStatus['container_image'] {
@@ -124,23 +97,21 @@ function checkContainerImage(): HealthStatus['container_image'] {
 }
 
 export async function getHealthStatus(): Promise<HealthStatus> {
-  // Run checks concurrently where possible
-  const [docker, onecli] = await Promise.all([
-    Promise.resolve(checkDocker()),
-    checkOneCLI(),
-  ]);
+  // Run checks
+  const docker = checkDocker();
+  const credentialProxy = checkCredentialProxy();
   const anthropic = checkAnthropic();
   const containerImage = checkContainerImage();
 
   const allGood =
     docker.status === 'running' &&
-    onecli.status === 'running' &&
+    credentialProxy.status === 'configured' &&
     anthropic.status === 'configured' &&
     containerImage.status === 'built';
 
   const result: HealthStatus = {
     docker,
-    onecli,
+    credential_proxy: credentialProxy,
     anthropic,
     container_image: containerImage,
     overall: allGood ? 'ready' : 'needs_setup',
