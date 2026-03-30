@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
  */
-import { ChildProcess, exec, spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -10,30 +10,47 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
+  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  OLLAMA_ADMIN_TOOLS,
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
+import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { readEnvFile } from './env.js';
+import type { OneCLI } from '@onecli-sh/sdk';
 import { RegisteredGroup } from './types.js';
 
-// OneCLI is optional — when not installed, containers run without credential injection.
-const onecli = await import('@onecli-sh/sdk')
-  .then((m) => new m.OneCLI({ url: ONECLI_URL }))
-  .catch(() => ({
-    applyContainerConfig: async () => false,
-  }));
+// Lazy-loaded OneCLI singleton — null means SDK is unavailable
+let onecliInstance: OneCLI | null | undefined;
+async function getOneCLI(): Promise<OneCLI | null> {
+  if (onecliInstance !== undefined) return onecliInstance;
+  try {
+    const mod = await import('@onecli-sh/sdk');
+    onecliInstance = new mod.OneCLI({ url: ONECLI_URL });
+    return onecliInstance;
+  } catch {
+    onecliInstance = null;
+    return null;
+  }
+}
+
+/** @internal Reset singleton for testing */
+export function _resetOneCLI(): void {
+  onecliInstance = undefined;
+}
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -84,16 +101,8 @@ function buildVolumeMounts(
       readonly: true,
     });
 
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the OneCLI gateway, never exposed to containers.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
+    // .env shadowing is handled inside the container entrypoint via mount --bind
+    // (Apple Container only supports directory mounts, not file mounts like /dev/null)
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -233,57 +242,77 @@ function buildVolumeMounts(
 async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  agentIdentifier?: string,
+  isMain: boolean,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
-  } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
-    );
+  // Forward Ollama admin tools flag if enabled
+  if (OLLAMA_ADMIN_TOOLS) {
+    args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
   }
 
-  // Pass through extra environment variables from .env to the container.
-  // These are non-secret service keys the agent needs for API calls.
-  const PASSTHROUGH_ENV_PREFIXES = [
-    'ANTHROPIC_BASE_URL', // Custom API endpoint (not the secret — just the URL)
-    'CLAUDE_MODEL', // Model override for LiteLLM proxy compatibility
-    'GITLAB_',
-    'GITHUB_',
-    'LAUNCHDARKLY_',
-    'FIGMA_',
-    'ATLASSIAN_',
-  ];
-  const envVars = readEnvFile(
-    PASSTHROUGH_ENV_PREFIXES.flatMap((prefix) => {
-      try {
-        const envContent = fs.readFileSync(
-          path.join(process.cwd(), '.env'),
-          'utf-8',
-        );
-        return envContent
-          .split('\n')
-          .filter((line) => line.startsWith(prefix))
-          .map((line) => line.split('=')[0]);
-      } catch {
-        return [];
+  // --- Credential injection: OneCLI preferred, native proxy fallback ---
+  //
+  // OneCLI mode: applyContainerConfig() adds HTTPS_PROXY, CA certs, and
+  //   ANTHROPIC_API_KEY from the vault. The HTTPS proxy intercepts ALL
+  //   outbound HTTPS and injects credentials for every registered service.
+  //
+  // Native proxy mode: containers point ANTHROPIC_BASE_URL at a local HTTP
+  //   proxy that injects Anthropic credentials only. Other service credentials
+  //   are passed as env vars and consumed by auth-args.sh in the container.
+  let onecliApplied = false;
+  const onecli = await getOneCLI();
+  if (onecli) {
+    try {
+      onecliApplied = await onecli.applyContainerConfig(args);
+      if (onecliApplied) {
+        logger.info('Using OneCLI gateway for credential injection');
+        // Pass the real ANTHROPIC_BASE_URL from .env so the SDK targets
+        // the correct endpoint (e.g., a custom LiteLLM proxy). OneCLI's
+        // HTTPS proxy intercepts the outbound request and injects the key.
+        const baseUrlEnv = readEnvFile(['ANTHROPIC_BASE_URL']);
+        const baseUrl =
+          process.env.ANTHROPIC_BASE_URL || baseUrlEnv.ANTHROPIC_BASE_URL;
+        if (baseUrl && !args.some((a) => a.startsWith('ANTHROPIC_BASE_URL='))) {
+          args.push('-e', `ANTHROPIC_BASE_URL=${baseUrl}`);
+        }
       }
-    }),
-  );
-  for (const [key, value] of Object.entries(envVars)) {
-    if (value) args.push('-e', `${key}=${value}`);
+    } catch (err) {
+      logger.debug(
+        { err },
+        'OneCLI applyContainerConfig failed, falling back to native proxy',
+      );
+    }
+  }
+
+  if (!onecliApplied) {
+    // Native credential proxy fallback — only handles Anthropic API traffic.
+    // Route all Anthropic requests through our local proxy which injects credentials.
+    args.push(
+      '-e',
+      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    );
+
+    // Mirror the host's auth method with a placeholder value.
+    // API key mode: SDK sends x-api-key, proxy replaces with real key.
+    // OAuth mode:   SDK exchanges placeholder token for temp API key,
+    //               proxy injects real OAuth token on that exchange request.
+    const authMode = detectAuthMode();
+    if (authMode === 'api-key') {
+      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+    } else {
+      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    }
+  }
+
+  // Pass model override for LiteLLM proxy routing (e.g., bedrock/us.anthropic.claude-opus-4-6-v1)
+  const envConfig = readEnvFile(['CLAUDE_MODEL']);
+  const claudeModel = process.env.CLAUDE_MODEL || envConfig.CLAUDE_MODEL;
+  if (claudeModel) {
+    args.push('-e', `CLAUDE_MODEL=${claudeModel}`);
   }
 
   // Runtime-specific args for host gateway resolution
@@ -295,7 +324,14 @@ async function buildContainerArgs(
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
+    if (isMain) {
+      // Main containers start as root so the entrypoint can mount --bind
+      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
+      args.push('-e', `RUN_UID=${hostUid}`);
+      args.push('-e', `RUN_GID=${hostGid}`);
+    } else {
+      args.push('--user', `${hostUid}:${hostGid}`);
+    }
     args.push('-e', 'HOME=/home/node');
   }
 
@@ -326,14 +362,10 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
-    agentIdentifier,
+    input.isMain,
   );
 
   logger.debug(
@@ -438,7 +470,12 @@ export async function runContainerAgent(
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
-        if (line) logger.debug({ container: group.folder }, line);
+        if (!line) continue;
+        if (line.includes('[OLLAMA]')) {
+          logger.info({ container: group.folder }, line);
+        } else {
+          logger.debug({ container: group.folder }, line);
+        }
       }
       // Don't reset timeout on stderr — SDK writes debug logs continuously.
       // Timeout only resets on actual output (OUTPUT_MARKER in stdout).
@@ -469,19 +506,15 @@ export async function runContainerAgent(
         { group: group.name, containerName },
         'Container timeout, stopping gracefully',
       );
-      exec(
-        `${CONTAINER_RUNTIME_BIN} stop -t 1 ${containerName}`,
-        { timeout: 15000 },
-        (err: Error | null) => {
-          if (err) {
-            logger.warn(
-              { group: group.name, containerName, err },
-              'Graceful stop failed, force killing',
-            );
-            container.kill('SIGKILL');
-          }
-        },
-      );
+      try {
+        stopContainer(containerName);
+      } catch (err) {
+        logger.warn(
+          { group: group.name, containerName, err },
+          'Graceful stop failed, force killing',
+        );
+        container.kill('SIGKILL');
+      }
     };
 
     let timeout = setTimeout(killOnTimeout, timeoutMs);

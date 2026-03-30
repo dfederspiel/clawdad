@@ -55,7 +55,10 @@ export function readonlyMountArgs(
   hostPath: string,
   containerPath: string,
 ): string[] {
-  return ['-v', `${hostPath}:${containerPath}:ro`];
+  return [
+    '--mount',
+    `type=bind,source=${hostPath},target=${containerPath},readonly`,
+  ];
 }
 
 /** Stop a container by name. Uses execFileSync to avoid shell injection. */
@@ -63,7 +66,7 @@ export function stopContainer(name: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
     throw new Error(`Invalid container name: ${name}`);
   }
-  execSync(`${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`, { stdio: 'pipe' });
+  execSync(`${CONTAINER_RUNTIME_BIN} stop ${name}`, { stdio: 'pipe' });
 }
 
 /**
@@ -74,16 +77,13 @@ export function stopContainer(name: string): void {
  */
 export function ensureContainerRuntimeRunning(): boolean {
   try {
-    execSync(`${CONTAINER_RUNTIME_BIN} info`, {
-      stdio: 'pipe',
-      timeout: 10000,
-    });
+    execSync(`${CONTAINER_RUNTIME_BIN} info`, { stdio: 'pipe' });
     logger.debug('Container runtime already running');
     return true;
   } catch (err) {
     logger.warn(
       { err },
-      'Container runtime not reachable — agents will not run until Docker is started',
+      'Container runtime not available — agents will not run until Docker is started',
     );
     return false;
   }
