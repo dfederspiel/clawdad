@@ -77,46 +77,16 @@ export function stopContainer(name: string): void {
  */
 export function ensureContainerRuntimeRunning(): boolean {
   try {
-    execSync(`${CONTAINER_RUNTIME_BIN} system status`, { stdio: 'pipe' });
+    execSync(`${CONTAINER_RUNTIME_BIN} info`, { stdio: 'pipe' });
     logger.debug('Container runtime already running');
-  } catch {
-    logger.info('Starting container runtime...');
-    try {
-      execSync(`${CONTAINER_RUNTIME_BIN} system start`, {
-        stdio: 'pipe',
-        timeout: 30000,
-      });
-      logger.info('Container runtime started');
-    } catch (err) {
-      logger.error({ err }, 'Failed to start container runtime');
-      console.error(
-        '\n╔════════════════════════════════════════════════════════════════╗',
-      );
-      console.error(
-        '║  FATAL: Container runtime failed to start                      ║',
-      );
-      console.error(
-        '║                                                                ║',
-      );
-      console.error(
-        '║  Agents cannot run without a container runtime. To fix:        ║',
-      );
-      console.error(
-        '║  1. Ensure Docker is installed                                 ║',
-      );
-      console.error(
-        '║  2. Run: docker system start (or open Docker Desktop)          ║',
-      );
-      console.error(
-        '║  3. Restart NanoClaw                                           ║',
-      );
-      console.error(
-        '╚════════════════════════════════════════════════════════════════╝\n',
-      );
-      throw new Error('Container runtime is required but failed to start');
-    }
+    return true;
+  } catch (err) {
+    logger.warn(
+      { err },
+      'Container runtime not available — agents will not run until Docker is started',
+    );
+    return false;
   }
-  return true;
 }
 
 /**
