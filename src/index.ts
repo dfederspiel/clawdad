@@ -3,17 +3,17 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
-  DATA_DIR,
+  CREDENTIAL_PROXY_PORT,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   TRIGGER_IDLE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
-  ONECLI_URL,
   POLL_INTERVAL,
   TIMEZONE,
 } from './config.js';
+import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
   ChannelOpts,
@@ -29,7 +29,7 @@ import {
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
-  stopContainer,
+  PROXY_BIND_HOST,
 } from './container-runtime.js';
 import {
   createThread,
@@ -98,54 +98,6 @@ let broadcastThreadCreated:
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
-
-// OneCLI is optional — when not installed, agent ensure calls are silently skipped.
-const onecli = await import('@onecli-sh/sdk')
-  .then((m) => new m.OneCLI({ url: ONECLI_URL }))
-  .catch(() => ({
-    ensureAgent: async () => ({ created: false }),
-    applyContainerConfig: async () => false,
-  }));
-
-const GATEWAY_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
-
-/**
- * Probes the OneCLI gateway and attempts recovery if it's down.
- * The gateway dies on laptop sleep; applyContainerConfig with empty args
- * triggers the SDK to restart it.
- */
-async function ensureGatewayHealthy(): Promise<boolean> {
-  const healthy = await checkGateway();
-  if (healthy) return true;
-
-  logger.warn('OneCLI gateway unreachable, attempting recovery...');
-  const recovered = await onecli.applyContainerConfig([], {});
-  if (recovered) {
-    logger.info('OneCLI gateway recovered');
-  } else {
-    logger.error('OneCLI gateway recovery failed');
-  }
-  return recovered;
-}
-
-function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
-  if (group.isMain) return;
-  const identifier = group.folder.toLowerCase().replace(/_/g, '-');
-  onecli.ensureAgent({ name: group.name, identifier }).then(
-    (res: { created: boolean }) => {
-      logger.info(
-        { jid, identifier, created: res.created },
-        'OneCLI agent ensured',
-      );
-    },
-    (err: unknown) => {
-      logger.debug(
-        { jid, identifier, err: String(err) },
-        'OneCLI agent ensure skipped',
-      );
-    },
-  );
-}
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -227,9 +179,6 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
       logger.info({ folder: group.folder }, 'Created CLAUDE.md from template');
     }
   }
-
-  // Ensure a corresponding OneCLI agent exists (best-effort, non-blocking)
-  ensureOneCLIAgent(jid, group);
 
   logger.info(
     { jid, name: group.name, folder: group.folder },
@@ -824,32 +773,18 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
-
-  // Rebuild active threads map from DB
-  for (const t of getAllThreads()) {
-    activeThreads.set(t.thread_id, {
-      agentJid: t.agent_jid,
-      originJid: t.origin_jid,
-    });
-  }
-  if (activeThreads.size > 0) {
-    logger.info(
-      { count: activeThreads.size },
-      'Restored active threads from DB',
-    );
-  }
-
-  // Ensure OneCLI agents exist for all registered groups.
-  // Recovers from missed creates (e.g. OneCLI was down at registration time).
-  for (const [jid, group] of Object.entries(registeredGroups)) {
-    ensureOneCLIAgent(jid, group);
-  }
-
   restoreRemoteControl();
+
+  // Start credential proxy (containers route API calls through this)
+  const proxyServer = await startCredentialProxy(
+    CREDENTIAL_PROXY_PORT,
+    PROXY_BIND_HOST,
+  );
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    proxyServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
