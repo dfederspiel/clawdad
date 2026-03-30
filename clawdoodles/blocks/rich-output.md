@@ -55,9 +55,20 @@ Four levels: `success`, `info`, `warn`, `error`.
 [{"type":"progress","label":"Setup","value":3,"max":5,"color":"green"}]
 :::
 
+### Forms — collect structured input
+
+:::blocks
+[{"type":"form","id":"example","title":"Quick Config","fields":[
+  {"name":"name","label":"Name","type":"text","required":true},
+  {"name":"mode","label":"Mode","type":"select","options":["fast","balanced","thorough"]}
+],"submitLabel":"Save"}]
+:::
+
+See the `forms` block for full field types and patterns.
+
 ### Guidelines
 
 - Don't overuse blocks. Plain text is fine for simple answers.
 - Mix prose and blocks — blocks work as visual anchors in conversational responses.
 - Keep JSON valid. Invalid JSON falls back to raw text display.
-- Use cards for self-contained summaries, tables for comparisons, stats for metrics.
+- Use cards for self-contained summaries, tables for comparisons, stats for metrics, forms for multi-field input.
