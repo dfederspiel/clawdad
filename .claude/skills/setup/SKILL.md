@@ -82,7 +82,7 @@ docker info 2>/dev/null && echo "DOCKER_RUNNING" || (which docker 2>/dev/null &&
 
 ## 3. Anthropic Credentials
 
-ClawDad uses OneCLI to manage credentials. Check if already configured:
+NanoClaw uses OneCLI to manage credentials. Check if already configured:
 
 ```bash
 onecli secrets list
@@ -92,15 +92,15 @@ If an Anthropic secret is listed, confirm with user: keep or reconfigure?
 
 AskUserQuestion: How do you connect to Claude?
 
-1. **Direct Anthropic API** — description: "Pay-per-use API key from console.anthropic.com, hitting api.anthropic.com directly."
-2. **Claude subscription (Pro/Max)** — description: "Uses your existing Claude Pro or Max subscription via setup-token."
-3. **Custom API gateway** — description: "Your team runs a proxy (LiteLLM or similar) that routes to Anthropic. You'll need the proxy URL and an API key."
+1. **LiteLLM proxy (recommended)** — description: "Your team runs a LiteLLM proxy that routes to Anthropic. You'll need the proxy URL and an API key."
+2. **Direct Anthropic API** — description: "Pay-per-use API key from console.anthropic.com, hitting api.anthropic.com directly."
+3. **Claude subscription (Pro/Max)** — description: "Uses your existing Claude Pro or Max subscription via setup-token."
 
-### Custom API gateway path
+### LiteLLM proxy path
 
-AskUserQuestion: "What's your API gateway URL?" with placeholder `https://your-proxy.example.com`.
+AskUserQuestion: "What's your LiteLLM proxy URL?" with placeholder `https://your-litellm-proxy.example.com`.
 
-Then ask: "What API key should I use for the gateway?" (They can paste it directly — handle gracefully.)
+Then ask: "What API key should I use for the proxy?" (They can paste it directly — handle gracefully.)
 
 Set `ANTHROPIC_BASE_URL` in `.env`:
 ```bash
@@ -151,7 +151,7 @@ If it fails:
 
 Verify:
 ```bash
-docker images clawdad-agent:latest --format '{{.ID}}'
+docker images nanoclaw-agent:latest --format '{{.ID}}'
 ```
 
 ## 5. Environment Check
@@ -169,10 +169,10 @@ Ensure `.env` has web UI enabled:
 grep -q 'WEB_UI_ENABLED=true' .env || echo 'WEB_UI_ENABLED=true' >> .env
 ```
 
-**Always check for other running ClawDad instances before assigning a port.** Scan the default port range to detect existing instances and pick the next free port:
+**Always check for other running ClawDad/NanoClaw instances before assigning a port.** Scan the default port range to detect existing instances and pick the next free port:
 
 ```bash
-# Find all clawdad processes and their ports
+# Find all nanoclaw processes and their ports
 OTHER_PORTS=$(lsof -iTCP -sTCP:LISTEN -P 2>/dev/null | grep node | grep -oE ':(345[0-9]|346[0-9])' | tr -d ':' | sort -u)
 echo "Ports in use by other instances: ${OTHER_PORTS:-none}"
 
@@ -209,8 +209,8 @@ AskUserQuestion: How do you want to run ClawDad?
 
 Run `npx tsx setup/index.ts --step service` and parse status block.
 
-- macOS: uses launchd (`~/Library/LaunchAgents/com.clawdad.plist`)
-- Linux: uses systemd (`~/.config/systemd/user/clawdad.service`)
+- macOS: uses launchd (`~/Library/LaunchAgents/com.nanoclaw.plist`)
+- Linux: uses systemd (`~/.config/systemd/user/nanoclaw.service`)
 
 Handle errors per the diagnostics in the service step output.
 
@@ -254,7 +254,7 @@ Tell the user:
 
 ## Troubleshooting
 
-**Service not starting:** Check `logs/clawdad.error.log`. Common: wrong Node path (re-run step 6), OneCLI not running (`curl http://127.0.0.1:10254/api/health`).
+**Service not starting:** Check `logs/nanoclaw.error.log`. Common: wrong Node path (re-run step 6), OneCLI not running (`curl http://127.0.0.1:10254/api/health`).
 
 **Container agent fails:** Ensure Docker is running. Check container logs in `groups/*/logs/container-*.log`.
 

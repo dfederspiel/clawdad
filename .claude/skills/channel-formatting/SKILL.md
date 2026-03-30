@@ -87,8 +87,8 @@ All 73 tests should pass and the build should be clean before continuing.
 
 ```bash
 npm run build
-launchctl kickstart -k gui/$(id -u)/com.clawdad   # macOS
-# Linux: systemctl --user restart clawdad
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw   # macOS
+# Linux: systemctl --user restart nanoclaw
 ```
 
 ### Spot-check formatting
@@ -104,7 +104,7 @@ asterisks.
 ### Check logs if needed
 
 ```bash
-tail -f logs/clawdad.log
+tail -f logs/nanoclaw.log
 ```
 
 ## Signal Skill Integration

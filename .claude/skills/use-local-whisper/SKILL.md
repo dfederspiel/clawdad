@@ -94,24 +94,24 @@ npm run build
 
 ### Ensure launchd PATH includes Homebrew
 
-The ClawDad launchd service runs with a restricted PATH. `whisper-cli` and `ffmpeg` are in `/opt/homebrew/bin/` (Apple Silicon) or `/usr/local/bin/` (Intel), which may not be in the plist's PATH.
+The NanoClaw launchd service runs with a restricted PATH. `whisper-cli` and `ffmpeg` are in `/opt/homebrew/bin/` (Apple Silicon) or `/usr/local/bin/` (Intel), which may not be in the plist's PATH.
 
 Check the current PATH:
 ```bash
-grep -A1 'PATH' ~/Library/LaunchAgents/com.clawdad.plist
+grep -A1 'PATH' ~/Library/LaunchAgents/com.nanoclaw.plist
 ```
 
 If `/opt/homebrew/bin` is missing, add it to the `<string>` value inside the `PATH` key in the plist. Then reload:
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.clawdad.plist
-launchctl load ~/Library/LaunchAgents/com.clawdad.plist
+launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 ```
 
 ### Build and restart
 
 ```bash
 npm run build
-launchctl kickstart -k gui/$(id -u)/com.clawdad
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 ```
 
 ### Test
@@ -121,7 +121,7 @@ Send a voice note in any registered group. The agent should receive it as `[Voic
 ### Check logs
 
 ```bash
-tail -f logs/clawdad.log | grep -i -E "voice|transcri|whisper"
+tail -f logs/nanoclaw.log | grep -i -E "voice|transcri|whisper"
 ```
 
 Look for:

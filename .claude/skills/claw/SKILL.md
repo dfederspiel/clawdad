@@ -1,11 +1,11 @@
 ---
 name: claw
-description: Install the claw CLI tool — run ClawDad agent containers from the command line without opening a chat app.
+description: Install the claw CLI tool — run NanoClaw agent containers from the command line without opening a chat app.
 ---
 
-# claw — ClawDad CLI
+# claw — NanoClaw CLI
 
-`claw` is a Python CLI that sends prompts directly to a ClawDad agent container from the terminal. It reads registered groups from the ClawDad database, picks up secrets from `.env`, and pipes a JSON payload into a container run — no chat app required.
+`claw` is a Python CLI that sends prompts directly to a NanoClaw agent container from the terminal. It reads registered groups from the NanoClaw database, picks up secrets from `.env`, and pipes a JSON payload into a container run — no chat app required.
 
 ## What it does
 
@@ -21,12 +21,12 @@ description: Install the claw CLI tool — run ClawDad agent containers from the
 ## Prerequisites
 
 - Python 3.8 or later
-- ClawDad installed with a built and tagged container image (`clawdad-agent:latest`)
+- NanoClaw installed with a built and tagged container image (`nanoclaw-agent:latest`)
 - Either `container` (Apple Container, macOS 15+) or `docker` available in `PATH`
 
 ## Install
 
-Run this skill from within the ClawDad directory. The script auto-detects its location, so the symlink always points to the right place.
+Run this skill from within the NanoClaw directory. The script auto-detects its location, so the symlink always points to the right place.
 
 ### 1. Copy the script
 
@@ -61,7 +61,7 @@ source ~/.zshrc   # or ~/.bashrc
 claw --list-groups
 ```
 
-You should see registered groups. If ClawDad isn't running or the database doesn't exist yet, the list will be empty — that's fine.
+You should see registered groups. If NanoClaw isn't running or the database doesn't exist yet, the list will be empty — that's fine.
 
 ## Usage Examples
 
@@ -91,7 +91,7 @@ claw --list-groups
 claw --runtime docker "Hello"
 
 # Use a custom image tag (e.g. after rebuilding with a new tag)
-claw --image clawdad-agent:dev "Hello"
+claw --image nanoclaw-agent:dev "Hello"
 
 # Verbose mode (debug info, secrets redacted)
 claw -v "Hello"
@@ -108,11 +108,11 @@ Install Docker Desktop or Apple Container (macOS 15+), or pass `--runtime` expli
 
 ### "no secrets found in .env"
 
-The script auto-detects your ClawDad directory and reads `.env` from it. Check that the file exists and contains at least one of: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`.
+The script auto-detects your NanoClaw directory and reads `.env` from it. Check that the file exists and contains at least one of: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`.
 
 ### Container times out
 
-The default timeout is 300 seconds. For longer tasks, pass `--timeout 600` (or higher). If the container consistently hangs, check that your `clawdad-agent:latest` image is up to date by running `./container/build.sh`.
+The default timeout is 300 seconds. For longer tasks, pass `--timeout 600` (or higher). If the container consistently hangs, check that your `nanoclaw-agent:latest` image is up to date by running `./container/build.sh`.
 
 ### "group not found"
 
@@ -122,10 +122,10 @@ Run `claw --list-groups` to see what's registered. Group lookup does a fuzzy par
 
 Containers run with `--rm` so they are automatically removed. If the agent crashes before emitting the output sentinel, `claw` falls back to printing raw stdout. Use `-v` to see what the container produced. Rebuild the image with `./container/build.sh` if crashes are consistent.
 
-### Override the ClawDad directory
+### Override the NanoClaw directory
 
 If `claw` can't find your database or `.env`, set the `NANOCLAW_DIR` environment variable:
 
 ```bash
-export CLAWDAD_DIR=/path/to/your/clawdad
+export NANOCLAW_DIR=/path/to/your/nanoclaw
 ```
