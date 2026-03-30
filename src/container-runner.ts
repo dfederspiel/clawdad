@@ -44,6 +44,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  achievements?: { id: string; name: string; description: string }[];
 }
 
 export interface ContainerOutput {
