@@ -83,7 +83,13 @@ export function OnboardingGuide({ onCustom, compact = false }) {
     setCreating(true);
     setError('');
     try {
-      const result = await createGroup(template.name, template.id, template.id);
+      const opts = {};
+      if (template.triggerScope) {
+        opts.triggerScope = template.triggerScope;
+        opts.trigger = template.trigger || `@${template.name}`;
+        opts.description = template.description || '';
+      }
+      const result = await createGroup(template.name, template.id, template.id, opts);
       // Kickstart the agent — send directly to avoid optimistic duplicate
       await api.sendMessage(result.jid, 'Hello! Help me get set up.');
     } catch (err) {

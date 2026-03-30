@@ -10,7 +10,7 @@
       "fields": [
         { "key": "user_name", "label": "Name", "placeholder": "Jane Smith", "required": true },
         { "key": "user_role", "label": "Role", "placeholder": "Senior Engineer" },
-        { "key": "team", "label": "Team", "placeholder": "Platform" },
+        { "key": "team_name", "label": "Team", "placeholder": "Platform" },
         { "key": "organization", "label": "Organization", "placeholder": "Acme Corp" }
       ]
     },

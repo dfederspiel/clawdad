@@ -18,17 +18,28 @@ export const xpData = computed(() => {
 
 export function GameHud() {
   const xp = xpData.value;
-  const progress = tierProgress.value;
+  const progress = tierProgress.value || {};
 
-  // Compact tier progress indicator
-  const tierDots = progress?.foundations ? html`
+  // Build tier dots dynamically from progress keys (excluding meta)
+  const tierKeys = Object.keys(progress).sort((a, b) => {
+    if (a === 'platform') return -1;
+    if (b === 'platform') return 1;
+    return a.localeCompare(b);
+  });
+
+  const tierDots = tierKeys.length > 0 ? html`
     <div class="game-hud-tiers" title="Click for achievements" onClick=${() => { showPanel.value = true; }}>
-      <span class="tier-dot ${progress.foundations?.unlocked === progress.foundations?.total ? 'tier-complete' : ''}"
-            title="Foundations: ${progress.foundations?.unlocked || 0}/${progress.foundations?.total || 0}">F</span>
-      <span class="tier-dot ${progress.builder?.unlocked === progress.builder?.total ? 'tier-complete' : ''}"
-            title="Builder: ${progress.builder?.unlocked || 0}/${progress.builder?.total || 0}">B</span>
-      <span class="tier-dot ${progress.mastery?.unlocked === progress.mastery?.total ? 'tier-complete' : ''}"
-            title="Mastery: ${progress.mastery?.unlocked || 0}/${progress.mastery?.total || 0}">M</span>
+      ${tierKeys.map((key) => {
+        const p = progress[key];
+        const complete = p.unlocked === p.total;
+        const initial = key[0].toUpperCase();
+        return html`
+          <span class="tier-dot ${complete ? 'tier-complete' : ''}"
+                title="${key.replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}: ${p.unlocked}/${p.total}">
+            ${initial}
+          </span>
+        `;
+      })}
     </div>
   ` : null;
 
