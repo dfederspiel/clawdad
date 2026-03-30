@@ -29,9 +29,10 @@ export const totalCount = computed(() => {
   return data.definitions?.length || 0;
 });
 
+/** Dynamic progress by tier/group — keys come from the server (pack-defined). */
 export const tierProgress = computed(() => {
   const data = achievementData.value;
-  if (!data?.progress) return { foundations: null, builder: null, mastery: null };
+  if (!data?.progress) return {};
   return data.progress;
 });
 
@@ -84,9 +85,9 @@ export function handleAchievementSSE(data) {
     },
   };
 
-  // Update tier progress counts
+  // Update tier progress counts (dynamic keys)
   const def = current.definitions.find((d) => d.id === data.id);
-  if (def && newState.progress?.[def.tier]) {
+  if (def && def.tier !== 'meta' && newState.progress?.[def.tier]) {
     newState.progress = {
       ...newState.progress,
       [def.tier]: {
