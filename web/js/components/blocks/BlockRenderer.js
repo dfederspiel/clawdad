@@ -8,6 +8,7 @@ import { StatBlock } from './StatBlock.js';
 import { ProgressBlock } from './ProgressBlock.js';
 import { ActionBlock } from './ActionBlock.js';
 import { DiffBlock } from './DiffBlock.js';
+import { FormBlock } from './FormBlock.js';
 
 const RENDERERS = {
   text: TextBlock,
@@ -19,6 +20,7 @@ const RENDERERS = {
   progress: ProgressBlock,
   action: ActionBlock,
   diff: DiffBlock,
+  form: FormBlock,
 };
 
 export function BlockRenderer({ block }) {
