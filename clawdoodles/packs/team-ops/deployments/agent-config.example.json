@@ -1,0 +1,46 @@
+{
+  "_comment": "Deployment agent configuration. The agent will walk you through filling this in on first message.",
+
+  "product_name": "My Product",
+
+  "github_repos": [
+    { "org": "my-org", "repo": "repo-name", "branch": "main" }
+  ],
+
+  "gitlab_url": "https://gitlab.example.com",
+  "gitlab_projects": [
+    { "id": "1234", "name": "my-project", "branch": "main" }
+  ],
+
+  "cd_platform": "harness",
+  "cd_config": {
+    "_comment": "Platform-specific fields — the agent asks for these during setup"
+  },
+
+  "security_scanner": "snyk",
+  "security_config": {
+    "_comment": "Scanner-specific fields — the agent asks for these during setup"
+  },
+
+  "launchdarkly_project": "my-project",
+  "launchdarkly_environments": [
+    { "key": "test", "name": "Development", "critical": false },
+    { "key": "production", "name": "Production", "critical": true }
+  ],
+
+  "environments": [
+    { "name": "dev", "type": "PreProduction" },
+    { "name": "staging", "type": "PreProduction" },
+    { "name": "production", "type": "Production" }
+  ],
+
+  "e2e_test_host": "https://test-runner.example.com",
+  "e2e_test_project_id": "",
+
+  "deployment_order": ["dev", "staging", "production"],
+  "deployment_window": "Mon-Thu",
+  "approval_policy": {
+    "auto_proceed": ["dev", "staging"],
+    "require_approval": ["production"]
+  }
+}

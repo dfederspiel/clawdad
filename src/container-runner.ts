@@ -25,7 +25,6 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { OneCLI } from '@onecli-sh/sdk';
 import { readEnvFile } from './env.js';
 
 /** Append a structured event to a group's event-log.jsonl */
@@ -52,7 +51,12 @@ function logContainerEvent(
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
-const onecli = new OneCLI({ url: ONECLI_URL });
+// OneCLI is optional — when not installed, containers run without credential injection.
+const onecli = await import('@onecli-sh/sdk')
+  .then((m) => new m.OneCLI({ url: ONECLI_URL }))
+  .catch(() => ({
+    applyContainerConfig: async () => false,
+  }));
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -67,6 +71,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  achievements?: { id: string; name: string; description: string }[];
 }
 
 export interface ContainerOutput {
@@ -368,16 +373,18 @@ async function buildContainerArgs(
   if (onecliApplied) {
     logger.info({ containerName }, 'OneCLI gateway config applied');
   } else {
-    logger.warn(
+    logger.error(
       { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
+      'OneCLI gateway not reachable — aborting container spawn',
     );
+    throw new Error('OneCLI gateway not reachable');
   }
 
   // Pass through extra environment variables from .env to the container.
   // These are non-secret service keys the agent needs for API calls.
   const PASSTHROUGH_ENV_PREFIXES = [
     'ANTHROPIC_BASE_URL', // Custom API endpoint (not the secret — just the URL)
+    'CLAUDE_MODEL', // Model override for LiteLLM proxy compatibility
     'HARNESS_',
     'GITLAB_',
     'GITHUB_',
@@ -456,12 +463,18 @@ export async function runContainerAgent(
   if (group.folder === 'blog' && process.env.SSH_AUTH_SOCK) {
     extraEnv.SSH_AUTH_SOCK = '/ssh-agent.sock';
   }
-  const containerArgs = await buildContainerArgs(
-    mounts,
-    containerName,
-    agentIdentifier,
-    Object.keys(extraEnv).length > 0 ? extraEnv : undefined,
-  );
+  let containerArgs: string[];
+  try {
+    containerArgs = await buildContainerArgs(
+      mounts,
+      containerName,
+      agentIdentifier,
+      Object.keys(extraEnv).length > 0 ? extraEnv : undefined,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { status: 'error', result: null, error: msg };
+  }
 
   logger.debug(
     {

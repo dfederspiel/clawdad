@@ -21,6 +21,8 @@ export const unread = signal({}); // { [jid]: count }
 export const threadMeta = signal({}); // { [messageId]: ThreadInfo }
 export const openThreads = signal({}); // { [threadId]: Message[] }
 export const threadTyping = signal({}); // { [threadId]: boolean }
+export const credentialQueue = signal([]); // queued credential requests
+export const credentialRequest = signal(null); // current active request
 
 export const selectedGroup = computed(() =>
   groups.value.find((g) => g.jid === selectedJid.value) || null,
@@ -132,6 +134,19 @@ api.onSSE('messages_cleared', (data) => {
     threadMeta.value = {};
     openThreads.value = {};
     threadTyping.value = {};
+  }
+});
+
+api.onSSE('groups_changed', () => {
+  loadGroups();
+});
+
+api.onSSE('credential_request', (data) => {
+  // Queue requests — show one at a time
+  if (credentialRequest.value) {
+    credentialQueue.value = [...credentialQueue.value, data];
+  } else {
+    credentialRequest.value = data;
   }
 });
 

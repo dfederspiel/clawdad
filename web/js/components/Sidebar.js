@@ -1,65 +1,45 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
-import { groups, selectedJid, selectGroup, deleteGroup } from '../app.js';
+import { groups, selectedJid, selectGroup, deleteGroup, messages } from '../app.js';
 import { GroupItem } from './GroupItem.js';
 import { NewGroupDialog } from './NewGroupDialog.js';
 import { StatusPanel } from './StatusPanel.js';
 import { GameHud } from './GameHud.js';
 import { ThemeMenu } from './ThemeMenu.js';
-
-function DeleteConfirmDialog({ group, onClose }) {
-  const [deleting, setDeleting] = useState(false);
-
-  if (!group) return null;
-
-  async function handleDelete() {
-    setDeleting(true);
-    try {
-      // folder stored as web_<name>, strip prefix for API
-      const apiFolder = group.folder.replace(/^web_/, '');
-      await deleteGroup(apiFolder, group.jid);
-      onClose();
-    } catch (err) {
-      console.error('Delete failed:', err);
-      setDeleting(false);
-    }
-  }
-
-  return html`
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick=${onClose}>
-      <div class="bg-bg-2 border border-border rounded-xl p-6 w-[360px] shadow-xl" onClick=${(e) => e.stopPropagation()}>
-        <h3 class="text-sm font-semibold text-txt mb-2">Delete "${group.name}"?</h3>
-        <p class="text-xs text-txt-2 mb-4">
-          This removes all messages, tasks, and agent data for this group. This cannot be undone.
-        </p>
-        <div class="flex justify-end gap-2">
-          <button
-            class="px-3 py-1.5 text-xs text-txt-2 hover:text-txt rounded-lg hover:bg-bg-hover transition-colors"
-            onClick=${onClose}
-            disabled=${deleting}
-          >Cancel</button>
-          <button
-            class="px-3 py-1.5 text-xs font-semibold text-white bg-red-500 rounded-lg hover:bg-red-600 disabled:opacity-40 transition-colors"
-            onClick=${handleDelete}
-            disabled=${deleting}
-          >${deleting ? 'Deleting...' : 'Delete'}</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
+import { ConfirmDialog } from './ConfirmDialog.js';
 
 export function Sidebar({ open, onClose }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
   // Sort: template groups first, system groups at the bottom
   const list = [...groups.value].sort((a, b) => (a.isSystem ? 1 : 0) - (b.isSystem ? 1 : 0));
   const selected = selectedJid.value;
 
   function onGroupSelect(jid) {
-    selectGroup(jid);
+    // Toggle: clicking the active group deselects it, showing the template picker
+    if (jid === selected) {
+      selectedJid.value = null;
+      messages.value = [];
+    } else {
+      selectGroup(jid);
+    }
     onClose();
+  }
+
+  async function handleDeleteConfirm() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      const apiFolder = deleteTarget.folder.replace(/^web_/, '');
+      await deleteGroup(apiFolder, deleteTarget.jid);
+      setDeleteTarget(null);
+    } catch (err) {
+      console.error('Delete failed:', err);
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return html`
@@ -137,8 +117,20 @@ export function Sidebar({ open, onClose }) {
             )}
       </div>
       <${StatusPanel} />
-      <${NewGroupDialog} open=${dialogOpen} onClose=${() => setDialogOpen(false)} />
-      <${DeleteConfirmDialog} key=${deleteTarget?.jid} group=${deleteTarget} onClose=${() => setDeleteTarget(null)} />
     </aside>
+
+    <!-- Dialogs rendered outside sidebar so they center on the page -->
+    <${NewGroupDialog} open=${dialogOpen} onClose=${() => setDialogOpen(false)} />
+    <${ConfirmDialog}
+      open=${!!deleteTarget}
+      title=${`Delete "${deleteTarget?.name}"?`}
+      message="This removes all messages, tasks, and agent data for this group. This cannot be undone."
+      confirmLabel="Delete"
+      confirmText=${deleteTarget?.name}
+      destructive=${true}
+      loading=${deleting}
+      onConfirm=${handleDeleteConfirm}
+      onCancel=${() => setDeleteTarget(null)}
+    />
   `;
 }

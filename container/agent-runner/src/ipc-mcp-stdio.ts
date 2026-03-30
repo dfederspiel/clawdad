@@ -343,35 +343,25 @@ After registering, write a CLAUDE.md in the new group's folder with the agent's 
 
 const ACHIEVEMENTS_DIR = path.join(IPC_DIR, 'achievements');
 
+// Build achievement list dynamically from host-provided data (via ContainerInput)
+const achievementList: { id: string; name: string; description: string }[] = (() => {
+  try {
+    return JSON.parse(process.env.NANOCLAW_ACHIEVEMENTS || '[]');
+  } catch {
+    return [];
+  }
+})();
+
+const achievementDocstring = achievementList.length > 0
+  ? achievementList.map((a) => `- ${a.id}: ${a.description}`).join('\n')
+  : '(No achievements configured)';
+
 server.tool(
   'unlock_achievement',
   `Unlock a gamification achievement for the user. Call this when the user experiences a feature for the first time. Each achievement can only be unlocked once — duplicates are silently ignored.
 
 Available achievement IDs:
-- first_contact: User sent their first message
-- clockwork: Set up a scheduled task
-- proactive: Agent sent a proactive message
-- researcher: Agent searched the web
-- good_memory: Agent recalled something from a prior session
-- dashboard: Sent a rich card, table, or chart
-- plugged_in: Connected an external service
-- on_watch: Set up a polling task
-- audit_trail: User asked for activity summary
-- librarian: Read from Confluence or wiki
-- ticket_machine: Created or updated a ticket
-- night_shift: Scheduled task ran while user was away
-- browser_bot: Agent navigated a website
-- assembly_line: 3+ scheduled tasks created
-- apprentice: Taught agent a multi-step task
-- specialist: Created a triggered @-mention agent
-- cross_talk: Used triggered agent from another chat
-- thread_weaver: Continued conversation in a thread
-- sentinel: Set up a website/API monitor
-- diff_detective: Sent a diff showing changes
-- architect: 3+ active agent groups
-- team_player: Used agent teams
-- commander: Created an agent from another agent
-- template_creator: Saved a custom template`,
+${achievementDocstring}`,
   {
     achievement_id: z.string().describe('The achievement ID to unlock'),
   },
@@ -387,6 +377,81 @@ Available achievement IDs:
 
     return {
       content: [{ type: 'text' as const, text: `Achievement "${args.achievement_id}" unlock requested.` }],
+    };
+  },
+);
+
+// --- Credential request (triggers browser popup — agent never sees the secret) ---
+
+const CREDENTIALS_DIR = path.join(IPC_DIR, 'credentials');
+
+server.tool(
+  'request_credential',
+  `Request the user to register a credential via the web UI. A popup appears in the browser with pre-filled metadata — the user only enters the secret. You NEVER see the key.
+
+Use this instead of asking the user to paste secrets into chat. The credential is stored in an encrypted vault and injected automatically into API calls.
+
+Known services: atlassian, github, gitlab, launchdarkly. For other services, provide a custom service name and host_pattern.`,
+  {
+    service: z.string().describe('Service name (e.g., "atlassian", "github", "gitlab", "launchdarkly", or a custom name)'),
+    host_pattern: z.string().optional().describe('Host pattern for the credential (e.g., "*.atlassian.net"). Uses service default if omitted.'),
+    description: z.string().describe('Why this credential is needed — shown to the user in the popup'),
+    email: z.string().optional().describe('Email address (required for Atlassian Basic auth)'),
+  },
+  async (args) => {
+    // Write IPC task — host picks this up and broadcasts to the browser
+    writeIpcFile(TASKS_DIR, {
+      type: 'request_credential',
+      service: args.service,
+      hostPattern: args.host_pattern,
+      description: args.description,
+      email: args.email,
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Poll for result (same pattern as register-credential.sh --wait)
+    const resultPath = path.join(CREDENTIALS_DIR, `result-${args.service}.json`);
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        if (fs.existsSync(resultPath)) {
+          const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+          fs.unlinkSync(resultPath);
+          if (result.success) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Credential "${args.service}" registered successfully. You can now make API calls to ${args.host_pattern || 'the service'}.`,
+                },
+              ],
+            };
+          }
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Credential registration failed: ${result.message}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      } catch {
+        // File may not exist yet — keep polling
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: 'Credential registration timed out (2 minutes). Ask the user to try again, or register via CLI: onecli secrets create',
+        },
+      ],
+      isError: true,
     };
   },
 );

@@ -115,6 +115,29 @@ Instructions here...
 
 ## Testing
 
+### Fresh-clone testing
+
+Many changes (setup flow, service config, first-boot experience) need to be tested from a clean slate. The `test-fresh-clone.sh` script handles the full cycle:
+
+```bash
+# Tear down any running test instance, delete it, and clone fresh
+./scripts/test-fresh-clone.sh                     # → ~/code/clawdad-test
+./scripts/test-fresh-clone.sh /tmp/my-test        # → custom path
+
+# Then run setup in the fresh clone
+cd ~/code/clawdad-test && claude
+# Say: "help me get set up"
+```
+
+The script automatically:
+1. Stops and removes the service (systemd, launchd, or nohup) for the target directory
+2. Deletes the target directory
+3. Clones fresh from the current repo's remote
+
+Re-running the same command tears down and re-clones — it's idempotent.
+
+### General testing
+
 Test your contribution on a fresh clone before submitting. For skills, run the skill end-to-end and verify it works.
 
 ## Pull Requests

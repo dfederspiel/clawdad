@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
-import { createGroup, handleSend } from '../app.js';
+import { createGroup } from '../app.js';
 import * as api from '../api.js';
 import { PrerequisiteCheck } from './PrerequisiteCheck.js';
 import { SetupWizard } from './SetupWizard.js';
@@ -48,41 +48,50 @@ function TemplateCard({ template, onSelect, creating }) {
   `;
 }
 
-export function OnboardingGuide({ onCustom }) {
+export function OnboardingGuide({ onCustom, compact = false }) {
   const [templates, setTemplates] = useState([]);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
-  const [configLoaded, setConfigLoaded] = useState(false);
-  const [hasConfig, setHasConfig] = useState(false);
-  const [healthReady, setHealthReady] = useState(null); // null=loading, false=needs_setup, true=ready
-  const [userPath, setUserPath] = useState(null); // 'user' | 'developer'
+  const [configLoaded, setConfigLoaded] = useState(compact); // skip config check in compact mode
+  const [hasConfig, setHasConfig] = useState(compact); // skip setup wizard in compact mode
+  const [healthReady, setHealthReady] = useState(compact ? true : null); // skip health in compact
+  const [userPath, setUserPath] = useState(compact ? 'user' : null);
 
   useEffect(() => {
-    // Step 1: Check prerequisites
-    api.getHealth().then((health) => {
-      setHealthReady(health.overall === 'ready');
-    }).catch(() => {
-      // If health endpoint fails, skip prerequisite check (backwards compat)
-      setHealthReady(true);
-    });
+    if (!compact) {
+      // Step 1: Check prerequisites
+      api.getHealth().then((health) => {
+        setHealthReady(health.overall === 'ready');
+      }).catch(() => {
+        setHealthReady(true);
+      });
 
-    // Pre-fetch config and templates in parallel
-    api.getConfig().then((config) => {
-      setHasConfig(config && Object.keys(config).length > 0);
-      setConfigLoaded(true);
-    }).catch(() => {
-      setConfigLoaded(true);
-    });
+      // Pre-fetch config
+      api.getConfig().then((config) => {
+        setHasConfig(config && Object.keys(config).length > 0);
+        setConfigLoaded(true);
+      }).catch(() => {
+        setConfigLoaded(true);
+      });
+    }
+
+    // Always fetch templates
     api.getTemplates().then((data) => setTemplates(data.templates)).catch(() => {});
-  }, []);
+  }, [compact]);
 
   async function handleSelect(template) {
     setCreating(true);
     setError('');
     try {
-      await createGroup(template.name, template.id, template.id);
-      // Kickstart the agent — triggers its first-run setup flow
-      await handleSend('Hello! Help me get set up.');
+      const opts = {};
+      if (template.triggerScope) {
+        opts.triggerScope = template.triggerScope;
+        opts.trigger = template.trigger || `@${template.name}`;
+        opts.description = template.description || '';
+      }
+      const result = await createGroup(template.name, template.id, template.id, opts);
+      // Kickstart the agent — send directly to avoid optimistic duplicate
+      await api.sendMessage(result.jid, 'Hello! Help me get set up.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -90,51 +99,56 @@ export function OnboardingGuide({ onCustom }) {
     }
   }
 
-  // Step 1: Prerequisites — show check while loading or if not ready
-  if (healthReady === null) {
-    return html`
-      <div class="flex-1 flex items-center justify-center">
-        <p class="text-sm text-txt-muted">Checking prerequisites...</p>
-      </div>
-    `;
-  }
-
-  if (healthReady === false || (healthReady === true && !userPath)) {
-    // Show prerequisite check (with path selector when all green)
-    if (healthReady === false) {
-      return html`<${PrerequisiteCheck} onReady=${(path) => { setHealthReady(true); setUserPath(path); }} />`;
+  // Full onboarding flow (not compact)
+  if (!compact) {
+    // Step 1: Prerequisites
+    if (healthReady === null) {
+      return html`
+        <div class="flex-1 flex items-center justify-center">
+          <p class="text-sm text-txt-muted">Checking prerequisites...</p>
+        </div>
+      `;
     }
-    // Health is ready but no path chosen yet — show path selector via PrerequisiteCheck
-    return html`<${PrerequisiteCheck} onReady=${(path) => setUserPath(path)} />`;
+
+    if (healthReady === false || (healthReady === true && !userPath)) {
+      if (healthReady === false) {
+        return html`<${PrerequisiteCheck} onReady=${(path) => { setHealthReady(true); setUserPath(path); }} />`;
+      }
+      return html`<${PrerequisiteCheck} onReady=${(path) => setUserPath(path)} />`;
+    }
+
+    // Step 2: Loading
+    if (!configLoaded) {
+      return html`
+        <div class="flex-1 flex items-center justify-center">
+          <p class="text-sm text-txt-muted">Loading...</p>
+        </div>
+      `;
+    }
+
+    // Step 3: Setup wizard
+    if (!hasConfig) {
+      return html`<${SetupWizard} userPath=${userPath} onComplete=${() => setHasConfig(true)} />`;
+    }
   }
 
-  // Step 2: Still loading config check
-  if (!configLoaded) {
-    return html`
-      <div class="flex-1 flex items-center justify-center">
-        <p class="text-sm text-txt-muted">Loading...</p>
-      </div>
-    `;
-  }
-
-  // Step 3: No config yet — show setup wizard
-  if (!hasConfig) {
-    return html`<${SetupWizard} userPath=${userPath} onComplete=${() => setHasConfig(true)} />`;
-  }
-
-  // Config exists — show template picker
+  // Template picker — shown in both full and compact modes
   return html`
-    <div class="flex-1 flex items-center justify-center p-8">
-      <div class="max-w-2xl w-full">
+    <div class="flex-1 overflow-y-auto p-8">
+      <div class="max-w-2xl w-full mx-auto">
         <div class="text-center mb-8">
-          <h2 class="text-2xl font-bold text-txt mb-1">
-            ClawDad
-          </h2>
-          <p class="text-xs text-txt-muted mb-3">NanoClaw Agent Orchestrator</p>
-          <p class="text-sm text-txt-2">
-            Pick a template to create your first agent. Each runs isolated with
-            its own workspace — the agent will walk you through setup in chat.
-          </p>
+          ${compact ? html`
+            <p class="text-sm text-txt-2">
+              Create a new agent from a template, or select a group from the sidebar.
+            </p>
+          ` : html`
+            <h2 class="text-2xl font-bold text-txt mb-1">ClawDad</h2>
+            <p class="text-xs text-txt-muted mb-3">NanoClaw Agent Orchestrator</p>
+            <p class="text-sm text-txt-2">
+              Pick a template to create your first agent. Each runs isolated with
+              its own workspace — the agent will walk you through setup in chat.
+            </p>
+          `}
         </div>
 
         ${templates.length > 0

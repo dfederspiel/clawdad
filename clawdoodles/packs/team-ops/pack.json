@@ -1,0 +1,50 @@
+{
+  "name": "Team Ops",
+  "description": "Agent templates for engineering teams. Bug triage, deployment pipelines, and status reporting — teach your team agent-driven workflows.",
+  "author": "ClawDad",
+  "version": "1.0.0",
+  "setup": [
+    {
+      "title": "About You",
+      "subtitle": "So your agents know who they're working for.",
+      "fields": [
+        { "key": "user_name", "label": "Name", "placeholder": "Jane Smith", "required": true },
+        { "key": "user_role", "label": "Role", "placeholder": "Senior Engineer" },
+        { "key": "team_name", "label": "Team", "placeholder": "Platform" },
+        { "key": "organization", "label": "Organization", "placeholder": "Acme Corp" }
+      ]
+    },
+    {
+      "title": "Atlassian",
+      "subtitle": "For Jira and Confluence access. Skip if you don't use Atlassian.",
+      "fields": [
+        { "key": "atlassian_instance", "label": "Instance URL", "placeholder": "https://your-team.atlassian.net" },
+        { "key": "atlassian_email", "label": "Email", "placeholder": "you@company.com" },
+        { "key": "jira_project_key", "label": "Jira project key", "placeholder": "PROJ" }
+      ]
+    },
+    {
+      "title": "Source Code",
+      "subtitle": "Where your repos live. Both are optional.",
+      "fields": [
+        { "key": "github_org", "label": "GitHub org", "placeholder": "my-org" },
+        { "key": "gitlab_url", "label": "GitLab URL", "placeholder": "https://gitlab.example.com" }
+      ]
+    }
+  ],
+  "tiers": {
+    "recipe": "Team workflows that connect to Jira, GitHub, GitLab, and CI/CD pipelines"
+  },
+  "achievements": {
+    "connections": [
+      { "id": "plugged_in", "name": "Plugged In", "description": "Connected an external service (Jira, GitHub, etc.)", "xp": 15 },
+      { "id": "ticket_machine", "name": "Ticket Machine", "description": "Created or updated a Jira ticket via agent", "xp": 20 },
+      { "id": "librarian", "name": "Librarian", "description": "Agent read from Confluence or wiki", "xp": 15 }
+    ],
+    "operations": [
+      { "id": "on_watch", "name": "On Watch", "description": "Set up a polling task for project monitoring", "xp": 20 },
+      { "id": "night_shift", "name": "Night Shift", "description": "Scheduled task ran while you were away", "xp": 25 },
+      { "id": "audit_trail", "name": "Audit Trail", "description": "Reviewed the agent's activity log", "xp": 15 }
+    ]
+  }
+}

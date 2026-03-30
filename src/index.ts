@@ -1,8 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 
-import { OneCLI } from '@onecli-sh/sdk';
-
 import {
   ASSISTANT_NAME,
   DATA_DIR,
@@ -70,9 +68,14 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import {
+  loadPackAchievements,
+  getAchievementsForContainer,
+} from './achievements.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { checkGateway } from './health.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -100,7 +103,34 @@ let broadcastThreadCreated:
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
-const onecli = new OneCLI({ url: ONECLI_URL });
+// OneCLI is optional — when not installed, agent ensure calls are silently skipped.
+const onecli = await import('@onecli-sh/sdk')
+  .then((m) => new m.OneCLI({ url: ONECLI_URL }))
+  .catch(() => ({
+    ensureAgent: async () => ({ created: false }),
+    applyContainerConfig: async () => false,
+  }));
+
+const GATEWAY_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Probes the OneCLI gateway and attempts recovery if it's down.
+ * The gateway dies on laptop sleep; applyContainerConfig with empty args
+ * triggers the SDK to restart it.
+ */
+async function ensureGatewayHealthy(): Promise<boolean> {
+  const healthy = await checkGateway();
+  if (healthy) return true;
+
+  logger.warn('OneCLI gateway unreachable, attempting recovery...');
+  const recovered = await onecli.applyContainerConfig([], {});
+  if (recovered) {
+    logger.info('OneCLI gateway recovered');
+  } else {
+    logger.error('OneCLI gateway recovery failed');
+  }
+  return recovered;
+}
 
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
   if (group.isMain) return;
@@ -224,6 +254,7 @@ function unregisterGroup(jid: string, group: RegisteredGroup): void {
   }
 
   // Clean up in-memory state
+  queue.deleteGroup(jid);
   delete registeredGroups[jid];
   delete sessions[group.folder];
   delete lastAgentTimestamp[jid];
@@ -527,6 +558,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        achievements: getAchievementsForContainer(),
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -798,6 +830,27 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
+  // Load pack-defined achievements (merged with built-ins)
+  const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
+  let activePack = 'starter';
+  try {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(clawdoodlesDir, 'manifest.json'), 'utf-8'),
+    );
+    activePack = manifest.activePack || 'starter';
+  } catch {
+    /* use default */
+  }
+  const packJsonPath = path.join(
+    clawdoodlesDir,
+    'packs',
+    activePack,
+    'pack.json',
+  );
+  if (fs.existsSync(packJsonPath)) {
+    loadPackAchievements(packJsonPath);
+  }
+
   // Rebuild active threads map from DB
   for (const t of getAllThreads()) {
     activeThreads.set(t.thread_id, {
@@ -1016,9 +1069,37 @@ async function main(): Promise<void> {
         }
       }
     },
+    storeChatMetadata: (jid, timestamp, name, channel, isGroup) => {
+      storeChatMetadata(jid, timestamp, name, channel, isGroup);
+    },
+    onCredentialRequested: (request) => {
+      for (const ch of channels) {
+        if (ch.name === 'web' && 'broadcastCredentialRequest' in ch) {
+          (ch as any).broadcastCredentialRequest(request);
+          break;
+        }
+      }
+    },
+    onGroupRegistered: (jid) => {
+      // Broadcast to web UI so sidebar updates immediately
+      for (const ch of channels) {
+        if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
+          (ch as any).broadcastGroupsChanged();
+          break;
+        }
+      }
+    },
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
+
+  // Startup gateway probe + periodic recovery (survives laptop sleep/wake)
+  ensureGatewayHealthy().catch(() => {});
+  setInterval(
+    () => ensureGatewayHealthy().catch(() => {}),
+    GATEWAY_CHECK_INTERVAL,
+  );
+
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);

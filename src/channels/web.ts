@@ -10,6 +10,7 @@ import {
   AchievementDef,
 } from '../achievements.js';
 import {
+  DATA_DIR,
   GROUPS_DIR,
   WEB_UI_PORT,
   WEB_UI_ENABLED,
@@ -98,10 +99,17 @@ export class WebChannel implements Channel {
   /** Register a default web:general group as main if no web groups exist. */
   private ensureDefaultGroup(): void {
     const groups = this.opts.registeredGroups();
-    const hasWebGroup = Object.keys(groups).some((jid) =>
+    const existingJid = Object.keys(groups).find((jid) =>
       jid.startsWith('web:'),
     );
-    if (hasWebGroup) return;
+
+    // If a web group exists but lost isSystem (not persisted in DB), restore it
+    if (existingJid) {
+      if (!groups[existingJid].isSystem) {
+        groups[existingJid].isSystem = true;
+      }
+      return;
+    }
 
     const jid = 'web:general';
     const group: RegisteredGroup = {
@@ -117,7 +125,7 @@ export class WebChannel implements Channel {
     this.opts.onChatMetadata(
       jid,
       new Date().toISOString(),
-      'General',
+      'ClawDad',
       'web',
       true,
     );
@@ -189,6 +197,20 @@ export class WebChannel implements Channel {
     });
   }
 
+  broadcastGroupsChanged(): void {
+    this.broadcast('groups_changed', {});
+  }
+
+  broadcastCredentialRequest(request: {
+    service: string;
+    hostPattern?: string;
+    description?: string;
+    email?: string;
+    groupFolder: string;
+  }): void {
+    this.broadcast('credential_request', request);
+  }
+
   // --- HTTP Request Handler ---
 
   private async handleRequest(
@@ -257,36 +279,91 @@ export class WebChannel implements Channel {
 
     // GET /api/templates — list available group templates
     if (method === 'GET' && url.pathname === '/api/templates') {
-      const templatesDir = path.resolve(process.cwd(), 'templates');
+      const seen = new Set<string>();
       const templates: {
         id: string;
         name: string;
         description: string;
         tier: string;
+        triggerScope?: string;
+        trigger?: string;
       }[] = [];
-      if (fs.existsSync(templatesDir)) {
-        for (const entry of fs.readdirSync(templatesDir, {
-          withFileTypes: true,
-        })) {
-          if (!entry.isDirectory()) continue;
-          const metaPath = path.join(templatesDir, entry.name, 'meta.json');
+
+      // Helper: scan a directory for template folders with meta.json
+      const scanDir = (dir: string) => {
+        if (!fs.existsSync(dir)) return;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (!entry.isDirectory() || seen.has(entry.name)) continue;
+          seen.add(entry.name);
+          const metaPath = path.join(dir, entry.name, 'meta.json');
           let name = entry.name;
           let description = '';
           let tier = 'recipe';
+          let triggerScope: string | undefined;
+          let trigger: string | undefined;
           if (fs.existsSync(metaPath)) {
             try {
               const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
               name = meta.name || name;
               description = meta.description || '';
               tier = meta.tier || 'recipe';
+              triggerScope = meta.triggerScope || undefined;
+              trigger = meta.trigger || undefined;
             } catch {
               /* use defaults */
             }
           }
-          templates.push({ id: entry.name, name, description, tier });
+          templates.push({
+            id: entry.name,
+            name,
+            description,
+            tier,
+            triggerScope,
+            trigger,
+          });
         }
+      };
+
+      // Read active pack from manifest, scan its templates
+      const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
+      let activePack = 'starter';
+      try {
+        const manifest = JSON.parse(
+          fs.readFileSync(path.join(clawdoodlesDir, 'manifest.json'), 'utf-8'),
+        );
+        activePack = manifest.activePack || 'starter';
+      } catch {
+        /* use default */
       }
+      scanDir(path.join(clawdoodlesDir, 'packs', activePack));
+
       return this.json(res, 200, { templates });
+    }
+
+    // GET /api/pack — active pack metadata (including setup fields)
+    if (method === 'GET' && url.pathname === '/api/pack') {
+      const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
+      let activePack = 'starter';
+      try {
+        const manifest = JSON.parse(
+          fs.readFileSync(path.join(clawdoodlesDir, 'manifest.json'), 'utf-8'),
+        );
+        activePack = manifest.activePack || 'starter';
+      } catch {
+        /* use default */
+      }
+      const packPath = path.join(
+        clawdoodlesDir,
+        'packs',
+        activePack,
+        'pack.json',
+      );
+      try {
+        const pack = JSON.parse(fs.readFileSync(packPath, 'utf-8'));
+        return this.json(res, 200, pack);
+      } catch {
+        return this.json(res, 200, { name: activePack, setup: [] });
+      }
     }
 
     // GET /api/config — global user config
@@ -347,10 +424,10 @@ export class WebChannel implements Channel {
 
       // Copy template files BEFORE registration so the template CLAUDE.md
       // is in place before onRegisterGroup writes the default one.
-      if (template && /^[a-z0-9-]+$/.test(template)) {
-        const templateDir = path.resolve(process.cwd(), 'templates', template);
-        const groupDir = path.resolve(process.cwd(), 'groups', group.folder);
-        if (fs.existsSync(templateDir)) {
+      if (template) {
+        const templateDir = this.resolveTemplateDir(template);
+        if (templateDir && fs.existsSync(templateDir)) {
+          const groupDir = path.resolve(process.cwd(), 'groups', group.folder);
           fs.mkdirSync(groupDir, { recursive: true });
           for (const file of fs.readdirSync(templateDir)) {
             const src = path.join(templateDir, file);
@@ -389,24 +466,14 @@ export class WebChannel implements Channel {
             }
           }
 
-          // Map global fields into agent-config fields used by templates
-          if (globalConfig.user_name)
-            agentConfig.user_name = globalConfig.user_name;
-          if (globalConfig.user_role)
-            agentConfig.user_role = globalConfig.user_role;
-          if (globalConfig.team) agentConfig.team_name = globalConfig.team;
-          if (globalConfig.organization)
-            agentConfig.organization = globalConfig.organization;
-          if (globalConfig.atlassian_instance)
-            agentConfig.atlassian_instance = globalConfig.atlassian_instance;
-          if (globalConfig.atlassian_email)
-            agentConfig.atlassian_email = globalConfig.atlassian_email;
-          if (globalConfig.jira_project_key)
-            agentConfig.jira_project_key = globalConfig.jira_project_key;
-          if (globalConfig.github_org)
-            agentConfig.github_org = globalConfig.github_org;
-          if (globalConfig.gitlab_url)
-            agentConfig.gitlab_url = globalConfig.gitlab_url;
+          // Merge all global config fields into agent-config.
+          // Pack setup[] defines what to collect; templates define what to read.
+          // The web channel is just a passthrough — no field-specific knowledge.
+          for (const [key, value] of Object.entries(globalConfig)) {
+            if (value != null && value !== '') {
+              agentConfig[key] = value;
+            }
+          }
 
           fs.writeFileSync(
             agentConfigPath,
@@ -760,6 +827,53 @@ export class WebChannel implements Channel {
       }
     }
 
+    // POST /api/register-credential — register any credential via IPC→OneCLI
+    // Used by the CredentialModal when an agent requests a credential via popup
+    if (method === 'POST' && url.pathname === '/api/register-credential') {
+      const remote = req.socket.remoteAddress;
+      if (
+        remote !== '127.0.0.1' &&
+        remote !== '::1' &&
+        remote !== '::ffff:127.0.0.1'
+      ) {
+        return this.json(res, 403, { error: 'Localhost only' });
+      }
+
+      const body = await this.readBody(req);
+      const { service, key, email, hostPattern, groupFolder } = body;
+      if (!service || !key) {
+        return this.json(res, 400, {
+          error: 'service and key are required',
+        });
+      }
+
+      // Write to IPC credentials dir — the existing IPC poll loop
+      // picks it up, runs OneCLI, and writes the result file
+      const targetFolder = groupFolder || 'web_general';
+      const credDir = path.join(DATA_DIR, 'ipc', targetFolder, 'credentials');
+      fs.mkdirSync(credDir, { recursive: true });
+
+      const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+      const filepath = path.join(credDir, filename);
+      const tempPath = `${filepath}.tmp`;
+      fs.writeFileSync(
+        tempPath,
+        JSON.stringify({
+          service,
+          value: key,
+          email: email || undefined,
+          hostPattern: hostPattern || undefined,
+        }),
+      );
+      fs.renameSync(tempPath, filepath);
+
+      logger.info(
+        { service, groupFolder: targetFolder },
+        'Credential registration requested via web UI',
+      );
+      return this.json(res, 200, { ok: true });
+    }
+
     this.json(res, 404, { error: 'Not found' });
   }
 
@@ -826,6 +940,23 @@ export class WebChannel implements Channel {
   }
 
   // --- Helpers ---
+
+  /** Resolve a template ID to its directory in the active pack. */
+  private resolveTemplateDir(template: string): string | null {
+    if (!/^[a-z0-9-]+$/.test(template)) return null;
+    const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
+    let activePack = 'starter';
+    try {
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(clawdoodlesDir, 'manifest.json'), 'utf-8'),
+      );
+      activePack = manifest.activePack || 'starter';
+    } catch {
+      /* use default */
+    }
+    const dir = path.join(clawdoodlesDir, 'packs', activePack, template);
+    return fs.existsSync(dir) ? dir : null;
+  }
 
   private json(res: http.ServerResponse, status: number, data: unknown): void {
     res.writeHead(status, { 'Content-Type': 'application/json' });

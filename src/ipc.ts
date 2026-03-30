@@ -30,6 +30,21 @@ export interface IpcDeps {
   ) => void;
   onTasksChanged: () => void;
   onAchievement?: (achievement: AchievementDef, group: string) => void;
+  onGroupRegistered?: (jid: string) => void;
+  storeChatMetadata?: (
+    jid: string,
+    timestamp: string,
+    name: string,
+    channel: string,
+    isGroup: boolean,
+  ) => void;
+  onCredentialRequested?: (request: {
+    service: string;
+    hostPattern?: string;
+    description?: string;
+    email?: string;
+    groupFolder: string;
+  }) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -201,7 +216,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
         if (fs.existsSync(credentialsDir)) {
           const credFiles = fs
             .readdirSync(credentialsDir)
-            .filter((f) => f.endsWith('.json'));
+            .filter((f) => f.endsWith('.json') && !f.startsWith('result-'));
           for (const file of credFiles) {
             const filePath = path.join(credentialsDir, file);
             try {
@@ -256,6 +271,11 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For request_credential
+    service?: string;
+    hostPattern?: string;
+    description?: string;
+    email?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -537,11 +557,34 @@ export async function processTaskIpc(
           requiresTrigger: data.requiresTrigger,
           isMain: existingGroup?.isMain,
         });
+        // Create chat metadata so messages can be stored (foreign key)
+        const channel = data.jid.startsWith('web:') ? 'web' : 'unknown';
+        deps.storeChatMetadata?.(
+          data.jid,
+          new Date().toISOString(),
+          data.name,
+          channel,
+          true,
+        );
+        deps.onGroupRegistered?.(data.jid);
       } else {
         logger.warn(
           { data },
           'Invalid register_group request - missing required fields',
         );
+      }
+      break;
+
+    case 'request_credential':
+      // Broadcast to web UI to show the credential popup
+      if (data.service) {
+        deps.onCredentialRequested?.({
+          service: data.service as string,
+          hostPattern: data.hostPattern as string | undefined,
+          description: data.description as string | undefined,
+          email: data.email as string | undefined,
+          groupFolder: sourceGroup,
+        });
       }
       break;
 
@@ -580,12 +623,6 @@ const CREDENTIAL_SERVICES: Record<
     headerName: 'Authorization',
     valueFormat: 'token {value}',
     defaultHostPattern: '*.github.com',
-  },
-  harness: {
-    type: 'generic',
-    headerName: 'x-api-key',
-    valueFormat: '{value}',
-    defaultHostPattern: 'app.harness.io',
   },
   launchdarkly: {
     type: 'generic',

@@ -29,6 +29,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  achievements?: { id: string; name: string; description: string }[];
 }
 
 interface ContainerOutput {
@@ -391,9 +392,16 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // Model override: use CLAUDE_MODEL env var if set (e.g., for LiteLLM proxy model names)
+  const modelOverride = process.env.CLAUDE_MODEL || undefined;
+  if (modelOverride) {
+    log(`Using model override: ${modelOverride}`);
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
+      model: modelOverride,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
@@ -425,6 +433,7 @@ async function runQuery(
             NANOCLAW_CHAT_JID: containerInput.chatJid,
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+            NANOCLAW_ACHIEVEMENTS: JSON.stringify(containerInput.achievements || []),
           },
         },
         gmail: {

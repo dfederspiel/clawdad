@@ -70,8 +70,8 @@ Tell the user this is happening — container builds take a minute or two.
 
 Detect the service label for this instance:
 ```bash
-# The label is com.nanoclaw.<directory-name>
-LABEL="com.nanoclaw.$(basename $(pwd))"
+# The label is com.clawdad.<directory-name>
+LABEL="com.clawdad.$(basename $(pwd))"
 ```
 
 ### macOS (launchd)
@@ -110,7 +110,7 @@ If health check passes, tell the user:
 
 If it fails, check the error log:
 ```bash
-tail -20 logs/nanoclaw.error.log
+tail -20 logs/clawdad.error.log
 ```
 
 ## Summary format

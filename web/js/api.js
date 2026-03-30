@@ -42,6 +42,7 @@ export function onSSE(event, cb) {
 export const getGroups = () => fetchJson('/api/groups');
 export const getTemplates = () => fetchJson('/api/templates');
 export const getConfig = () => fetchJson('/api/config');
+export const getPack = () => fetchJson('/api/pack');
 export const saveConfig = (data) =>
   fetchJson('/api/config', { method: 'POST', body: data });
 
@@ -74,6 +75,14 @@ export const registerAnthropic = (key, customEndpoint) =>
   fetchJson('/api/register-anthropic', {
     method: 'POST',
     body: { key, customEndpoint },
+  });
+
+
+// Credential registration (agent-triggered popup)
+export const registerCredential = (service, key, opts = {}) =>
+  fetchJson('/api/register-credential', {
+    method: 'POST',
+    body: { service, key, email: opts.email, hostPattern: opts.hostPattern, groupFolder: opts.groupFolder },
   });
 
 // Status & telemetry

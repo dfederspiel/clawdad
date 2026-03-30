@@ -50,3 +50,6 @@ groups/discord_updates/*
 scripts/claw
 
 agents-sdk-docs
+
+# Clawdoodles — AI-generated templates (runtime output)
+clawdoodles/generated/

@@ -1,0 +1,34 @@
+{
+  "_comment": "Bug triage agent configuration. The agent will walk you through filling this in on first message.",
+
+  "jira_project_key": "PROJ",
+  "jira_custom_fields": {
+    "severity": "customfield_10075",
+    "environment_affected": "customfield_10121"
+  },
+  "jira_bug_statuses_skip": ["Deployed", "Closed", "Development Done", "Code Review"],
+
+  "atlassian_instance": "https://your-instance.atlassian.net",
+
+  "github_org": "your-org",
+  "github_repos": [
+    { "name": "main-repo", "mount_path": "/workspace/extra/main-repo", "description": "Primary codebase" }
+  ],
+
+  "team_members": [
+    { "name": "Team Member", "account_id": "", "areas": "frontend" }
+  ],
+
+  "subsystem_map": [
+    { "keywords": ["login", "auth", "SSO"], "paths": ["packages/auth/", "apps/main/src/auth/"] },
+    { "keywords": ["dashboard", "widgets"], "paths": ["packages/dashboard/", "src/widgets/"] }
+  ],
+
+  "git_bot_identity": {
+    "name": "ClawDad Bug Triage",
+    "email": "nanoclaw-bot@users.noreply.github.com"
+  },
+
+  "batch_limit": 3,
+  "triage_label": "triage-analyzed"
+}

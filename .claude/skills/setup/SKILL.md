@@ -56,6 +56,11 @@ Point CLI at local instance:
 onecli config set api-host http://127.0.0.1:10254
 ```
 
+Install the Node.js SDK so the runtime can talk to the gateway:
+```bash
+npm ls @onecli-sh/sdk 2>/dev/null || npm install @onecli-sh/sdk
+```
+
 Ensure `.env` has OneCLI URL:
 ```bash
 grep -q 'ONECLI_URL' .env 2>/dev/null || echo 'ONECLI_URL=http://127.0.0.1:10254' >> .env
@@ -93,7 +98,7 @@ AskUserQuestion: How do you connect to Claude?
 
 ### LiteLLM proxy path
 
-AskUserQuestion: "What's your LiteLLM proxy URL?" with placeholder `https://llm.labs.blackduck.com`.
+AskUserQuestion: "What's your LiteLLM proxy URL?" with placeholder `https://your-litellm-proxy.example.com`.
 
 Then ask: "What API key should I use for the proxy?" (They can paste it directly — handle gracefully.)
 

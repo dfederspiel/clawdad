@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Reset bd-nanoclaw to a clean template state.
+# Reset clawdad to a clean template state.
 # Removes all user-created state while preserving the project skeleton.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "This will remove all runtime state from bd-nanoclaw:"
+echo "This will remove all runtime state from clawdad:"
 echo "  - store/         (database — messages, tasks, sessions, groups)"
 echo "  - data/          (IPC queues, container sessions)"
 echo "  - logs/          (application logs)"
