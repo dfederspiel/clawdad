@@ -32,6 +32,7 @@ import {
   getThreadMessages,
   getUsageStats,
   getLatestRunForChat,
+  getSession,
 } from '../db.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -211,6 +212,13 @@ export class WebChannel implements Channel {
     groupFolder: string;
   }): void {
     this.broadcast('credential_request', request);
+  }
+
+  broadcastAgentProgress(
+    chatJid: string,
+    event: { tool?: string; summary: string; timestamp: string },
+  ): void {
+    this.broadcast('agent_progress', { jid: chatJid, ...event });
   }
 
   broadcastUsageUpdate(
@@ -752,6 +760,139 @@ export class WebChannel implements Channel {
       if (!task) return this.json(res, 404, { error: 'Task not found' });
       deleteTask(taskId);
       return this.json(res, 200, { ok: true });
+    }
+
+    // GET /api/transcript?group=folder — parse the session transcript for a group
+    if (method === 'GET' && url.pathname === '/api/transcript') {
+      const folder = url.searchParams.get('group');
+      if (!folder) return this.json(res, 400, { error: 'group required' });
+
+      const sessionId = getSession(folder);
+      if (!sessionId) {
+        return this.json(res, 404, { error: 'No active session' });
+      }
+
+      // Find transcript JSONL — try common project paths
+      const sessionsBase = path.join(
+        DATA_DIR,
+        'sessions',
+        folder,
+        '.claude',
+        'projects',
+      );
+      let transcriptPath: string | null = null;
+      if (fs.existsSync(sessionsBase)) {
+        const findJsonl = (dir: string): string | null => {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isFile() && entry.name === `${sessionId}.jsonl`)
+              return full;
+            if (entry.isDirectory() && entry.name !== 'subagents') {
+              const found = findJsonl(full);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        transcriptPath = findJsonl(sessionsBase);
+      }
+
+      if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+        return this.json(res, 404, { error: 'Transcript not found' });
+      }
+
+      try {
+        const content = fs.readFileSync(transcriptPath, 'utf-8');
+        const entries = content
+          .split('\n')
+          .filter((l) => l.trim())
+          .map((l) => {
+            try {
+              return JSON.parse(l);
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean);
+
+        // Parse into a simplified timeline
+        const timeline: Array<{
+          type: string;
+          role?: string;
+          tool?: string;
+          summary?: string;
+          content?: string;
+          timestamp?: string;
+        }> = [];
+
+        for (const entry of entries) {
+          if (entry.type === 'assistant' && entry.message?.content) {
+            for (const block of entry.message.content) {
+              if (block.type === 'text' && block.text) {
+                timeline.push({
+                  type: 'text',
+                  role: 'assistant',
+                  content: block.text.slice(0, 2000),
+                  timestamp: entry.timestamp,
+                });
+              }
+              if (block.type === 'tool_use') {
+                const summary = block.input?.command
+                  ? String(block.input.command).split('\n')[0].slice(0, 120)
+                  : block.input?.file_path
+                    ? String(block.input.file_path).split(/[/\\]/).pop()
+                    : block.input?.pattern
+                      ? String(block.input.pattern).slice(0, 80)
+                      : '';
+                timeline.push({
+                  type: 'tool_use',
+                  tool: block.name,
+                  summary,
+                  timestamp: entry.timestamp,
+                });
+              }
+              if (block.type === 'tool_result') {
+                timeline.push({
+                  type: 'tool_result',
+                  tool: block.name,
+                  content:
+                    typeof block.content === 'string'
+                      ? block.content.slice(0, 500)
+                      : '',
+                  timestamp: entry.timestamp,
+                });
+              }
+            }
+          }
+          if (entry.type === 'user' && entry.message?.content) {
+            const text =
+              typeof entry.message.content === 'string'
+                ? entry.message.content
+                : Array.isArray(entry.message.content)
+                  ? entry.message.content
+                      .filter(
+                        (b: { type: string; text?: string }) =>
+                          b.type === 'text',
+                      )
+                      .map((b: { text: string }) => b.text)
+                      .join('')
+                  : '';
+            if (text) {
+              timeline.push({
+                type: 'text',
+                role: 'user',
+                content: text.slice(0, 2000),
+                timestamp: entry.timestamp,
+              });
+            }
+          }
+        }
+
+        return this.json(res, 200, { sessionId, timeline });
+      } catch (err) {
+        logger.error({ err, folder }, 'Failed to parse transcript');
+        return this.json(res, 500, { error: 'Failed to parse transcript' });
+      }
     }
 
     // GET /api/usage — token and cost usage metrics

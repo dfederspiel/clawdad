@@ -55,6 +55,14 @@ export function _resetOneCLI(): void {
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+const PROGRESS_START_MARKER = '---NANOCLAW_PROGRESS_START---';
+const PROGRESS_END_MARKER = '---NANOCLAW_PROGRESS_END---';
+
+export interface ProgressEvent {
+  tool?: string;
+  summary: string;
+  timestamp: string;
+}
 
 export interface ContainerInput {
   prompt: string;
@@ -382,6 +390,7 @@ export async function runContainerAgent(
   input: ContainerInput,
   onProcess: (proc: ChildProcess, containerName: string) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  onProgress?: (event: ProgressEvent) => void,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
@@ -462,9 +471,35 @@ export async function runContainerAgent(
         }
       }
 
-      // Stream-parse for output markers
-      if (onOutput) {
+      // Stream-parse for output and progress markers
+      if (onOutput || onProgress) {
         parseBuffer += chunk;
+
+        // Parse progress markers (lightweight, no Promise chain)
+        if (onProgress) {
+          let progStart: number;
+          while (
+            (progStart = parseBuffer.indexOf(PROGRESS_START_MARKER)) !== -1
+          ) {
+            const progEnd = parseBuffer.indexOf(PROGRESS_END_MARKER, progStart);
+            if (progEnd === -1) break;
+            const progJson = parseBuffer
+              .slice(progStart + PROGRESS_START_MARKER.length, progEnd)
+              .trim();
+            parseBuffer = parseBuffer.slice(
+              progEnd + PROGRESS_END_MARKER.length,
+            );
+            try {
+              onProgress(JSON.parse(progJson));
+            } catch {
+              /* ignore malformed progress */
+            }
+            // Activity detected — reset timeout
+            resetTimeout();
+          }
+        }
+
+        // Parse output markers
         let startIdx: number;
         while ((startIdx = parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1) {
           const endIdx = parseBuffer.indexOf(OUTPUT_END_MARKER, startIdx);
@@ -485,7 +520,9 @@ export async function runContainerAgent(
             resetTimeout();
             // Call onOutput for all markers (including null results)
             // so idle timers start even for "silent" query completions.
-            outputChain = outputChain.then(() => onOutput(parsed));
+            if (onOutput) {
+              outputChain = outputChain.then(() => onOutput(parsed));
+            }
           } catch (err) {
             logger.warn(
               { group: group.name, error: err },

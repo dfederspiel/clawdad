@@ -1,4 +1,5 @@
 import { html } from 'htm/preact';
+import { useState } from 'preact/hooks';
 import { parseBlocks } from '../block-parser.js';
 import { BlockRenderer } from './blocks/BlockRenderer.js';
 
@@ -29,7 +30,7 @@ function formatCost(usd) {
   return `$${usd.toFixed(2)}`;
 }
 
-function UsageFooter({ usage }) {
+function UsageFooter({ usage, toolHistory, expanded, onToggle }) {
   if (!usage || (!usage.numTurns && !usage.durationMs)) return null;
 
   const parts = [];
@@ -39,21 +40,42 @@ function UsageFooter({ usage }) {
   if (totalTokens) parts.push(`${formatTokens(totalTokens)} tokens`);
   if (usage.costUsd) parts.push(formatCost(usage.costUsd));
 
+  const hasHistory = toolHistory && toolHistory.length > 0;
+
   return html`
-    <div class="flex items-center gap-1.5 mt-1 text-[10px] text-txt-muted font-mono">
-      ${parts.map((p, i) => html`
-        ${i > 0 && html`<span class="opacity-40">·</span>`}
-        <span>${p}</span>
-      `)}
+    <div class="mt-1">
+      <div
+        class="flex items-center gap-1.5 text-[10px] text-txt-muted font-mono ${hasHistory ? 'cursor-pointer hover:text-txt-2' : ''}"
+        onClick=${hasHistory ? onToggle : undefined}
+      >
+        ${hasHistory && html`
+          <span class="text-[9px] transition-transform ${expanded ? 'rotate-90' : ''}">\u25B6</span>
+        `}
+        ${parts.map((p, i) => html`
+          ${i > 0 && html`<span class="opacity-40">\u00B7</span>`}
+          <span>${p}</span>
+        `)}
+      </div>
+      ${expanded && hasHistory && html`
+        <div class="mt-1.5 pl-3 border-l-2 border-border flex flex-col gap-0.5">
+          ${toolHistory.map((t) => html`
+            <div class="flex items-center gap-1.5 text-[10px] text-txt-muted">
+              <span class="font-mono text-[9px] text-accent shrink-0">${t.tool || '>'}</span>
+              <span class="truncate">${t.summary}</span>
+            </div>
+          `)}
+        </div>
+      `}
     </div>
   `;
 }
 
-export function Message({ role, content, timestamp, senderName, isError, compact, usage }) {
+export function Message({ role, content, timestamp, senderName, isError, compact, usage, toolHistory }) {
   const isAssistant = role === 'assistant';
   const time = timestamp
     ? new Date(timestamp).toLocaleTimeString()
     : new Date().toLocaleTimeString();
+  const [expanded, setExpanded] = useState(false);
 
   const sizeClass = compact ? 'px-3 py-2 text-xs' : 'px-4 py-3 text-sm';
 
@@ -75,7 +97,14 @@ export function Message({ role, content, timestamp, senderName, isError, compact
       <div class="text-[11px] text-txt-muted mt-1.5">
         ${senderName ? `${senderName} \u00B7 ${time}` : time}
       </div>
-      ${isAssistant && usage && html`<${UsageFooter} usage=${usage} />`}
+      ${isAssistant && usage && html`
+        <${UsageFooter}
+          usage=${usage}
+          toolHistory=${toolHistory}
+          expanded=${expanded}
+          onToggle=${() => setExpanded(!expanded)}
+        />
+      `}
     </div>
   `;
 }
