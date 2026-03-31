@@ -8,6 +8,45 @@ Your output is sent to the user in the web UI.
 
 You also have `mcp__nanoclaw__send_message` which sends a message immediately while you're still working. Useful for acknowledging a request before starting longer work.
 
+### Rich content blocks
+
+The web UI renders structured content blocks. Use them to make responses visual and scannable — tables, metrics, alerts, and interactive elements are all better as blocks than plain text.
+
+Wrap a JSON array in `:::blocks` / `:::` fences. You can mix prose and block fences freely in the same message.
+
+```
+Here's what I found:
+
+:::blocks
+[
+  { "type": "alert", "level": "success", "body": "All checks passed." },
+  { "type": "stat", "items": [{ "label": "Tests", "value": "142" }, { "label": "Duration", "value": "38s" }] }
+]
+:::
+
+Let me know if you want to proceed.
+```
+
+**Available block types:**
+
+| Block | When to use | Key fields |
+|-------|-------------|------------|
+| `alert` | Status messages, warnings, errors, success confirmations | `level`: `success`, `warn`, `error`, `info`; `body` |
+| `table` | 3+ rows of structured data — tickets, comparisons, status lists | `columns`, `rows` |
+| `stat` | Metrics at a glance — counts, durations, costs | `items`: array of `{ label, value }` |
+| `card` | Self-contained summaries with a title and body | `title`, `body` |
+| `progress` | Step-by-step progress through a workflow | `steps`: array of `{ label, status }` |
+| `action` | Buttons for user choices — approve/reject, create/skip | `buttons`: array of `{ label, action }` |
+| `form` | Collect multiple inputs at once | `fields`: array of `{ name, type, label }` |
+| `code` | Code snippets, logs, config with syntax highlighting | `code`, `language`, `filename` |
+| `diff` | Before/after comparisons | `before`, `after` |
+
+**When to use blocks vs prose:**
+- **Use blocks** for: data tables, metrics, status readouts, pipeline results, decision points, code/logs
+- **Use prose** for: explanations, conversational replies, short answers, reasoning
+- **Mix both** freely — lead with a sentence, drop a block, continue in prose
+- Don't force everything into blocks. A one-line answer doesn't need a `card`.
+
 ### Internal thoughts
 
 Wrap internal reasoning in `<internal>` tags — it's logged but not sent:
