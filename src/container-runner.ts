@@ -68,11 +68,23 @@ export interface ContainerInput {
   achievements?: { id: string; name: string; description: string }[];
 }
 
+export interface UsageData {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  durationMs: number;
+  durationApiMs: number;
+  numTurns: number;
+}
+
 export interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
   error?: string;
+  usage?: UsageData;
 }
 
 interface VolumeMount {

@@ -33,6 +33,9 @@ export const status = signal(null);
 export const tasks = signal([]);
 export const telemetry = signal(null);
 export const triggers = signal([]);
+export const usage = signal(null); // latest usage stats
+export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group latest run
+export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
 
 // --- SSE ---
 
@@ -88,6 +91,31 @@ api.onSSE('typing', (data) => {
     return;
   }
   typingGroups.value = { ...typingGroups.value, [data.jid]: data.isTyping };
+  // Track when typing started for elapsed time display
+  if (data.isTyping) {
+    if (!typingStartTime.value[data.jid]) {
+      typingStartTime.value = { ...typingStartTime.value, [data.jid]: Date.now() };
+    }
+  } else {
+    const next = { ...typingStartTime.value };
+    delete next[data.jid];
+    typingStartTime.value = next;
+  }
+});
+
+api.onSSE('usage_update', (data) => {
+  lastRunUsage.value = { ...lastRunUsage.value, [data.jid]: data };
+  // Attach usage to the last assistant message for the current view
+  if (data.jid === selectedJid.value) {
+    const msgs = [...messages.value];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant' && !msgs[i].usage) {
+        msgs[i] = { ...msgs[i], usage: data };
+        messages.value = msgs;
+        break;
+      }
+    }
+  }
 });
 
 api.onSSE('thread_created', async (data) => {
@@ -360,6 +388,12 @@ async function pollTelemetry() {
   } catch { /* ignore */ }
 }
 
+async function pollUsage() {
+  try {
+    usage.value = await api.getUsage(24);
+  } catch { /* ignore */ }
+}
+
 export async function pauseTask(taskId) {
   await api.pauseTask(taskId);
   await pollTasks();
@@ -383,10 +417,12 @@ export async function getTaskLogs(taskId) {
 pollStatus();
 pollTasks();
 pollTelemetry();
+pollUsage();
 loadAchievements();
 setInterval(pollStatus, 5000);
 setInterval(pollTasks, 10000);
 setInterval(pollTelemetry, 30000);
+setInterval(pollUsage, 30000);
 
 // --- Theme ---
 

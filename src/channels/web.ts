@@ -30,6 +30,8 @@ import {
   getTelemetryStats,
   getThreadsForChat,
   getThreadMessages,
+  getUsageStats,
+  getLatestRunForChat,
 } from '../db.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -209,6 +211,22 @@ export class WebChannel implements Channel {
     groupFolder: string;
   }): void {
     this.broadcast('credential_request', request);
+  }
+
+  broadcastUsageUpdate(
+    chatJid: string,
+    usage: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+      costUsd: number;
+      durationMs: number;
+      durationApiMs: number;
+      numTurns: number;
+    },
+  ): void {
+    this.broadcast('usage_update', { jid: chatJid, ...usage });
   }
 
   // --- HTTP Request Handler ---
@@ -734,6 +752,21 @@ export class WebChannel implements Channel {
       if (!task) return this.json(res, 404, { error: 'Task not found' });
       deleteTask(taskId);
       return this.json(res, 200, { ok: true });
+    }
+
+    // GET /api/usage — token and cost usage metrics
+    if (method === 'GET' && url.pathname === '/api/usage') {
+      const hours = parseInt(url.searchParams.get('hours') || '24', 10);
+      const usage = getUsageStats(hours);
+      return this.json(res, 200, usage);
+    }
+
+    // GET /api/usage/latest?jid=... — latest run for a specific chat
+    if (method === 'GET' && url.pathname === '/api/usage/latest') {
+      const jid = url.searchParams.get('jid');
+      if (!jid) return this.json(res, 400, { error: 'jid required' });
+      const run = getLatestRunForChat(jid);
+      return this.json(res, 200, { run });
     }
 
     // GET /api/telemetry — aggregated metrics

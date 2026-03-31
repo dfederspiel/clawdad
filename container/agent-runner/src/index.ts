@@ -32,11 +32,23 @@ interface ContainerInput {
   achievements?: { id: string; name: string; description: string }[];
 }
 
+interface UsageData {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  durationMs: number;
+  durationApiMs: number;
+  numTurns: number;
+}
+
 interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
   error?: string;
+  usage?: UsageData;
 }
 
 interface SessionEntry {
@@ -370,6 +382,13 @@ async function runQuery(
   let resultCount = 0;
   const assistantTexts: string[] = [];
 
+  // Accumulate usage across all result messages in this query
+  const accumulatedUsage: UsageData = {
+    inputTokens: 0, outputTokens: 0,
+    cacheReadTokens: 0, cacheWriteTokens: 0,
+    costUsd: 0, durationMs: 0, durationApiMs: 0, numTurns: 0,
+  };
+
   // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
   let globalClaudeMd: string | undefined;
@@ -475,12 +494,28 @@ async function runQuery(
 
     if (message.type === 'result') {
       resultCount++;
-      const textResult = 'result' in message ? (message as { result?: string }).result : null;
-      log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
+      const msg = message as Record<string, unknown>;
+      const textResult = typeof msg.result === 'string' ? msg.result : null;
+
+      // Extract usage from SDK result message
+      const usage = msg.usage as { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } | undefined;
+      if (usage) {
+        accumulatedUsage.inputTokens += usage.input_tokens || 0;
+        accumulatedUsage.outputTokens += usage.output_tokens || 0;
+        accumulatedUsage.cacheReadTokens += usage.cache_read_input_tokens || 0;
+        accumulatedUsage.cacheWriteTokens += usage.cache_creation_input_tokens || 0;
+      }
+      if (typeof msg.total_cost_usd === 'number') accumulatedUsage.costUsd = msg.total_cost_usd;
+      if (typeof msg.duration_ms === 'number') accumulatedUsage.durationMs = msg.duration_ms;
+      if (typeof msg.duration_api_ms === 'number') accumulatedUsage.durationApiMs = msg.duration_api_ms;
+      if (typeof msg.num_turns === 'number') accumulatedUsage.numTurns = msg.num_turns;
+
+      log(`Result #${resultCount}: subtype=${message.subtype} turns=${accumulatedUsage.numTurns} cost=$${accumulatedUsage.costUsd.toFixed(4)}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
       writeOutput({
         status: 'success',
         result: textResult || null,
-        newSessionId
+        newSessionId,
+        usage: accumulatedUsage,
       });
     }
   }
@@ -497,7 +532,8 @@ async function runQuery(
     writeOutput({
       status: 'success',
       result: combinedText,
-      newSessionId
+      newSessionId,
+      usage: accumulatedUsage,
     });
   }
 
