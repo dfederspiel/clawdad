@@ -490,10 +490,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
 
       if (result.status === 'success') {
+        // Explicitly clear typing when query completes. Don't rely on the
+        // frontend message SSE handler alone — containers are long-lived
+        // and setTyping(false) after runAgent only fires on container exit.
+        await responseChannel.setTyping?.(responseJid, false, threadId);
         queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {
+        await responseChannel.setTyping?.(responseJid, false, threadId);
         hadError = true;
       }
     },
