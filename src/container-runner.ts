@@ -91,11 +91,23 @@ export interface ContainerInput {
   achievements?: { id: string; name: string; description: string }[];
 }
 
+export interface UsageData {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  durationMs: number;
+  durationApiMs: number;
+  numTurns: number;
+}
+
 export interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
   error?: string;
+  usage?: UsageData;
 }
 
 interface VolumeMount {
@@ -183,6 +195,16 @@ function buildVolumeMounts(
         null,
         2,
       ) + '\n',
+    );
+  }
+
+  // Ensure .claude.json exists — Claude Code exits with code 1 if missing
+  const claudeJsonFile = path.join(groupSessionsDir, '.claude.json');
+  if (!fs.existsSync(claudeJsonFile)) {
+    fs.writeFileSync(
+      claudeJsonFile,
+      JSON.stringify({ firstStartTime: new Date().toISOString() }, null, 2) +
+        '\n',
     );
   }
 
@@ -469,8 +491,8 @@ async function buildContainerArgs(
   args.push(...hostGatewayArgs());
 
   // Run as host user so bind-mounted files are accessible.
-  // Skip when running as root (uid 0), as the container's node user (uid 1000),
-  // or when getuid is unavailable (native Windows without WSL).
+  // On Windows (getuid unavailable), run as the container's node user (uid 1000)
+  // because Claude Code refuses --dangerously-skip-permissions as root.
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
@@ -482,8 +504,15 @@ async function buildContainerArgs(
     } else {
       args.push('--user', `${hostUid}:${hostGid}`);
     }
-    args.push('-e', 'HOME=/home/node');
+  } else if (hostUid == null) {
+    // Windows: getuid unavailable — run as node user to avoid root restriction.
+    // Claude Code refuses --dangerously-skip-permissions as root.
+    // The .env shadowing (mount --bind) in the entrypoint requires root, but
+    // on Windows secrets are in OneCLI vault, not .env, so this is safe.
+    args.push('--user', '1000:1000');
   }
+  // Always set HOME=/home/node — .claude/ settings are mounted there.
+  args.push('-e', 'HOME=/home/node');
 
   for (const mount of mounts) {
     if (mount.readonly) {
@@ -547,6 +576,7 @@ export async function runContainerAgent(
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, MSYS_NO_PATHCONV: '1' },
     });
 
     onProcess(container, containerName);

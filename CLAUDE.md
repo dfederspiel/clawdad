@@ -99,10 +99,69 @@ launchctl unload ~/Library/LaunchAgents/com.clawdad.plist
 launchctl kickstart -k gui/$(id -u)/com.clawdad  # restart
 
 # Linux (systemd)
-systemctl --user start clawdad
-systemctl --user stop clawdad
-systemctl --user restart clawdad
+systemctl --user start nanoclaw
+systemctl --user stop nanoclaw
+systemctl --user restart nanoclaw
+
+# Windows — both services start on login via scripts/start-clawdad.bat
+# (installed to the Windows Startup folder)
+# To start manually:
+node dist/index.js >> logs/clawdad.log 2>&1 &          # Web UI (Windows)
+wsl -d Ubuntu -- sleep infinity                          # WSL (triggers systemd → Discord + Gmail)
 ```
+
+## Windows Setup Notes
+
+ClawDad runs on Windows via Git Bash. These are the known gotchas:
+
+**Docker Desktop PATH:** After installing Docker Desktop via `winget`, the `docker` CLI is not in the Git Bash PATH until you add it manually:
+```bash
+echo 'export PATH="/c/Program Files/Docker/Docker/resources/bin:$PATH"' >> ~/.bashrc
+```
+Restart your shell after adding this.
+
+**OneCLI CLI not supported:** The `onecli` CLI installer (`onecli.sh/cli/install`) does not support Git Bash / MSYS2. Use the OneCLI dashboard at `http://localhost:10254` or the REST API to manage secrets instead:
+```bash
+# Register a secret via API
+curl -X POST http://127.0.0.1:10254/api/secrets \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Anthropic","type":"anthropic","value":"YOUR_KEY","hostPattern":"api.anthropic.com"}'
+
+# List secrets
+curl -s http://127.0.0.1:10254/api/secrets
+```
+
+**Health check shows Anthropic "missing":** The health endpoint uses `onecli secrets list` (the CLI) to verify credentials. Since the CLI doesn't work on Windows, it always reports `missing` even when the secret is correctly registered via the API. Agents still work.
+
+**pm2 log capture:** pm2 may silently fail to capture stdout/stderr on Windows. If `pm2 logs` shows nothing, run the service directly instead:
+```bash
+node dist/index.js > logs/clawdad.log 2>&1 &
+```
+
+**Service auto-start:** On Windows, both instances start on login via `scripts/start-clawdad.bat` (copied to the Startup folder). This starts the Windows web UI and boots WSL, which triggers `nanoclaw.service` via systemd. To verify after reboot:
+```bash
+curl -sf http://localhost:3456/health    # Windows web UI
+wsl -d Ubuntu -e bash -ic "systemctl --user status nanoclaw.service"  # WSL Discord + Gmail
+```
+
+## Multi-Instance Architecture
+
+This install runs two separate instances:
+
+| Instance | Location | Channels | Trigger | Auto-start |
+|----------|----------|----------|---------|------------|
+| Windows | `C:\Users\david\code\clawdad-home` | Web UI (`:3456`) | `@DavidAF` | Startup folder bat |
+| WSL Ubuntu | `/home/david/code/nanoclaw` | Discord, Gmail | `@Andy` | systemd user service |
+
+**Important:** The Discord bot token can only have one active gateway connection. Starting multiple instances that include Discord will cause the bot to appear offline. Only the WSL nanoclaw instance should run Discord.
+
+**WSL gotcha:** Node is installed via Linuxbrew (`/home/linuxbrew/.linuxbrew/bin/node`) and is not in the non-interactive PATH. The systemd unit uses the full path. If starting manually, use `bash -ic` or the full node path.
+
+**Stale WSL services:** There are inactive systemd units (`com-nanoclaw-clawdad-test.service`, `com-nanoclaw-test2.service`) pointing at test repos. These are disabled. Only `nanoclaw.service` should be enabled.
+
+## Troubleshooting
+
+**WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `npx tsx scripts/apply-skill.ts .claude/skills/add-whatsapp && npm run build`) to install it. Existing auth credentials and groups are preserved.
 
 ## Container Build Cache
 

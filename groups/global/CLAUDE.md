@@ -86,27 +86,49 @@ The `conversations/` folder contains searchable markdown snapshots of past sessi
 
 ## Credential Registration
 
-If you need API credentials for a service (Atlassian, GitLab, GitHub, LaunchDarkly), register them securely via IPC. The token is stored in the host's credential vault and injected into API requests automatically.
+If you need API credentials for a service, use the `mcp__nanoclaw__request_credential` tool. It opens a secure popup in the user's browser — you never see the secret.
 
-```bash
-# GitHub
-/workspace/scripts/register-credential.sh github "ghp_xxxx" --wait
+**CRITICAL: Never ask users to paste secrets, API keys, or tokens in chat.** Always use `request_credential`.
 
-# Atlassian (requires --email for basic auth)
-/workspace/scripts/register-credential.sh atlassian "TOKEN" --email "user@co.com" --wait
-
-# GitLab
-/workspace/scripts/register-credential.sh gitlab "glpat-xxxx" --host-pattern "gitlab.example.com" --wait
-
-# LaunchDarkly
-/workspace/scripts/register-credential.sh launchdarkly "api-xxxx" --wait
+```
+Use mcp__nanoclaw__request_credential with:
+- service: "github" (or "atlassian", "gitlab", "launchdarkly", or a custom name)
+- host_pattern: "api.github.com" (optional — uses service default if omitted)
+- description: "Why this credential is needed — shown to the user in the popup"
+- email: "user@example.com" (required for Atlassian Basic auth)
 ```
 
+The tool returns immediately — it does NOT block waiting for the user. The flow is:
+1. Tool opens a popup in the user's browser with pre-filled metadata
+2. Tool returns right away — continue with other work or tell the user what you're waiting for
+3. User enters their secret in the form (you never see it)
+4. Secret goes directly to the encrypted vault
+5. A `[credential_registered]` message appears in the chat when done — that's your signal to proceed
+
+### Using registered credentials
+
+Once a credential is registered, it is injected **automatically** into all outbound HTTPS requests matching the service's host pattern. You don't need tokens, env vars, or auth headers — just make the API call.
+
+**IMPORTANT: Always try the authenticated endpoint FIRST.** Don't ask the user for usernames, tokens, or credentials. Don't fall back to unauthenticated/public-only APIs. The credential proxy handles auth transparently — assume it works and call the authenticated API directly.
+
+```bash
+# GitHub — call /user (authenticated) not /users/{name} (public-only):
+curl -s https://api.github.com/user                    # Returns authenticated user
+curl -s https://api.github.com/user/repos?per_page=100 # All repos including private
+
+# Atlassian:
+curl -s https://yourorg.atlassian.net/rest/api/3/myself
+```
+
+Use `WebFetch` or `curl` — both work. Do NOT try to read tokens from environment variables or pass auth headers manually. The credential proxy intercepts HTTPS traffic and injects the right `Authorization` header automatically.
+
+If an API call returns 401, THEN ask about credentials — but try the call first.
+
 **Security rules:**
-- Ask the user for the token in chat — never guess or fabricate credentials
-- Call `register-credential.sh` immediately — never store the token in a file, variable, or config
-- Never echo, log, or print the token value after registration
-- The `--wait` flag confirms success (up to 30s)
+- NEVER ask the user to paste tokens, keys, or passwords in chat
+- NEVER store credentials in files, variables, or config
+- NEVER echo, log, or print credential values
+- If an API call fails with 401/403, call `request_credential` again — the token may have expired
 
 ## Event Logging
 

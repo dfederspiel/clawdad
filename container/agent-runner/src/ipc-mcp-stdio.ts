@@ -387,11 +387,13 @@ const CREDENTIALS_DIR = path.join(IPC_DIR, 'credentials');
 
 server.tool(
   'request_credential',
-  `Request the user to register a credential via the web UI. A popup appears in the browser with pre-filled metadata — the user only enters the secret. You NEVER see the key.
+  `Request the user to register a credential. In web UI groups (chatJid starts with "web:"), this opens a secure popup in the browser — the user enters the secret directly, you never see it. For non-web channels, falls back to register-credential.sh.
 
 Use this instead of asking the user to paste secrets into chat. The credential is stored in an encrypted vault and injected automatically into API calls.
 
-Known services: atlassian, github, gitlab, launchdarkly. For other services, provide a custom service name and host_pattern.`,
+Known services: atlassian, github, gitlab, launchdarkly. For other services, provide a custom service name and host_pattern.
+
+This tool returns immediately after sending the credential request. The user will submit the credential asynchronously. Once registered, a confirmation message is sent to the chat. You can proceed with other work in the meantime.`,
   {
     service: z.string().describe('Service name (e.g., "atlassian", "github", "gitlab", "launchdarkly", or a custom name)'),
     host_pattern: z.string().optional().describe('Host pattern for the credential (e.g., "*.atlassian.net"). Uses service default if omitted.'),
@@ -399,7 +401,25 @@ Known services: atlassian, github, gitlab, launchdarkly. For other services, pro
     email: z.string().optional().describe('Email address (required for Atlassian Basic auth)'),
   },
   async (args) => {
-    // Write IPC task — host picks this up and broadcasts to the browser
+    const isWebChannel = chatJid.startsWith('web:');
+
+    if (!isWebChannel) {
+      // Non-web channel (CLI, Telegram, etc.) — no browser popup available.
+      // Tell the agent to use the CLI fallback instead.
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Cannot open a credential popup — this group is not running in the web UI (channel: ${chatJid}). ` +
+              `Use the CLI fallback instead:\n\n` +
+              `/workspace/scripts/register-credential.sh ${args.service} "TOKEN_VALUE"${args.email ? ` --email "${args.email}"` : ''}${args.host_pattern ? ` --host-pattern "${args.host_pattern}"` : ''} --wait\n\n` +
+              `Ask the user to provide the token in chat, then call register-credential.sh immediately. Never store the token in a file.`,
+          },
+        ],
+      };
+    }
+
+    // Web UI — send IPC task to open browser popup (non-blocking)
     writeIpcFile(TASKS_DIR, {
       type: 'request_credential',
       service: args.service,
@@ -411,47 +431,16 @@ Known services: atlassian, github, gitlab, launchdarkly. For other services, pro
       timestamp: new Date().toISOString(),
     });
 
-    // Poll for result (same pattern as register-credential.sh --wait)
-    const resultPath = path.join(CREDENTIALS_DIR, `result-${args.service}.json`);
-    for (let i = 0; i < 60; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
-      try {
-        if (fs.existsSync(resultPath)) {
-          const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
-          fs.unlinkSync(resultPath);
-          if (result.success) {
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: `Credential "${args.service}" registered successfully. You can now make API calls to ${args.host_pattern || 'the service'}.`,
-                },
-              ],
-            };
-          }
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: `Credential registration failed: ${result.message}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      } catch {
-        // File may not exist yet — keep polling
-      }
-    }
-
     return {
       content: [
         {
           type: 'text' as const,
-          text: 'Credential registration timed out (2 minutes). Ask the user to try again, or register via CLI: onecli secrets create',
+          text: `A secure credential form for "${args.service}" has been sent to the browser. ` +
+            `The user will enter their secret there — you will never see it. ` +
+            `A confirmation message will appear in the chat once the credential is registered. ` +
+            `You can continue with other work in the meantime.`,
         },
       ],
-      isError: true,
     };
   },
 );
