@@ -2,21 +2,13 @@
  * Health check module for first-boot onboarding.
  * Returns structured prerequisite status so the web UI can guide users
  * through setup before they try to use agents.
- *
- * Supports two credential paths:
- *   1. Native credential proxy — keys in .env (fast, no external deps)
- *   2. OneCLI Agent Vault — keys in vault, checked via HTTP API
- * Both are checked; either passing is sufficient.
  */
 import { execSync } from 'child_process';
-import http from 'http';
 
 import { CONTAINER_IMAGE } from './config.js';
 import { CONTAINER_RUNTIME_BIN } from './container-runtime.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
-
-const ONECLI_DEFAULT_URL = 'http://127.0.0.1:10254';
 
 export interface HealthStatus {
   docker: {
@@ -61,133 +53,18 @@ function checkDocker(): HealthStatus['docker'] {
   }
 }
 
-// --- Credential checking helpers ---
-
-/** Check .env for Anthropic credentials (native credential proxy path). */
-function hasEnvCredentials(): boolean {
+/** Check .env for Anthropic credentials. */
+function checkCredentials(): HealthStatus['credential_proxy'] {
   const envVars = readEnvFile([
     'ANTHROPIC_API_KEY',
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
   ]);
-  return (
+  const configured =
     !!envVars.ANTHROPIC_API_KEY ||
     !!envVars.CLAUDE_CODE_OAUTH_TOKEN ||
-    !!envVars.ANTHROPIC_AUTH_TOKEN
-  );
-}
-
-/**
- * Check if any secret in the OneCLI vault matches the Anthropic host.
- * Supports custom ANTHROPIC_BASE_URL endpoints.
- */
-function matchesAnthropicHost(
-  secrets: Array<{ hostPattern?: string }>,
-): boolean {
-  const envVars = readEnvFile(['ANTHROPIC_BASE_URL']);
-  const baseUrl = process.env.ANTHROPIC_BASE_URL || envVars.ANTHROPIC_BASE_URL;
-  const anthropicHost = baseUrl
-    ? new URL(baseUrl).hostname
-    : 'api.anthropic.com';
-  return (
-    Array.isArray(secrets) &&
-    secrets.some(
-      (s) =>
-        s.hostPattern &&
-        (s.hostPattern.includes('anthropic.com') ||
-          s.hostPattern.includes(anthropicHost)),
-    )
-  );
-}
-
-/** Try the onecli CLI binary (fast, no network). Returns null if CLI unavailable. */
-function checkOneCLIViaCli(): boolean | null {
-  try {
-    const output = execSync('onecli secrets list', {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-      timeout: 5000,
-    });
-    const secrets = JSON.parse(output);
-    return matchesAnthropicHost(secrets);
-  } catch {
-    return null; // CLI not available
-  }
-}
-
-/** Query the OneCLI HTTP API for secrets. */
-function checkOneCLIViaApi(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const url = new URL('/api/secrets', ONECLI_DEFAULT_URL);
-    const req = http.get(url, { timeout: 3000 }, (res) => {
-      let data = '';
-      res.on('data', (chunk: string) => {
-        data += chunk;
-      });
-      res.on('end', () => {
-        try {
-          const secrets = JSON.parse(data);
-          resolve(matchesAnthropicHost(secrets));
-        } catch {
-          resolve(false);
-        }
-      });
-    });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => {
-      req.destroy();
-      resolve(false);
-    });
-  });
-}
-
-/** Returns true if the OneCLI gateway is responding. */
-export function checkGateway(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const url = new URL('/api/health', ONECLI_DEFAULT_URL);
-    const req = http.get(url, { timeout: 3000 }, (res) => {
-      res.resume();
-      resolve(true);
-    });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => {
-      req.destroy();
-      resolve(false);
-    });
-  });
-}
-
-// --- Health checks ---
-
-/**
- * Check if credentials are available via either path:
- *   1. .env (native credential proxy)
- *   2. OneCLI vault (CLI first, then HTTP API fallback)
- */
-async function checkCredentialProxy(): Promise<
-  HealthStatus['credential_proxy']
-> {
-  if (hasEnvCredentials()) return { status: 'configured' };
-
-  // Try OneCLI: CLI binary first, then HTTP API
-  const cliResult = checkOneCLIViaCli();
-  if (cliResult === true) return { status: 'configured' };
-  if (cliResult === null) {
-    // CLI unavailable — try HTTP API
-    const apiResult = await checkOneCLIViaApi();
-    if (apiResult) return { status: 'configured' };
-  }
-
-  return { status: 'missing' };
-}
-
-/**
- * Check if Anthropic credentials are configured via either path.
- * Same cascade as checkCredentialProxy but reported separately for the UI.
- */
-async function checkAnthropic(): Promise<HealthStatus['anthropic']> {
-  const proxy = await checkCredentialProxy();
-  return { status: proxy.status };
+    !!envVars.ANTHROPIC_AUTH_TOKEN;
+  return { status: configured ? 'configured' : 'missing' };
 }
 
 function checkContainerImage(): HealthStatus['container_image'] {
@@ -206,11 +83,8 @@ function checkContainerImage(): HealthStatus['container_image'] {
 }
 
 export async function getHealthStatus(): Promise<HealthStatus> {
-  // Run checks concurrently where possible
-  const [docker, credentialProxy] = await Promise.all([
-    Promise.resolve(checkDocker()),
-    checkCredentialProxy(),
-  ]);
+  const docker = checkDocker();
+  const credentialProxy = checkCredentials();
   const anthropic: HealthStatus['anthropic'] = {
     status: credentialProxy.status,
   };
@@ -219,7 +93,6 @@ export async function getHealthStatus(): Promise<HealthStatus> {
   const allGood =
     docker.status === 'running' &&
     credentialProxy.status === 'configured' &&
-    anthropic.status === 'configured' &&
     containerImage.status === 'built';
 
   const result: HealthStatus = {

@@ -4,7 +4,7 @@ Agent orchestrator running Claude in isolated containers. Web UI is the primary 
 
 ## Getting Started
 
-New users should run `claude` in the terminal and say "help me get set up" (or `/setup`). Claude walks through everything: Node.js, OneCLI, Docker, Anthropic credentials, container build, and web UI start. No manual `npm install` needed.
+New users should run `claude` in the terminal and say "help me get set up" (or `/setup`). Claude walks through everything: Node.js, Docker, Anthropic credentials, container build, and web UI start. No manual `npm install` needed.
 
 The web UI runs at `http://localhost:3456`. Most users interact through:
 - **Web UI** — chat with agents, create from templates, review tasks
@@ -12,7 +12,7 @@ The web UI runs at `http://localhost:3456`. Most users interact through:
 
 ## Quick Context
 
-Single Node.js process with web UI channel (always-on) and optional messaging channels. Agents run via Claude Agent SDK in Docker containers. Each group has isolated filesystem and memory. Credentials flow through OneCLI Agent Vault — agents never see raw API keys.
+Single Node.js process with web UI channel (always-on) and optional messaging channels. Agents run via Claude Agent SDK in Docker containers. Each group has isolated filesystem and memory. Credentials are stored in `.env` and passed to containers as env vars (Anthropic key goes through a local proxy).
 
 ## Key Files
 
@@ -24,7 +24,7 @@ Single Node.js process with web UI channel (always-on) and optional messaging ch
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/config.ts` | Trigger pattern, paths, intervals |
 | `src/container-runner.ts` | Spawns agent containers with mounts |
-| `src/health.ts` | Prerequisite checks (Docker, OneCLI, Anthropic, container image) |
+| `src/health.ts` | Prerequisite checks (Docker, Anthropic, container image) |
 | `src/channels/web.ts` | Web UI channel, API endpoints, health/register routes |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
@@ -61,31 +61,26 @@ Every agent run records token usage, cost, duration, and turn count. This data i
 - Click the footer to expand and see the full tool call chain
 - Telemetry panel shows 24h totals, cache stats, and cost-by-group
 
-## Secrets / Credentials / Proxy (OneCLI)
+## Secrets / Credentials
 
-API keys, OAuth tokens, and auth credentials are managed by the **OneCLI Agent Vault** — a local gateway that intercepts outbound HTTPS requests from containers and injects credentials at request time. Agents never see raw keys. See [docs/CREDENTIALS.md](docs/CREDENTIALS.md) for the full reference.
+All credentials live in `.env` (untracked). Two types:
 
-The gateway starts automatically when agents run (via the OneCLI SDK's `applyContainerConfig`). You don't need to start it manually.
+- **Anthropic API key** — routed through a local HTTP proxy (`src/credential-proxy.ts`) that injects the real key. Containers get `ANTHROPIC_BASE_URL` pointing at the proxy and a placeholder key.
+- **Service credentials** (GitHub, GitLab, etc.) — passed directly as env vars to containers. Agents use them in curl headers: `curl -H "Authorization: token $GITHUB_TOKEN" ...`
 
-**Quick reference:**
-
+**Adding credentials:** Agents use `mcp__nanoclaw__request_credential` which opens a web popup → user enters secret → saved to `.env`. Or add manually:
 ```bash
-onecli secrets list                     # List registered secrets
-onecli secrets create --name NAME \     # Register a new credential
-  --type anthropic|generic \
-  --value TOKEN \
-  --host-pattern api.example.com \
-  --header-name Authorization           # (required for --type generic)
-curl -sf http://127.0.0.1:10254/health  # Verify gateway is running (after an agent starts)
+echo 'GITHUB_TOKEN=ghp_xxxxx' >> .env
+echo 'GITLAB_TOKEN=glpat-xxxxx' >> .env
 ```
 
-**Config vs secrets:** Non-secret values (URLs, account IDs) pass to containers as env vars via `PASSTHROUGH_ENV_PREFIXES` in `container-runner.ts`. Secrets flow through the gateway only.
+Variables matching `*_TOKEN`, `*_KEY`, `*_SECRET`, or `*_PASSWORD` are automatically forwarded to containers (excluding `ANTHROPIC_*` and `CLAUDE_CODE_*` which go through the proxy).
 
-**Custom Anthropic endpoint:** Set `ANTHROPIC_BASE_URL` in `.env` AND match the OneCLI host pattern — both are required or you'll get silent "Invalid API key" errors.
+**Custom Anthropic endpoint:** Set `ANTHROPIC_BASE_URL` in `.env`.
 
 ## Reset
 
-Run `./scripts/reset.sh` to wipe all runtime state and return to a clean template. This removes the database, IPC state, logs, and user-created groups while preserving `.env`, template groups (`main/`, `global/`), and OneCLI vault credentials. Use `--yes` to skip confirmation.
+Run `./scripts/reset.sh` to wipe all runtime state and return to a clean template. This removes the database, IPC state, logs, and user-created groups while preserving `.env` and template groups (`main/`, `global/`). Use `--yes` to skip confirmation.
 
 ## Skills
 
@@ -102,7 +97,6 @@ Four types of skills exist in ClawDad. See [CONTRIBUTING.md](CONTRIBUTING.md) fo
 | `/update` | Pull latest code, rebuild, restart service |
 | `/customize` | Adding channels, integrations, changing behavior |
 | `/debug` | Container issues, logs, troubleshooting |
-| `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials to it |
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
 
@@ -148,19 +142,6 @@ ClawDad runs on Windows via Git Bash. These are the known gotchas:
 echo 'export PATH="/c/Program Files/Docker/Docker/resources/bin:$PATH"' >> ~/.bashrc
 ```
 Restart your shell after adding this.
-
-**OneCLI CLI not supported:** The `onecli` CLI installer (`onecli.sh/cli/install`) does not support Git Bash / MSYS2. Use the OneCLI dashboard at `http://localhost:10254` or the REST API to manage secrets instead:
-```bash
-# Register a secret via API
-curl -X POST http://127.0.0.1:10254/api/secrets \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Anthropic","type":"anthropic","value":"YOUR_KEY","hostPattern":"api.anthropic.com"}'
-
-# List secrets
-curl -s http://127.0.0.1:10254/api/secrets
-```
-
-**Health check shows Anthropic "missing":** The health endpoint uses `onecli secrets list` (the CLI) to verify credentials. Since the CLI doesn't work on Windows, it always reports `missing` even when the secret is correctly registered via the API. Agents still work.
 
 **pm2 log capture:** pm2 may silently fail to capture stdout/stderr on Windows. If `pm2 logs` shows nothing, run the service directly instead:
 ```bash
