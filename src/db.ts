@@ -146,6 +146,28 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Agent run usage tracking
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_jid TEXT NOT NULL,
+      group_folder TEXT NOT NULL,
+      session_id TEXT,
+      timestamp TEXT NOT NULL,
+      input_tokens INTEGER DEFAULT 0,
+      output_tokens INTEGER DEFAULT 0,
+      cache_read_tokens INTEGER DEFAULT 0,
+      cache_write_tokens INTEGER DEFAULT 0,
+      cost_usd REAL DEFAULT 0,
+      duration_ms INTEGER DEFAULT 0,
+      num_turns INTEGER DEFAULT 0,
+      is_error INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_chat ON agent_runs(chat_jid);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_ts ON agent_runs(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_group ON agent_runs(group_folder);
+  `);
+
   // Add thread_id column to messages and threads table (migration for threaded conversations)
   try {
     database.exec(`ALTER TABLE messages ADD COLUMN thread_id TEXT`);
@@ -1056,4 +1078,129 @@ function migrateJsonState(): void {
       }
     }
   }
+}
+
+// --- Agent run usage tracking ---
+
+export interface AgentRunRecord {
+  chat_jid: string;
+  group_folder: string;
+  session_id?: string;
+  timestamp: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number;
+  duration_ms: number;
+  num_turns: number;
+  is_error: boolean;
+}
+
+export function storeAgentRun(run: AgentRunRecord): void {
+  db.prepare(
+    `INSERT INTO agent_runs (chat_jid, group_folder, session_id, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms, num_turns, is_error)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    run.chat_jid,
+    run.group_folder,
+    run.session_id || null,
+    run.timestamp,
+    run.input_tokens,
+    run.output_tokens,
+    run.cache_read_tokens,
+    run.cache_write_tokens,
+    run.cost_usd,
+    run.duration_ms,
+    run.num_turns,
+    run.is_error ? 1 : 0,
+  );
+}
+
+export function getUsageStats(periodHours: number = 24): {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
+  totalCostUsd: number;
+  totalRuns: number;
+  totalDurationMs: number;
+  avgTurns: number;
+  byGroup: Array<{
+    group_folder: string;
+    runs: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+  }>;
+} {
+  const since = new Date(
+    Date.now() - periodHours * 60 * 60 * 1000,
+  ).toISOString();
+
+  const totals = db
+    .prepare(
+      `SELECT
+        COALESCE(SUM(input_tokens), 0) as input_tokens,
+        COALESCE(SUM(output_tokens), 0) as output_tokens,
+        COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+        COALESCE(SUM(cache_write_tokens), 0) as cache_write_tokens,
+        COALESCE(SUM(cost_usd), 0) as cost_usd,
+        COUNT(*) as runs,
+        COALESCE(SUM(duration_ms), 0) as duration_ms,
+        COALESCE(AVG(num_turns), 0) as avg_turns
+       FROM agent_runs WHERE timestamp > ?`,
+    )
+    .get(since) as {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    cost_usd: number;
+    runs: number;
+    duration_ms: number;
+    avg_turns: number;
+  };
+
+  const byGroup = db
+    .prepare(
+      `SELECT group_folder,
+        COUNT(*) as runs,
+        COALESCE(SUM(input_tokens), 0) as input_tokens,
+        COALESCE(SUM(output_tokens), 0) as output_tokens,
+        COALESCE(SUM(cost_usd), 0) as cost_usd
+       FROM agent_runs WHERE timestamp > ?
+       GROUP BY group_folder ORDER BY cost_usd DESC LIMIT 20`,
+    )
+    .all(since) as Array<{
+    group_folder: string;
+    runs: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+  }>;
+
+  return {
+    totalInputTokens: totals.input_tokens,
+    totalOutputTokens: totals.output_tokens,
+    totalCacheReadTokens: totals.cache_read_tokens,
+    totalCacheWriteTokens: totals.cache_write_tokens,
+    totalCostUsd: totals.cost_usd,
+    totalRuns: totals.runs,
+    totalDurationMs: totals.duration_ms,
+    avgTurns: totals.avg_turns,
+    byGroup,
+  };
+}
+
+export function getLatestRunForChat(chatJid: string): AgentRunRecord | null {
+  const row = db
+    .prepare(
+      'SELECT * FROM agent_runs WHERE chat_jid = ? ORDER BY timestamp DESC LIMIT 1',
+    )
+    .get(chatJid) as
+    | (Omit<AgentRunRecord, 'is_error'> & { is_error: number })
+    | undefined;
+  if (!row) return null;
+  return { ...row, is_error: row.is_error === 1 };
 }

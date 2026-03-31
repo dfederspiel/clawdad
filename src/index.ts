@@ -23,6 +23,7 @@ import {
 } from './channels/registry.js';
 import {
   ContainerOutput,
+  UsageData,
   runContainerAgent,
   writeGroupsSnapshot,
   writeTasksSnapshot,
@@ -53,6 +54,7 @@ import {
   deleteSession,
   setSession,
   storeChatMetadata,
+  storeAgentRun,
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -96,6 +98,16 @@ let messageLoopRunning = false;
 // Maps triggered agent JID → origin info for cross-chat response routing
 const pendingOrigins: Record<string, { originJid: string; threadId?: string }> =
   {};
+
+/** Broadcast usage metrics to web UI clients */
+function broadcastUsage(chatJid: string, usage: UsageData): void {
+  for (const ch of channels) {
+    if (ch.name === 'web' && 'broadcastUsageUpdate' in ch) {
+      (ch as any).broadcastUsageUpdate(chatJid, usage);
+      break;
+    }
+  }
+}
 
 // Maps thread_id → agent JID for thread reply routing (rebuilt from DB on startup)
 const activeThreads = new Map<
@@ -530,12 +542,44 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
-  // Wrap onOutput to track session ID from streamed results
+  // Track whether usage has been stored for this run (avoid duplicates)
+  let usageStored = false;
+
+  // Wrap onOutput to track session ID and usage from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
         if (output.newSessionId) {
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
+        }
+        // Store usage immediately when it arrives (don't wait for container exit)
+        if (output.usage && !usageStored) {
+          usageStored = true;
+          const u = output.usage;
+          storeAgentRun({
+            chat_jid: chatJid,
+            group_folder: group.folder,
+            session_id: sessions[group.folder],
+            timestamp: new Date().toISOString(),
+            input_tokens: u.inputTokens,
+            output_tokens: u.outputTokens,
+            cache_read_tokens: u.cacheReadTokens,
+            cache_write_tokens: u.cacheWriteTokens,
+            cost_usd: u.costUsd,
+            duration_ms: u.durationMs,
+            num_turns: u.numTurns,
+            is_error: output.status === 'error',
+          });
+          broadcastUsage(chatJid, u);
+          logger.info(
+            {
+              group: group.name,
+              cost: u.costUsd,
+              turns: u.numTurns,
+              tokens: u.inputTokens + u.outputTokens,
+            },
+            'Agent run usage stored',
+          );
         }
         await onOutput(output);
       }
