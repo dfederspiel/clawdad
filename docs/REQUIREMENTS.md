@@ -163,7 +163,7 @@ A personal Claude assistant accessible via messaging, with minimal custom code.
 ### Skills
 - `/setup` - Install dependencies, configure channels, start services
 - `/customize` - General-purpose skill for adding capabilities
-- `/update-nanoclaw` - Pull upstream changes, merge with customizations
+- `/update` - Pull latest code, rebuild, and restart
 
 ### Deployment
 - Runs on macOS (launchd), Linux (systemd), or Windows (WSL2)

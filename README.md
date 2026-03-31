@@ -119,7 +119,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for skill types, PR guidelines, and the c
 
 ## Upstream
 
-ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoclaw) by [Qwibit](https://github.com/qwibitai). The core container runtime, agent SDK integration, credential vault, and skill system all come from NanoClaw. Use `/update-nanoclaw` to pull upstream updates.
+ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoclaw) by [Qwibit](https://github.com/qwibitai). The core container runtime, agent SDK integration, credential vault, and skill system all come from NanoClaw. Use `/update` to pull the latest ClawDad code.
 
 ## License
 
