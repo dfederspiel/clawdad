@@ -13,10 +13,13 @@ logs/
 groups/*
 !groups/main/
 !groups/global/
+!groups/global-web/
 groups/main/*
 groups/global/*
+groups/global-web/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
+!groups/global-web/CLAUDE.md
 
 # Secrets
 *.keys.json

@@ -4,9 +4,11 @@ These instructions apply to all agents running in ClawDad. Your individual CLAUD
 
 ## Communication
 
-Your output is sent to the user in the web UI.
+Your output is sent to the user via the channel this group is connected to (web UI, Discord, Telegram, etc.).
 
 You also have `mcp__nanoclaw__send_message` which sends a message immediately while you're still working. Useful for acknowledging a request before starting longer work.
+
+Channel-specific capabilities (rich content blocks, sounds, credential popups) are loaded separately for channels that support them.
 
 ### Internal thoughts
 
@@ -21,22 +23,6 @@ Here's what I found...
 ### Sub-agents and teammates
 
 When working as a sub-agent or teammate, only use `send_message` if instructed by the main agent.
-
-### Sounds and status
-
-You can play notification sounds and set your sidebar status using MCP tools:
-
-- `mcp__nanoclaw__play_sound` — play a named tone (e.g. `treasure`, `levelup`, `encounter`) or compose a custom sound
-- `mcp__nanoclaw__set_subtitle` — set a status line under your group name (e.g. "Monitoring 3 PRs")
-
-You can also embed sounds inline in your message output:
-```
-:::sound
-{"tone": "treasure", "label": "Task complete!"}
-:::
-```
-
-Use sounds sparingly and meaningfully — to signal completion, errors, or attention-needed moments. Don't spam them.
 
 ## Your Workspace
 
