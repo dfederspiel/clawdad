@@ -222,7 +222,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               fs.unlinkSync(filePath); // Remove immediately — contains secret
-              await processCredentialIpc(data, sourceGroup, credentialsDir);
+              await processCredentialIpc(
+                data,
+                sourceGroup,
+                credentialsDir,
+                deps,
+              );
             } catch (err) {
               logger.error(
                 { file, sourceGroup, err },
@@ -644,6 +649,7 @@ async function processCredentialIpc(
   data: CredentialIpcData,
   sourceGroup: string,
   credentialsDir: string,
+  deps: IpcDeps,
 ): Promise<void> {
   const { service, value, email, hostPattern, name } = data;
 
@@ -717,6 +723,7 @@ async function processCredentialIpc(
       true,
       'Credential registered successfully',
     );
+    notifyGroupCredentialResult(deps, sourceGroup, service, true);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     // Check if it's a duplicate — that's OK, just update
@@ -735,6 +742,7 @@ async function processCredentialIpc(
         true,
         'Credential already registered',
       );
+      notifyGroupCredentialResult(deps, sourceGroup, service, true);
     } else {
       logger.error(
         { service, sourceGroup, err: message },
@@ -746,6 +754,7 @@ async function processCredentialIpc(
         false,
         `Registration failed: ${message}`,
       );
+      notifyGroupCredentialResult(deps, sourceGroup, service, false, message);
     }
   }
 }
@@ -765,4 +774,33 @@ function writeCredentialResult(
   } catch {
     // Best-effort — container may check for this but it's not critical
   }
+}
+
+/**
+ * Send a chat message to the group that requested a credential,
+ * so the agent knows the credential was registered (or failed)
+ * without having to poll.
+ */
+function notifyGroupCredentialResult(
+  deps: IpcDeps,
+  sourceGroup: string,
+  service: string,
+  success: boolean,
+  errorMessage?: string,
+): void {
+  // Find the JID for this group folder
+  const groups = deps.registeredGroups();
+  const jid = Object.keys(groups).find((k) => groups[k].folder === sourceGroup);
+  if (!jid) return;
+
+  const text = success
+    ? `[credential_registered] The "${service}" credential has been registered successfully. You can now make API calls to this service.`
+    : `[credential_failed] The "${service}" credential registration failed: ${errorMessage}`;
+
+  deps.sendMessage(jid, text).catch((err) => {
+    logger.debug(
+      { err, service, sourceGroup },
+      'Failed to send credential notification',
+    );
+  });
 }
