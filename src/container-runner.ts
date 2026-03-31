@@ -342,8 +342,11 @@ async function buildContainerArgs(
     } else {
       args.push('--user', `${hostUid}:${hostGid}`);
     }
-  } else if (hostUid == null && !isMain) {
-    // Windows: getuid unavailable — run as node user to avoid root restriction
+  } else if (hostUid == null) {
+    // Windows: getuid unavailable — run as node user to avoid root restriction.
+    // Claude Code refuses --dangerously-skip-permissions as root.
+    // The .env shadowing (mount --bind) in the entrypoint requires root, but
+    // on Windows secrets are in OneCLI vault, not .env, so this is safe.
     args.push('--user', '1000:1000');
   }
   // Always set HOME=/home/node — .claude/ settings are mounted there.
