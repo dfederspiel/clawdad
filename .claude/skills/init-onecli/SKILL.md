@@ -1,11 +1,11 @@
 ---
 name: init-onecli
-description: Install and initialize OneCLI Agent Vault. Migrates existing .env credentials to the vault. Use after /update-nanoclaw brings in OneCLI as a breaking change, or for first-time OneCLI setup.
+description: Install and initialize OneCLI Agent Vault. Migrates existing .env credentials to the vault. Use after /update brings in OneCLI as a breaking change, or for first-time OneCLI setup.
 ---
 
 # Initialize OneCLI Agent Vault
 
-This skill installs OneCLI, configures the Agent Vault gateway, and migrates any existing `.env` credentials into it. Run this after `/update-nanoclaw` introduces OneCLI as a breaking change, or any time OneCLI needs to be set up from scratch.
+This skill installs OneCLI, configures the Agent Vault gateway, and migrates any existing `.env` credentials into it. Run this after `/update` introduces OneCLI as a breaking change, or any time OneCLI needs to be set up from scratch.
 
 **Principle:** When something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their manual action (e.g. pasting a token).
 
@@ -56,7 +56,7 @@ If they cancel, stop.
 grep "@onecli-sh/sdk" package.json
 ```
 
-If `@onecli-sh/sdk` is NOT in package.json (check both `dependencies` and `optionalDependencies`), the codebase hasn't been updated to use OneCLI yet. Tell the user to run `/update-nanoclaw` first to get the OneCLI integration, then retry `/init-onecli`. Stop here.
+If `@onecli-sh/sdk` is NOT in package.json (check both `dependencies` and `optionalDependencies`), the codebase hasn't been updated to use OneCLI yet. Tell the user to run `/update` first to get the OneCLI integration, then retry `/init-onecli`. Stop here.
 
 If it is listed but not installed, install it:
 ```bash
