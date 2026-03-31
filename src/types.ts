@@ -55,6 +55,7 @@ export interface NewMessage {
   is_from_me?: boolean;
   is_bot_message?: boolean;
   thread_id?: string;
+  usage?: string;
 }
 
 export interface ThreadInfo {

@@ -235,13 +235,20 @@ export async function selectGroup(jid) {
 
   // Build the DB message list, then merge any SSE messages that arrived
   // during the fetch (they're already in messages.value via the SSE handler).
-  const dbMessages = msgData.messages.map((m) => ({
-    id: m.id,
-    role: m.is_bot_message || m.is_from_me ? 'assistant' : 'user',
-    content: m.content,
-    timestamp: m.timestamp,
-    senderName: m.sender_name,
-  }));
+  const dbMessages = msgData.messages.map((m) => {
+    let parsedUsage;
+    if (m.usage) {
+      try { parsedUsage = JSON.parse(m.usage); } catch { /* ignore */ }
+    }
+    return {
+      id: m.id,
+      role: m.is_bot_message || m.is_from_me ? 'assistant' : 'user',
+      content: m.content,
+      timestamp: m.timestamp,
+      senderName: m.sender_name,
+      usage: parsedUsage,
+    };
+  });
   const dbIds = new Set(dbMessages.map((m) => m.id));
   const sseDuring = messages.value.filter((m) => !m.id || !dbIds.has(m.id));
   messages.value = [...dbMessages, ...sseDuring];
