@@ -72,6 +72,7 @@ export interface ScheduledTask {
   id: string;
   group_folder: string;
   chat_jid: string;
+  title?: string;
   prompt: string;
   script?: string | null;
   schedule_type: 'cron' | 'interval' | 'once';

@@ -175,6 +175,13 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_agent_runs_group ON agent_runs(group_folder);
   `);
 
+  // Add title column to scheduled_tasks (short display name)
+  try {
+    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN title TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
   // Add usage column to messages (migration for usage tracking on bot responses)
   try {
     database.exec(`ALTER TABLE messages ADD COLUMN usage TEXT`);
@@ -557,18 +564,37 @@ export function deleteThreadsForGroup(jid: string): void {
   );
 }
 
+/** Generate a short display title from a task prompt. */
+function generateTaskTitle(prompt: string): string {
+  // Take first sentence or first line, whichever is shorter
+  const firstLine = prompt.split('\n')[0].trim();
+  const firstSentence = firstLine.split(/[.!?]/)[0].trim();
+  const raw =
+    firstSentence.length < firstLine.length ? firstSentence : firstLine;
+  // Strip common prefixes
+  const cleaned = raw
+    .replace(/^\[.*?\]\s*/, '') // [SCHEDULED TASK]
+    .replace(/^(please|can you|i want you to|every\s+\w+,?\s*)/i, '')
+    .trim();
+  // Capitalize first letter, truncate
+  const title = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  return title.length > 60 ? title.slice(0, 57) + '...' : title;
+}
+
 export function createTask(
   task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
 ): void {
+  const title = task.title || generateTaskTitle(task.prompt);
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, script, schedule_type, schedule_value, context_mode, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, title, prompt, script, schedule_type, schedule_value, context_mode, next_run, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
     task.group_folder,
     task.chat_jid,
+    title,
     task.prompt,
     task.script || null,
     task.schedule_type,
