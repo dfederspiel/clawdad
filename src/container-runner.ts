@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
  */
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, execSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -399,7 +399,34 @@ export async function runContainerAgent(
 
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
-  const containerName = `nanoclaw-${safeName}-${Date.now()}`;
+  const containerPrefix = `nanoclaw-${safeName}-`;
+
+  // Stop any stale containers for this group before spawning a new one.
+  // This prevents orphaned containers from stealing IPC messages.
+  try {
+    const existing = execSync(
+      `${CONTAINER_RUNTIME_BIN} ps --filter name=${containerPrefix} --format "{{.Names}}"`,
+      { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' },
+    )
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    for (const name of existing) {
+      logger.info(
+        { group: group.name, stale: name },
+        'Stopping stale container before spawn',
+      );
+      try {
+        stopContainer(name);
+      } catch {
+        /* already stopped */
+      }
+    }
+  } catch {
+    /* docker ps may fail if runtime not ready */
+  }
+
+  const containerName = `${containerPrefix}${Date.now()}`;
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
