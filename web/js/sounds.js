@@ -219,6 +219,92 @@ export const TONES = {
     },
   },
 
+  // --- Easter eggs ---
+  treasure: {
+    name: 'Treasure',
+    play() {
+      // da-da da-da da-da DAAA — chest opening fanfare
+      const n = (f, d, dl) => playTone(f, d, 'square', 0.13, dl);
+      n(587, 0.08, 0);     // D5
+      n(587, 0.08, 0.09);  // D5
+      n(587, 0.08, 0.18);  // D5
+      n(587, 0.08, 0.27);  // D5
+      n(587, 0.08, 0.36);  // D5
+      n(587, 0.08, 0.45);  // D5
+      // sustained rising resolution
+      playTone(659, 0.12, 'square', 0.14, 0.54);  // E5
+      playTone(698, 0.12, 'square', 0.14, 0.63);  // F5
+      playTone(784, 0.35, 'square', 0.16, 0.72);  // G5 — hold
+    },
+  },
+  secret: {
+    name: 'Secret',
+    play() {
+      // discovery jingle — ascending puzzle-solved feel
+      playTone(784, 0.1, 'triangle', 0.18);        // G5
+      playTone(880, 0.1, 'triangle', 0.18, 0.08);  // A5
+      playTone(988, 0.1, 'triangle', 0.18, 0.16);  // B5
+      playTone(1047, 0.25, 'sine', 0.2, 0.24);     // C6 — resolve
+    },
+  },
+  powerup: {
+    name: 'Power Up',
+    play() {
+      // rapid ascending sweep — collecting something good
+      const notes = [262, 330, 392, 523, 659, 784, 1047];
+      notes.forEach((f, i) => {
+        playTone(f, 0.07, 'square', 0.12, i * 0.04);
+      });
+    },
+  },
+  levelup: {
+    name: 'Level Up',
+    play() {
+      // triumphant major chord arpeggio with fanfare
+      playTone(523, 0.12, 'triangle', 0.18);        // C5
+      playTone(659, 0.12, 'triangle', 0.18, 0.1);   // E5
+      playTone(784, 0.12, 'triangle', 0.18, 0.2);   // G5
+      playTone(1047, 0.12, 'triangle', 0.2, 0.3);   // C6
+      // victory sustain
+      playTone(1047, 0.3, 'sine', 0.15, 0.4);       // C6
+      playTone(1319, 0.3, 'sine', 0.12, 0.4);       // E6 (major third)
+      playTone(1568, 0.35, 'sine', 0.1, 0.4);       // G6 (fifth)
+    },
+  },
+  oneup: {
+    name: '1-Up',
+    play() {
+      // quick bouncy reward
+      playTone(660, 0.06, 'square', 0.12);
+      playTone(880, 0.06, 'square', 0.12, 0.06);
+      playTone(1100, 0.06, 'square', 0.12, 0.12);
+      playTone(880, 0.06, 'square', 0.1, 0.18);
+      playTone(1100, 0.06, 'square', 0.1, 0.24);
+      playTone(1320, 0.15, 'square', 0.12, 0.3);
+    },
+  },
+  gameover: {
+    name: 'Game Over',
+    play() {
+      // descending sad tones
+      playTone(494, 0.2, 'triangle', 0.15);       // B4
+      playTone(440, 0.2, 'triangle', 0.13, 0.2);  // A4
+      playTone(370, 0.2, 'triangle', 0.12, 0.4);  // F#4
+      playTone(330, 0.5, 'triangle', 0.1, 0.6);   // E4
+    },
+  },
+  encounter: {
+    name: 'Encounter',
+    play() {
+      // alert! something appeared — quick dramatic sting
+      playTone(220, 0.06, 'square', 0.18);
+      playTone(220, 0.06, 'square', 0.18, 0.08);
+      playTone(220, 0.06, 'square', 0.18, 0.16);
+      playTone(277, 0.2, 'square', 0.15, 0.24);  // C#4
+      playTone(262, 0.3, 'square', 0.12, 0.44);  // C4 — tension
+    },
+  },
+
   // --- Ambient ---
   glow: {
     name: 'Glow',
