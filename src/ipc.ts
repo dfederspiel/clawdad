@@ -45,6 +45,13 @@ export interface IpcDeps {
     email?: string;
     groupFolder: string;
   }) => void;
+  onPlaySound?: (
+    jid: string,
+    tone?: string,
+    custom?: unknown,
+    label?: string,
+  ) => void;
+  onSetSubtitle?: (jid: string, subtitle: string) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -281,6 +288,12 @@ export async function processTaskIpc(
     hostPattern?: string;
     description?: string;
     email?: string;
+    // For play_sound
+    tone?: string;
+    custom?: unknown;
+    label?: string;
+    // For set_subtitle
+    subtitle?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -591,6 +604,22 @@ export async function processTaskIpc(
           groupFolder: sourceGroup,
         });
       }
+      break;
+
+    case 'play_sound':
+      deps.onPlaySound?.(
+        data.chatJid as string,
+        data.tone as string | undefined,
+        data.custom,
+        data.label as string | undefined,
+      );
+      break;
+
+    case 'set_subtitle':
+      deps.onSetSubtitle?.(
+        data.chatJid as string,
+        (data.subtitle as string) || '',
+      );
       break;
 
     default:
