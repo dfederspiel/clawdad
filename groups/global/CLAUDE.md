@@ -86,27 +86,32 @@ The `conversations/` folder contains searchable markdown snapshots of past sessi
 
 ## Credential Registration
 
-If you need API credentials for a service (Atlassian, GitLab, GitHub, LaunchDarkly), register them securely via IPC. The token is stored in the host's credential vault and injected into API requests automatically.
+If you need API credentials for a service, use the `mcp__nanoclaw__request_credential` tool. It opens a secure popup in the user's browser — you never see the secret.
 
-```bash
-# GitHub
-/workspace/scripts/register-credential.sh github "ghp_xxxx" --wait
+**CRITICAL: Never ask users to paste secrets, API keys, or tokens in chat.** Always use `request_credential`.
 
-# Atlassian (requires --email for basic auth)
-/workspace/scripts/register-credential.sh atlassian "TOKEN" --email "user@co.com" --wait
-
-# GitLab
-/workspace/scripts/register-credential.sh gitlab "glpat-xxxx" --host-pattern "gitlab.example.com" --wait
-
-# LaunchDarkly
-/workspace/scripts/register-credential.sh launchdarkly "api-xxxx" --wait
+```
+Use mcp__nanoclaw__request_credential with:
+- service: "github" (or "atlassian", "gitlab", "launchdarkly", or a custom name)
+- host_pattern: "api.github.com" (optional — uses service default if omitted)
+- description: "Why this credential is needed — shown to the user in the popup"
+- email: "user@example.com" (required for Atlassian Basic auth)
 ```
 
+The tool returns immediately — it does NOT block waiting for the user. The flow is:
+1. Tool opens a popup in the user's browser with pre-filled metadata
+2. Tool returns right away — continue with other work or tell the user what you're waiting for
+3. User enters their secret in the form (you never see it)
+4. Secret goes directly to the encrypted vault
+5. A `[credential_registered]` message appears in the chat when done — that's your signal to proceed
+
+After the credential is registered, verify it works (e.g. `GH_TOKEN=$GITHUB_TOKEN gh api user` for GitHub).
+
 **Security rules:**
-- Ask the user for the token in chat — never guess or fabricate credentials
-- Call `register-credential.sh` immediately — never store the token in a file, variable, or config
-- Never echo, log, or print the token value after registration
-- The `--wait` flag confirms success (up to 30s)
+- NEVER ask the user to paste tokens, keys, or passwords in chat
+- NEVER store credentials in files, variables, or config
+- NEVER echo, log, or print credential values
+- If an API call fails with 401/403, call `request_credential` again — the token may have expired
 
 ## Event Logging
 
