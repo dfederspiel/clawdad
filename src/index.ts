@@ -57,6 +57,7 @@ import {
   storeChatMetadata,
   storeAgentRun,
   attachUsageToLastBotMessage,
+  setGroupSubtitle,
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -1193,6 +1194,29 @@ async function main(): Promise<void> {
           (ch as any).broadcastGroupsChanged();
           break;
         }
+      }
+    },
+    onPlaySound: (jid, tone, custom, label) => {
+      for (const ch of channels) {
+        if (ch.name === 'web' && 'broadcast' in ch) {
+          (ch as any).broadcast('play_sound', { jid, tone, custom, label });
+          break;
+        }
+      }
+    },
+    onSetSubtitle: (jid, subtitle) => {
+      // Update DB and broadcast
+      const group = registeredGroups[jid];
+      if (group) {
+        group.subtitle = subtitle || undefined;
+        setGroupSubtitle(jid, subtitle);
+        for (const ch of channels) {
+          if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
+            (ch as any).broadcastGroupsChanged();
+            break;
+          }
+        }
+        logger.info({ jid, subtitle }, 'Group subtitle updated via MCP');
       }
     },
   });

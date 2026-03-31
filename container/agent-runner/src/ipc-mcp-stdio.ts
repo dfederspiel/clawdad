@@ -445,6 +445,79 @@ This tool returns immediately after sending the credential request. The user wil
   },
 );
 
+server.tool(
+  'play_sound',
+  `Play a notification sound in the user's web UI. Use this to signal events:
+- Task completion → "treasure" or "levelup"
+- Something needs attention → "encounter" or "radar"
+- Success → "secret" or "powerup"
+- Failure → "gameover"
+- Progress milestone → "coin" or "chime"
+
+Available tones: chime, droplet, whisper, dewdrop, bubble, ping, sparkle, twinkle, coin, bell, melody, harp, celeste, marimba, doorbell, lullaby, pulse, click, radar, sonar, tap, treasure, secret, powerup, levelup, oneup, gameover, encounter, glow, breeze, aurora.
+
+Or provide a custom composition with an array of note objects.`,
+  {
+    tone: z.string().optional().describe('Named tone from the library (e.g., "treasure", "levelup", "encounter")'),
+    custom: z.array(z.object({
+      freq: z.number().describe('Frequency in Hz'),
+      endFreq: z.number().optional().describe('End frequency for sweep'),
+      duration: z.number().optional().describe('Duration in seconds (default 0.15)'),
+      type: z.enum(['sine', 'triangle', 'square', 'sawtooth']).optional().describe('Waveform type'),
+      gain: z.number().optional().describe('Volume 0-1 (default 0.2)'),
+      delay: z.number().optional().describe('Delay before playing in seconds'),
+    })).optional().describe('Custom composition — array of notes to play'),
+    label: z.string().optional().describe('Display label shown in the chat (e.g., "Deploy complete!")'),
+  },
+  async (args) => {
+    // Write IPC task for the host to broadcast as SSE
+    writeIpcFile(TASKS_DIR, {
+      type: 'play_sound',
+      tone: args.tone,
+      custom: args.custom,
+      label: args.label,
+      chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Sound "${args.tone || 'custom'}" sent to the UI.`,
+      }],
+    };
+  },
+);
+
+server.tool(
+  'set_subtitle',
+  `Set a status line that appears under your group name in the sidebar. Use this to show what you're currently working on, waiting for, or monitoring. Examples:
+- "Monitoring 3 PRs for review"
+- "Waiting for deploy to complete"
+- "Analyzing 142 test results"
+Set to empty string to clear.`,
+  {
+    subtitle: z.string().describe('Status text to show under the group name in the sidebar. Empty string clears it.'),
+  },
+  async (args) => {
+    writeIpcFile(TASKS_DIR, {
+      type: 'set_subtitle',
+      subtitle: args.subtitle,
+      chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: args.subtitle ? `Subtitle set to: "${args.subtitle}"` : 'Subtitle cleared.',
+      }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

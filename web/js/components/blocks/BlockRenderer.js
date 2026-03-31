@@ -9,6 +9,7 @@ import { ProgressBlock } from './ProgressBlock.js';
 import { ActionBlock } from './ActionBlock.js';
 import { DiffBlock } from './DiffBlock.js';
 import { FormBlock } from './FormBlock.js';
+import { SoundBlock } from './SoundBlock.js';
 
 const RENDERERS = {
   text: TextBlock,
@@ -21,6 +22,7 @@ const RENDERERS = {
   action: ActionBlock,
   diff: DiffBlock,
   form: FormBlock,
+  sound: SoundBlock,
 };
 
 export function BlockRenderer({ block }) {

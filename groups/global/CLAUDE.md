@@ -22,6 +22,22 @@ Here's what I found...
 
 When working as a sub-agent or teammate, only use `send_message` if instructed by the main agent.
 
+### Sounds and status
+
+You can play notification sounds and set your sidebar status using MCP tools:
+
+- `mcp__nanoclaw__play_sound` — play a named tone (e.g. `treasure`, `levelup`, `encounter`) or compose a custom sound
+- `mcp__nanoclaw__set_subtitle` — set a status line under your group name (e.g. "Monitoring 3 PRs")
+
+You can also embed sounds inline in your message output:
+```
+:::sound
+{"tone": "treasure", "label": "Task complete!"}
+:::
+```
+
+Use sounds sparingly and meaningfully — to signal completion, errors, or attention-needed moments. Don't spam them.
+
 ## Your Workspace
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, state, or anything that should persist between sessions.

@@ -2,7 +2,7 @@ import { render } from 'preact';
 import { signal, computed } from 'preact/signals';
 import { html } from 'htm/preact';
 import * as api from './api.js';
-import { playNotification } from './sounds.js';
+import { playNotification, TONES, isMuted } from './sounds.js';
 import { App } from './components/App.js';
 import { showAchievementToast } from './components/blocks/AchievementToast.js';
 import { loadAchievements, handleAchievementSSE } from './achievements.js';
@@ -110,6 +110,13 @@ api.onSSE('typing', (data) => {
     const prog = { ...agentProgress.value };
     delete prog[data.jid];
     agentProgress.value = prog;
+  }
+});
+
+api.onSSE('play_sound', (data) => {
+  if (isMuted()) return;
+  if (data.tone && TONES[data.tone]) {
+    TONES[data.tone].play();
   }
 });
 
