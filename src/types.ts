@@ -43,6 +43,7 @@ export interface RegisteredGroup {
   isSystem?: boolean; // True for system/utility groups (e.g. General) — don't suppress onboarding
   description?: string; // Human-readable description shown in @-mention autocomplete
   triggerScope?: 'own' | 'web-all'; // 'web-all' = scan ALL web messages for trigger matches
+  subtitle?: string; // Agent-settable status line shown under group name in sidebar
 }
 
 export interface NewMessage {

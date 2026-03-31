@@ -2,6 +2,7 @@ import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
 import { groups, selectedJid, selectGroup, deleteGroup, messages } from '../app.js';
 import { GroupItem } from './GroupItem.js';
+import { GroupSettings } from './GroupSettings.js';
 import { NewGroupDialog } from './NewGroupDialog.js';
 import { StatusPanel } from './StatusPanel.js';
 import { GameHud } from './GameHud.js';
@@ -13,6 +14,7 @@ export function Sidebar({ open, onClose }) {
   const [themeOpen, setThemeOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [settingsGroup, setSettingsGroup] = useState(null);
   // Sort: template groups first, system groups at the bottom
   const list = [...groups.value].sort((a, b) => (a.isSystem ? 1 : 0) - (b.isSystem ? 1 : 0));
   const selected = selectedJid.value;
@@ -62,7 +64,7 @@ export function Sidebar({ open, onClose }) {
       <div class="flex items-center justify-between px-4 py-3 border-b border-border">
         <div>
           <h1 class="text-base font-semibold text-txt leading-tight">ClawDad</h1>
-          <p class="text-[10px] text-txt-muted leading-tight">NanoClaw Agent Orchestrator</p>
+          <p class="text-[10px] text-txt-muted leading-tight">Agent Orchestrator</p>
         </div>
         <div class="flex items-center gap-1">
           <!-- Close button (mobile only) -->
@@ -112,6 +114,7 @@ export function Sidebar({ open, onClose }) {
                   isActive=${g.jid === selected}
                   onSelect=${onGroupSelect}
                   onDelete=${setDeleteTarget}
+                  onSettings=${setSettingsGroup}
                 />
               `,
             )}
@@ -121,6 +124,11 @@ export function Sidebar({ open, onClose }) {
 
     <!-- Dialogs rendered outside sidebar so they center on the page -->
     <${NewGroupDialog} open=${dialogOpen} onClose=${() => setDialogOpen(false)} />
+    <${GroupSettings}
+      group=${settingsGroup}
+      open=${!!settingsGroup}
+      onClose=${() => setSettingsGroup(null)}
+    />
     <${ConfirmDialog}
       open=${!!deleteTarget}
       title=${`Delete "${deleteTarget?.name}"?`}
