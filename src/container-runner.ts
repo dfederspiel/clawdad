@@ -163,6 +163,16 @@ function buildVolumeMounts(
     );
   }
 
+  // Ensure .claude.json exists — Claude Code exits with code 1 if missing
+  const claudeJsonFile = path.join(groupSessionsDir, '.claude.json');
+  if (!fs.existsSync(claudeJsonFile)) {
+    fs.writeFileSync(
+      claudeJsonFile,
+      JSON.stringify({ firstStartTime: new Date().toISOString() }, null, 2) +
+        '\n',
+    );
+  }
+
   // Sync skills from container/skills/ into each group's .claude/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
@@ -319,8 +329,8 @@ async function buildContainerArgs(
   args.push(...hostGatewayArgs());
 
   // Run as host user so bind-mounted files are accessible.
-  // Skip when running as root (uid 0), as the container's node user (uid 1000),
-  // or when getuid is unavailable (native Windows without WSL).
+  // On Windows (getuid unavailable), run as the container's node user (uid 1000)
+  // because Claude Code refuses --dangerously-skip-permissions as root.
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
@@ -332,8 +342,12 @@ async function buildContainerArgs(
     } else {
       args.push('--user', `${hostUid}:${hostGid}`);
     }
-    args.push('-e', 'HOME=/home/node');
+  } else if (hostUid == null && !isMain) {
+    // Windows: getuid unavailable — run as node user to avoid root restriction
+    args.push('--user', '1000:1000');
   }
+  // Always set HOME=/home/node — .claude/ settings are mounted there.
+  args.push('-e', 'HOME=/home/node');
 
   for (const mount of mounts) {
     if (mount.readonly) {
@@ -397,6 +411,7 @@ export async function runContainerAgent(
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, MSYS_NO_PATHCONV: '1' },
     });
 
     onProcess(container, containerName);
