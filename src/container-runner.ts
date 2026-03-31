@@ -104,6 +104,7 @@ interface VolumeMount {
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
+  chatJid: string,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -147,6 +148,19 @@ function buildVolumeMounts(
         containerPath: '/workspace/global',
         readonly: true,
       });
+    }
+
+    // Channel-specific global instructions (web UI only)
+    // Mounts blocks, sounds, and other web-only guidance
+    if (chatJid.startsWith('web:')) {
+      const globalWebDir = path.join(GROUPS_DIR, 'global-web');
+      if (fs.existsSync(globalWebDir)) {
+        mounts.push({
+          hostPath: globalWebDir,
+          containerPath: '/workspace/global-web',
+          readonly: true,
+        });
+      }
     }
   }
 
@@ -397,7 +411,7 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = buildVolumeMounts(group, input.isMain, input.chatJid);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerPrefix = `nanoclaw-${safeName}-`;
 
