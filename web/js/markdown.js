@@ -14,10 +14,13 @@ export function md(text) {
   h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
 
   // Tables (pipe-delimited: header | sep | rows)
+  // Split cells by pipe but preserve empty cells (don't filter them out).
+  // Slice off first/last to discard the empty strings from leading/trailing pipes.
+  const splitRow = (row) => row.split('|').slice(1, -1).map(c => c.trim());
   h = h.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)*)/gm, (_, header, _sep, body) => {
-    const thCells = header.split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
+    const thCells = splitRow(header).map(c => `<th>${c}</th>`).join('');
     const rows = body.trim().split('\n').map(row => {
-      const cells = row.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('');
+      const cells = splitRow(row).map(c => `<td>${c}</td>`).join('');
       return `<tr>${cells}</tr>`;
     }).join('');
     return `<table><thead><tr>${thCells}</tr></thead><tbody>${rows}</tbody></table>`;

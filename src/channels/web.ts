@@ -33,6 +33,7 @@ import {
   getUsageStats,
   getLatestRunForChat,
   getSession,
+  setGroupSubtitle,
 } from '../db.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -287,6 +288,7 @@ export class WebChannel implements Channel {
           folder: g.folder,
           isMain: g.isMain,
           isSystem: g.isSystem || false,
+          subtitle: g.subtitle || '',
         }));
       return this.json(res, 200, { groups: webGroups });
     }
@@ -550,6 +552,26 @@ export class WebChannel implements Channel {
         return this.json(res, 403, { error: 'Cannot delete system groups' });
       }
       this.opts.onDeleteGroup?.(jid, group);
+      return this.json(res, 200, { ok: true });
+    }
+
+    // PATCH /api/groups/:folder — update group settings (name, subtitle)
+    const patchGroupMatch = url.pathname.match(
+      /^\/api\/groups\/([A-Za-z0-9_-]+)$/,
+    );
+    if (method === 'PATCH' && patchGroupMatch) {
+      const folder = `web_${decodeURIComponent(patchGroupMatch[1])}`;
+      const jid = `web:${decodeURIComponent(patchGroupMatch[1])}`;
+      const allGroups = this.opts.registeredGroups();
+      const group = allGroups[jid];
+      if (!group) return this.json(res, 404, { error: 'Group not found' });
+
+      const body = await this.readBody(req);
+      if (body.subtitle !== undefined) {
+        setGroupSubtitle(jid, body.subtitle);
+        group.subtitle = body.subtitle || undefined;
+      }
+      this.broadcastGroupsChanged();
       return this.json(res, 200, { ok: true });
     }
 
