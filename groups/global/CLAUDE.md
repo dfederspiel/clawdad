@@ -105,7 +105,22 @@ The tool returns immediately — it does NOT block waiting for the user. The flo
 4. Secret goes directly to the encrypted vault
 5. A `[credential_registered]` message appears in the chat when done — that's your signal to proceed
 
-After the credential is registered, verify it works (e.g. `GH_TOKEN=$GITHUB_TOKEN gh api user` for GitHub).
+### Using registered credentials
+
+Once a credential is registered, it is injected **automatically** into all outbound HTTPS requests matching the service's host pattern. You don't need tokens, env vars, or auth headers — just make the API call:
+
+```bash
+# These work automatically after credential registration — no token needed:
+curl -s https://api.github.com/user                    # GitHub
+curl -s https://yourorg.atlassian.net/rest/api/3/myself # Atlassian
+```
+
+The credential proxy intercepts HTTPS traffic and injects the right `Authorization` header. Use `WebFetch`, `curl`, or Node `fetch()` — they all work. Do NOT try to read tokens from environment variables or pass auth headers manually.
+
+To verify a credential works after registration:
+```bash
+curl -sf https://api.github.com/user          # GitHub — should return user JSON
+```
 
 **Security rules:**
 - NEVER ask the user to paste tokens, keys, or passwords in chat
