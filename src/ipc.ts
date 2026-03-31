@@ -666,8 +666,10 @@ async function registerCredentialViaApi(
       type: serviceConfig.type,
       value: secretValue,
       hostPattern,
-      headerName: serviceConfig.headerName,
-      valueFormat,
+      injectionConfig: {
+        headerName: serviceConfig.headerName,
+        valueFormat,
+      },
     });
 
     const response = await fetch(apiUrl, {
