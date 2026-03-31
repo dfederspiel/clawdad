@@ -1,5 +1,4 @@
 import http from 'http';
-import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
@@ -966,7 +965,7 @@ export class WebChannel implements Channel {
       return this.json(res, 200, health);
     }
 
-    // POST /api/register-anthropic — register Anthropic API key via OneCLI
+    // POST /api/register-anthropic — register Anthropic API key in .env
     if (method === 'POST' && url.pathname === '/api/register-anthropic') {
       // Localhost only — refuse remote requests
       const remote = req.socket.remoteAddress;
@@ -985,42 +984,17 @@ export class WebChannel implements Channel {
       }
 
       try {
-        const hostPattern = customEndpoint
-          ? new URL(customEndpoint).hostname
-          : 'api.anthropic.com';
+        const { writeEnvVar } = await import('../env.js');
+        writeEnvVar('ANTHROPIC_API_KEY', key);
 
-        // Pass key via stdin to avoid it appearing in process args
-        execSync(
-          `onecli secrets create --name anthropic --type anthropic --host-pattern "${hostPattern}"`,
-          {
-            input: key,
-            stdio: ['pipe', 'pipe', 'pipe'],
-            timeout: 10000,
-          },
-        );
-
-        // Write custom endpoint to .env if provided
         if (customEndpoint) {
-          const envPath = path.resolve(process.cwd(), '.env');
-          let envContent = '';
-          if (fs.existsSync(envPath)) {
-            envContent = fs.readFileSync(envPath, 'utf-8');
-          }
-          if (envContent.includes('ANTHROPIC_BASE_URL=')) {
-            envContent = envContent.replace(
-              /^ANTHROPIC_BASE_URL=.*$/m,
-              `ANTHROPIC_BASE_URL=${customEndpoint}`,
-            );
-          } else {
-            envContent += `\nANTHROPIC_BASE_URL=${customEndpoint}\n`;
-          }
-          fs.writeFileSync(envPath, envContent);
+          writeEnvVar('ANTHROPIC_BASE_URL', customEndpoint);
         }
 
-        logger.info('Anthropic API key registered via web UI');
+        logger.info('Anthropic API key saved to .env');
         return this.json(res, 200, { ok: true });
       } catch (err) {
-        logger.error({ err }, 'Failed to register Anthropic key');
+        logger.error({ err }, 'Failed to save Anthropic key');
         return this.json(res, 500, {
           error: 'Failed to register key. Is OneCLI running?',
         });

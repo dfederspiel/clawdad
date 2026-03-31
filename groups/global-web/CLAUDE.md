@@ -61,4 +61,4 @@ Use sounds sparingly and meaningfully — to signal completion, errors, or atten
 
 ## Credential Popup
 
-When you need credentials, use `mcp__nanoclaw__request_credential` which opens a secure popup in the user's browser. Never ask users to paste secrets in chat. See the global defaults for full details.
+When you need credentials, use `mcp__nanoclaw__request_credential` which opens a secure popup in the user's browser. The secret is saved to `.env` and made available as an environment variable (e.g. `$GITHUB_TOKEN`). Never ask users to paste secrets in chat. See the global defaults for full credential usage instructions.

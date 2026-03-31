@@ -95,42 +95,40 @@ If you need API credentials for a service, use the `mcp__nanoclaw__request_crede
 ```
 Use mcp__nanoclaw__request_credential with:
 - service: "github" (or "atlassian", "gitlab", "launchdarkly", or a custom name)
-- host_pattern: "api.github.com" (optional — uses service default if omitted)
 - description: "Why this credential is needed — shown to the user in the popup"
-- email: "user@example.com" (required for Atlassian Basic auth)
 ```
 
 The tool returns immediately — it does NOT block waiting for the user. The flow is:
-1. Tool opens a popup in the user's browser with pre-filled metadata
-2. Tool returns right away — continue with other work or tell the user what you're waiting for
+1. Tool opens a popup in the user's browser
+2. Tool returns right away — continue with other work
 3. User enters their secret in the form (you never see it)
-4. Secret goes directly to the encrypted vault
-5. A `[credential_registered]` message appears in the chat when done — that's your signal to proceed
+4. Secret is saved to `.env` and available as an env var on the next container run
+5. A `[credential_registered]` message appears in the chat — that's your signal to proceed
 
 ### Using registered credentials
 
-Once a credential is registered, it is injected **automatically** into all outbound HTTPS requests matching the service's host pattern. You don't need tokens, env vars, or auth headers — just make the API call.
-
-**IMPORTANT: Always try the authenticated endpoint FIRST.** Don't ask the user for usernames, tokens, or credentials. Don't fall back to unauthenticated/public-only APIs. The credential proxy handles auth transparently — assume it works and call the authenticated API directly.
+Credentials are passed to your container as environment variables. Use them directly in your requests:
 
 ```bash
-# GitHub — call /user (authenticated) not /users/{name} (public-only):
-curl -s https://api.github.com/user                    # Returns authenticated user
-curl -s https://api.github.com/user/repos?per_page=100 # All repos including private
+# GitHub
+curl -s -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/user
 
-# Atlassian:
-curl -s https://yourorg.atlassian.net/rest/api/3/myself
+# GitLab
+curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" https://gitlab.com/api/v4/projects
+
+# Atlassian
+curl -s -H "Authorization: Bearer $ATLASSIAN_TOKEN" https://yourorg.atlassian.net/rest/api/3/myself
+
+# Custom services — the env var name matches what was registered
+curl -s -H "Authorization: Bearer $BLACKDUCK_TOKEN" https://blackduck.example.com/api/...
 ```
 
-Use `WebFetch` or `curl` — both work. Do NOT try to read tokens from environment variables or pass auth headers manually. The credential proxy intercepts HTTPS traffic and injects the right `Authorization` header automatically.
-
-If an API call returns 401, THEN ask about credentials — but try the call first.
+**IMPORTANT: Try the API call first** using the env var. If the variable is empty or the call returns 401, THEN use `request_credential` to ask the user.
 
 **Security rules:**
 - NEVER ask the user to paste tokens, keys, or passwords in chat
-- NEVER store credentials in files, variables, or config
 - NEVER echo, log, or print credential values
-- If an API call fails with 401/403, call `request_credential` again — the token may have expired
+- If an API call fails with 401/403, call `request_credential` — the token may have expired
 
 ## Event Logging
 

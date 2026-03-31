@@ -15,7 +15,6 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   OLLAMA_ADMIN_TOOLS,
-  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -30,27 +29,7 @@ import {
 import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { readEnvFile } from './env.js';
-import type { OneCLI } from '@onecli-sh/sdk';
 import { RegisteredGroup } from './types.js';
-
-// Lazy-loaded OneCLI singleton — null means SDK is unavailable
-let onecliInstance: OneCLI | null | undefined;
-async function getOneCLI(): Promise<OneCLI | null> {
-  if (onecliInstance !== undefined) return onecliInstance;
-  try {
-    const mod = await import('@onecli-sh/sdk');
-    onecliInstance = new mod.OneCLI({ url: ONECLI_URL });
-    return onecliInstance;
-  } catch {
-    onecliInstance = null;
-    return null;
-  }
-}
-
-/** @internal Reset singleton for testing */
-export function _resetOneCLI(): void {
-  onecliInstance = undefined;
-}
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -298,63 +277,39 @@ async function buildContainerArgs(
     args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
   }
 
-  // --- Credential injection: OneCLI preferred, native proxy fallback ---
+  // --- Credential injection ---
   //
-  // OneCLI mode: applyContainerConfig() adds HTTPS_PROXY, CA certs, and
-  //   ANTHROPIC_API_KEY from the vault. The HTTPS proxy intercepts ALL
-  //   outbound HTTPS and injects credentials for every registered service.
+  // Anthropic: route through our local HTTP proxy which injects the real
+  // API key or OAuth token. The SDK sends a placeholder value.
   //
-  // Native proxy mode: containers point ANTHROPIC_BASE_URL at a local HTTP
-  //   proxy that injects Anthropic credentials only. Other service credentials
-  //   are passed as env vars and consumed by auth-args.sh in the container.
-  let onecliApplied = false;
-  const onecli = await getOneCLI();
-  if (onecli) {
-    try {
-      onecliApplied = await onecli.applyContainerConfig(args);
-      if (onecliApplied) {
-        logger.info('Using OneCLI gateway for credential injection');
-        // Pass the real ANTHROPIC_BASE_URL from .env so the SDK targets
-        // the correct endpoint (e.g., a custom LiteLLM proxy). OneCLI's
-        // HTTPS proxy intercepts the outbound request and injects the key.
-        const baseUrlEnv = readEnvFile(['ANTHROPIC_BASE_URL']);
-        const baseUrl =
-          process.env.ANTHROPIC_BASE_URL || baseUrlEnv.ANTHROPIC_BASE_URL;
-        if (baseUrl && !args.some((a) => a.startsWith('ANTHROPIC_BASE_URL='))) {
-          args.push('-e', `ANTHROPIC_BASE_URL=${baseUrl}`);
-        }
-      }
-    } catch (err) {
-      logger.debug(
-        { err },
-        'OneCLI applyContainerConfig failed, falling back to native proxy',
-      );
+  // Service credentials (GitHub, GitLab, etc.): passed as env vars from
+  // .env. Agents use them directly in curl headers.
+  args.push(
+    '-e',
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+  );
+
+  const authMode = detectAuthMode();
+  if (authMode === 'api-key') {
+    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+  } else {
+    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Pass service credentials from .env as env vars.
+  // Any variable ending in _TOKEN, _KEY, _SECRET, or _PASSWORD is forwarded.
+  // Agents use these directly: curl -H "Authorization: token $GITHUB_TOKEN" ...
+  const allEnv = readEnvFile();
+  const credentialPattern =
+    /^(?!ANTHROPIC_|CLAUDE_CODE_).+_(TOKEN|KEY|SECRET|PASSWORD)$/;
+  for (const [key, value] of Object.entries(allEnv)) {
+    if (credentialPattern.test(key) && value) {
+      args.push('-e', `${key}=${value}`);
     }
   }
 
-  if (!onecliApplied) {
-    // Native credential proxy fallback — only handles Anthropic API traffic.
-    // Route all Anthropic requests through our local proxy which injects credentials.
-    args.push(
-      '-e',
-      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-    );
-
-    // Mirror the host's auth method with a placeholder value.
-    // API key mode: SDK sends x-api-key, proxy replaces with real key.
-    // OAuth mode:   SDK exchanges placeholder token for temp API key,
-    //               proxy injects real OAuth token on that exchange request.
-    const authMode = detectAuthMode();
-    if (authMode === 'api-key') {
-      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
-    } else {
-      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
-    }
-  }
-
-  // Pass model override for LiteLLM proxy routing (e.g., bedrock/us.anthropic.claude-opus-4-6-v1)
-  const envConfig = readEnvFile(['CLAUDE_MODEL']);
-  const claudeModel = process.env.CLAUDE_MODEL || envConfig.CLAUDE_MODEL;
+  // Pass model override for LiteLLM proxy routing
+  const claudeModel = process.env.CLAUDE_MODEL || allEnv.CLAUDE_MODEL;
   if (claudeModel) {
     args.push('-e', `CLAUDE_MODEL=${claudeModel}`);
   }

@@ -1,7 +1,5 @@
-import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { promisify } from 'util';
 
 import { CronExpressionParser } from 'cron-parser';
 
@@ -13,8 +11,6 @@ import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
-
-const execAsync = promisify(exec);
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -629,233 +625,79 @@ export async function processTaskIpc(
   }
 }
 
-/**
- * Supported credential services and their OneCLI secret configurations.
- * Each entry maps a service name to the OneCLI flags needed to register it.
- */
-const CREDENTIAL_SERVICES: Record<
-  string,
-  {
-    type: 'generic';
-    headerName: string;
-    valueFormat: string;
-    defaultHostPattern: string;
-  }
-> = {
-  atlassian: {
-    type: 'generic',
-    headerName: 'Authorization',
-    valueFormat: 'Basic {value}',
-    defaultHostPattern: '*.atlassian.net',
-  },
-  gitlab: {
-    type: 'generic',
-    headerName: 'PRIVATE-TOKEN',
-    valueFormat: '{value}',
-    defaultHostPattern: 'gitlab.com',
-  },
-  github: {
-    type: 'generic',
-    headerName: 'Authorization',
-    valueFormat: 'token {value}',
-    defaultHostPattern: '*.github.com',
-  },
-  launchdarkly: {
-    type: 'generic',
-    headerName: 'Authorization',
-    valueFormat: '{value}',
-    defaultHostPattern: 'app.launchdarkly.com',
-  },
-};
-
 interface CredentialIpcData {
   service: string;
   value: string;
-  email?: string; // For Atlassian basic auth
-  hostPattern?: string;
   name?: string;
 }
 
 /**
- * Register a credential via the OneCLI HTTP API.
- * Works on all platforms (including Windows where the onecli CLI isn't available).
- * Falls back to CLI if the API is unreachable.
+ * Default env var names for known services.
+ * Agent can override by providing a custom name.
  */
-async function registerCredentialViaApi(
-  secretName: string,
-  serviceConfig: { type: string; headerName: string },
-  secretValue: string,
-  hostPattern: string,
-  valueFormat: string,
-): Promise<{ success: boolean; duplicate: boolean; error: string }> {
-  const { ONECLI_URL } = await import('./config.js');
-  const apiUrl = `${ONECLI_URL}/api/secrets`;
+const SERVICE_ENV_NAMES: Record<string, string> = {
+  github: 'GITHUB_TOKEN',
+  gitlab: 'GITLAB_TOKEN',
+  atlassian: 'ATLASSIAN_TOKEN',
+  launchdarkly: 'LAUNCHDARKLY_API_KEY',
+};
 
-  try {
-    const body = JSON.stringify({
-      name: secretName,
-      type: serviceConfig.type,
-      value: secretValue,
-      hostPattern,
-      injectionConfig: {
-        headerName: serviceConfig.headerName,
-        valueFormat,
-      },
-    });
-
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (response.ok) {
-      return { success: true, duplicate: false, error: '' };
-    }
-
-    const text = await response.text().catch(() => '');
-    if (
-      response.status === 409 ||
-      text.includes('already exists') ||
-      text.includes('conflict')
-    ) {
-      return { success: false, duplicate: true, error: '' };
-    }
-
-    return {
-      success: false,
-      duplicate: false,
-      error: `OneCLI API returned ${response.status}: ${text}`,
-    };
-  } catch (err) {
-    // API unreachable — try CLI fallback
-    try {
-      const args = [
-        'secrets',
-        'create',
-        '--name',
-        secretName,
-        '--type',
-        serviceConfig.type,
-        '--value',
-        secretValue,
-        '--host-pattern',
-        hostPattern,
-        '--header-name',
-        serviceConfig.headerName,
-        '--value-format',
-        valueFormat,
-      ];
-
-      await execAsync(
-        `onecli ${args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`,
-        { timeout: 15_000 },
-      );
-      return { success: true, duplicate: false, error: '' };
-    } catch (cliErr) {
-      const msg = cliErr instanceof Error ? cliErr.message : String(cliErr);
-      if (
-        msg.includes('409') ||
-        msg.includes('already exists') ||
-        msg.includes('conflict')
-      ) {
-        return { success: false, duplicate: true, error: '' };
-      }
-      return { success: false, duplicate: false, error: msg };
-    }
-  }
-}
-
+/**
+ * Register a credential by writing it to .env.
+ * Simple: name → value, no host patterns, no header format knowledge.
+ */
 async function processCredentialIpc(
   data: CredentialIpcData,
   sourceGroup: string,
   credentialsDir: string,
   deps: IpcDeps,
 ): Promise<void> {
-  const { service, value, email, hostPattern, name } = data;
+  const { service, value, name } = data;
 
-  if (!service || !value) {
-    logger.warn({ sourceGroup }, 'Credential IPC missing service or value');
-    writeCredentialResult(
-      credentialsDir,
-      service,
-      false,
-      'Missing service or value',
-    );
+  if (!value) {
+    logger.warn({ sourceGroup }, 'Credential IPC missing value');
+    writeCredentialResult(credentialsDir, service, false, 'Missing value');
     return;
   }
 
-  const serviceConfig = CREDENTIAL_SERVICES[service];
-  if (!serviceConfig) {
-    logger.warn({ service, sourceGroup }, 'Unknown credential service');
+  // Determine env var name: explicit name > service default > SERVICE_TOKEN
+  const envName =
+    name ||
+    SERVICE_ENV_NAMES[service] ||
+    `${(service || 'CREDENTIAL').toUpperCase().replace(/[^A-Z0-9]/g, '_')}_TOKEN`;
+
+  try {
+    const { writeEnvVar } = await import('./env.js');
+    writeEnvVar(envName, value);
+    logger.info({ envName, sourceGroup }, 'Credential saved to .env');
     writeCredentialResult(
       credentialsDir,
-      service,
-      false,
-      `Unknown service: ${service}`,
-    );
-    return;
-  }
-
-  const host = hostPattern || serviceConfig.defaultHostPattern;
-  const secretName = name || `${service}-${sourceGroup}`;
-
-  // For Atlassian, the value needs to be base64(email:token) for basic auth
-  let secretValue = value;
-  let valueFormat = serviceConfig.valueFormat;
-  if (service === 'atlassian' && email) {
-    secretValue = Buffer.from(`${email}:${value}`).toString('base64');
-  } else if (service === 'atlassian' && !email) {
-    // If no email provided, assume value is already the full token/key
-    valueFormat = 'Basic {value}';
-  }
-
-  // Try HTTP API first (works on all platforms including Windows),
-  // fall back to CLI if the API isn't available.
-  const registered = await registerCredentialViaApi(
-    secretName,
-    serviceConfig,
-    secretValue,
-    host,
-    valueFormat,
-  );
-
-  if (registered.success) {
-    logger.info(
-      { service, sourceGroup, host, secretName },
-      'Credential registered via IPC',
-    );
-    writeCredentialResult(
-      credentialsDir,
-      service,
+      service || envName,
       true,
-      'Credential registered successfully',
+      `Saved as ${envName} — available to agents as $${envName}`,
     );
-    notifyGroupCredentialResult(deps, sourceGroup, service, true);
-  } else if (registered.duplicate) {
-    logger.info({ service, sourceGroup }, 'Credential already exists in vault');
-    writeCredentialResult(
-      credentialsDir,
-      service,
-      true,
-      'Credential already registered',
-    );
-    notifyGroupCredentialResult(deps, sourceGroup, service, true);
-  } else {
-    // Sanitize error — never include the secret value
-    const safeError = registered.error.replace(secretValue, '[REDACTED]');
+    notifyGroupCredentialResult(deps, sourceGroup, service || envName, true);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Never include the secret value in error messages
+    const safeError = msg.replace(value, '[REDACTED]');
     logger.error(
-      { service, sourceGroup, err: safeError },
-      'Failed to register credential',
+      { envName, sourceGroup, err: safeError },
+      'Failed to save credential',
     );
     writeCredentialResult(
       credentialsDir,
-      service,
+      service || envName,
       false,
-      `Registration failed: ${safeError}`,
+      `Failed: ${safeError}`,
     );
-    notifyGroupCredentialResult(deps, sourceGroup, service, false, safeError);
+    notifyGroupCredentialResult(
+      deps,
+      sourceGroup,
+      service || envName,
+      false,
+      safeError,
+    );
   }
 }
 
