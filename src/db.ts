@@ -137,6 +137,13 @@ function createSchema(database: Database.Database): void {
     /* columns already exist */
   }
 
+  // Add subtitle column to registered_groups (agent-settable status line)
+  try {
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN subtitle TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
   // Add is_system column to registered_groups (migration for system group flag)
   try {
     database.exec(
@@ -914,6 +921,7 @@ export function getRegisteredGroup(
         is_main: number | null;
         description: string | null;
         trigger_scope: string | null;
+        subtitle: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -939,7 +947,15 @@ export function getRegisteredGroup(
     description: row.description || undefined,
     triggerScope:
       (row.trigger_scope as RegisteredGroup['triggerScope']) || undefined,
+    subtitle: row.subtitle || undefined,
   };
+}
+
+export function setGroupSubtitle(jid: string, subtitle: string): void {
+  db.prepare('UPDATE registered_groups SET subtitle = ? WHERE jid = ?').run(
+    subtitle || null,
+    jid,
+  );
 }
 
 export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
@@ -995,6 +1011,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     description: string | null;
     trigger_scope: string | null;
     is_system: number | null;
+    subtitle: string | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -1020,6 +1037,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       description: row.description || undefined,
       triggerScope:
         (row.trigger_scope as RegisteredGroup['triggerScope']) || undefined,
+      subtitle: row.subtitle || undefined,
     };
   }
   return result;

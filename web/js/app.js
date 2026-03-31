@@ -2,6 +2,7 @@ import { render } from 'preact';
 import { signal, computed } from 'preact/signals';
 import { html } from 'htm/preact';
 import * as api from './api.js';
+import { playNotification } from './sounds.js';
 import { App } from './components/App.js';
 import { showAchievementToast } from './components/blocks/AchievementToast.js';
 import { loadAchievements, handleAchievementSSE } from './achievements.js';
@@ -79,10 +80,14 @@ api.onSSE('message', (data) => {
         timestamp: data.timestamp,
       },
     ];
+    // Ding for completed response in active group
+    playNotification(data.jid);
   } else {
     // Track unread for non-selected groups
     const cur = unread.value;
     unread.value = { ...cur, [data.jid]: (cur[data.jid] || 0) + 1 };
+    // Ding for message in background group
+    playNotification(data.jid);
   }
 });
 
