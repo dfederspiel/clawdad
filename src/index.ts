@@ -56,6 +56,7 @@ import {
   setSession,
   storeChatMetadata,
   storeAgentRun,
+  attachUsageToLastBotMessage,
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -569,6 +570,11 @@ async function runAgent(
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
         }
+        // Send the message first, then store/broadcast usage.
+        // Order matters: the message SSE must arrive before usage_update
+        // so the frontend can attach usage to the correct message.
+        await onOutput(output);
+
         // Store usage for each agent response (containers are long-lived,
         // so onOutput fires once per user message, not once per container)
         if (output.usage && output.usage.numTurns > 0) {
@@ -587,6 +593,7 @@ async function runAgent(
             num_turns: u.numTurns,
             is_error: output.status === 'error',
           });
+          attachUsageToLastBotMessage(chatJid, JSON.stringify(u));
           broadcastUsage(chatJid, u);
           logger.info(
             {
@@ -598,7 +605,6 @@ async function runAgent(
             'Agent run usage stored',
           );
         }
-        await onOutput(output);
       }
     : undefined;
 
