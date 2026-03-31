@@ -542,9 +542,6 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
-  // Track whether usage has been stored for this run (avoid duplicates)
-  let usageStored = false;
-
   // Wrap onOutput to track session ID and usage from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
@@ -552,9 +549,9 @@ async function runAgent(
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
         }
-        // Store usage immediately when it arrives (don't wait for container exit)
-        if (output.usage && !usageStored) {
-          usageStored = true;
+        // Store usage for each agent response (containers are long-lived,
+        // so onOutput fires once per user message, not once per container)
+        if (output.usage && output.usage.numTurns > 0) {
           const u = output.usage;
           storeAgentRun({
             chat_jid: chatJid,
