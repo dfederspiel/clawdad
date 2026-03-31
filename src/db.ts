@@ -168,6 +168,13 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_agent_runs_group ON agent_runs(group_folder);
   `);
 
+  // Add usage column to messages (migration for usage tracking on bot responses)
+  try {
+    database.exec(`ALTER TABLE messages ADD COLUMN usage TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
   // Add thread_id column to messages and threads table (migration for threaded conversations)
   try {
     database.exec(`ALTER TABLE messages ADD COLUMN thread_id TEXT`);
@@ -432,7 +439,7 @@ export function getMessagesSince(
   const threadFilter = excludeThreaded ? 'AND thread_id IS NULL' : '';
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, usage
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
         ${botFilter}
@@ -1095,6 +1102,24 @@ export interface AgentRunRecord {
   duration_ms: number;
   num_turns: number;
   is_error: boolean;
+}
+
+/**
+ * Attach usage JSON to the most recent bot message in a chat.
+ * Called after storeAgentRun so the usage survives page refreshes.
+ */
+export function attachUsageToLastBotMessage(
+  chatJid: string,
+  usageJson: string,
+): void {
+  db.prepare(
+    `UPDATE messages SET usage = ?
+     WHERE rowid = (
+       SELECT rowid FROM messages
+       WHERE chat_jid = ? AND is_bot_message = 1
+       ORDER BY timestamp DESC LIMIT 1
+     )`,
+  ).run(usageJson, chatJid);
 }
 
 export function storeAgentRun(run: AgentRunRecord): void {

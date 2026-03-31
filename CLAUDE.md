@@ -31,6 +31,36 @@ Single Node.js process with web UI channel (always-on) and optional messaging ch
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
 
+## Usage Tracking & Cost Observability
+
+Every agent run records token usage, cost, duration, and turn count. This data is critical for optimization — expensive or slow operations should be flagged and investigated.
+
+**How it works:**
+- The Claude Agent SDK returns usage on each `result` message (input/output tokens, cache tokens, cost, duration, turns)
+- The agent-runner extracts these via `PROGRESS` and `OUTPUT` markers on stdout
+- The host stores each run in the `agent_runs` table and attaches usage JSON to the bot message in `messages.usage`
+- Live tool activity streams via `agent_progress` SSE events during runs
+
+**Key files:**
+- `container/agent-runner/src/index.ts` — extracts usage from SDK result messages, emits progress markers for tool calls
+- `src/container-runner.ts` — parses `OUTPUT` and `PROGRESS` markers from container stdout
+- `src/db.ts` — `agent_runs` table, `storeAgentRun()`, `getUsageStats()`, `attachUsageToLastBotMessage()`
+- `src/channels/web.ts` — `/api/usage`, `/api/transcript` endpoints; SSE events `usage_update`, `agent_progress`
+- `web/js/components/Message.js` — per-message usage footer with expandable tool history
+- `web/js/components/TypingIndicator.js` — live tool activity during agent runs
+- `web/js/components/TelemetryPanel.js` — 24h usage rollup with per-group cost breakdown
+
+**API endpoints:**
+- `GET /api/usage?hours=24` — aggregated token/cost stats with per-group breakdown
+- `GET /api/usage/latest?jid=...` — latest run metrics for a specific chat
+- `GET /api/transcript?group=folder` — full session timeline (tool calls, text, user messages)
+
+**In the UI:**
+- Typing indicator shows elapsed time + real-time tool activity (tool name + summary)
+- Each assistant message shows a usage footer: `duration · turns · tokens · cost`
+- Click the footer to expand and see the full tool call chain
+- Telemetry panel shows 24h totals, cache stats, and cost-by-group
+
 ## Secrets / Credentials / Proxy (OneCLI)
 
 API keys, OAuth tokens, and auth credentials are managed by the **OneCLI Agent Vault** — a local gateway that intercepts outbound HTTPS requests from containers and injects credentials at request time. Agents never see raw keys. See [docs/CREDENTIALS.md](docs/CREDENTIALS.md) for the full reference.
@@ -72,7 +102,6 @@ Four types of skills exist in ClawDad. See [CONTRIBUTING.md](CONTRIBUTING.md) fo
 | `/update` | Pull latest code, rebuild, restart service |
 | `/customize` | Adding channels, integrations, changing behavior |
 | `/debug` | Container issues, logs, troubleshooting |
-| `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
 | `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials to it |
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |

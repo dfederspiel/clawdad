@@ -39,8 +39,7 @@ Each skill branch contains all the code changes for that skill: new files, modif
 Skills are split into two categories:
 
 **Operational skills** (on `main`, always available):
-- `/setup`, `/debug`, `/update-nanoclaw`, `/customize`, `/update-skills`
-- These are instruction-only SKILL.md files — no code changes, just workflows
+- `/setup`, `/debug`, `/update`, `/customize`- These are instruction-only SKILL.md files — no code changes, just workflows
 - Live in `.claude/skills/` on `main`, immediately available to every user
 
 **Feature skills** (in marketplace, installed on demand):
@@ -161,8 +160,8 @@ done
 This requires no state — it uses git history to determine which skills were previously merged and whether they have new commits.
 
 This logic is available in two ways:
-- Built into `/update-nanoclaw` — after merging main, optionally check for skill updates
-- Standalone `/update-skills` — check and merge skill updates independently
+- Built into `/update` — after merging main, optionally check for skill updates
+- Standalone `/update` — check and merge skill updates independently
 
 ### Conflict resolution
 
@@ -263,7 +262,7 @@ Users who previously applied skills via the `skills-engine/` system have skill c
 In both cases:
 - Delete the `.nanoclaw/` directory (no longer needed)
 - The `skills-engine/` code will be removed from upstream once all skills are migrated
-- `/update-skills` only tracks skills applied via branch merge — old-engine skills won't appear in update checks
+- `/update` only tracks skills applied via branch merge — old-engine skills won't appear in update checks
 
 ## User Workflows
 
@@ -301,11 +300,11 @@ git merge upstream/main
 git push origin main
 ```
 
-This is the same as the existing `/update-nanoclaw` skill's merge path.
+This is the same as the existing `/update` skill's merge path.
 
 ### Updating skills
 
-Run `/update-skills` or let `/update-nanoclaw` check after a core update. For each previously-merged skill branch that has new commits, Claude offers to merge the updates.
+Run `/update` or let `/update` check after a core update. For each previously-merged skill branch that has new commits, Claude offers to merge the updates.
 
 ### Contributing back to upstream
 
@@ -530,7 +529,7 @@ Migration from the old skills engine to branches is complete. All feature skills
 - All `add/`, `modify/`, `tests/`, and `manifest.yaml` from skill directories
 - `.nanoclaw/` state directory
 
-Operational skills (`setup`, `debug`, `update-nanoclaw`, `customize`, `update-skills`) remain on main in `.claude/skills/`.
+Operational skills (`setup`, `debug`, `update`, `customize`, `update-skills`) remain on main in `.claude/skills/`.
 
 ## What Changes
 
@@ -582,7 +581,7 @@ Marketplace configuration so the official marketplace is auto-registered:
 
 ### Skills directory on main
 
-The `.claude/skills/` directory on `main` retains only operational skills (setup, debug, update-nanoclaw, customize, update-skills). Feature skills (add-discord, add-telegram, etc.) live in the marketplace repo, installed via `claude plugin install` during `/setup` or `/customize`.
+The `.claude/skills/` directory on `main` retains only operational skills (setup, debug, update, customize, update-skills). Feature skills (add-discord, add-telegram, etc.) live in the marketplace repo, installed via `claude plugin install` during `/setup` or `/customize`.
 
 ### Skills engine removal
 
@@ -597,16 +596,16 @@ The following can be removed:
 - `add/` and `modify/` subdirectories from all skill directories
 - Feature skill SKILL.md files from `.claude/skills/` on main (they now live in the marketplace)
 
-Operational skills (`setup`, `debug`, `update-nanoclaw`, `customize`, `update-skills`) remain on main in `.claude/skills/`.
+Operational skills (`setup`, `debug`, `update`, `customize`, `update-skills`) remain on main in `.claude/skills/`.
 
 ### New infrastructure
 
 - **Marketplace repo** (`qwibitai/nanoclaw-skills`) — single Claude Code plugin bundling SKILL.md files for all feature skills
 - **CI GitHub Action** — merge-forward `main` into all `skill/*` branches on every push to `main`, using Claude (Haiku) for conflict resolution
-- **`/update-skills` skill** — checks for and applies skill branch updates using git history
+- **`/update` skill** — checks for and applies skill branch updates using git history
 - **`CONTRIBUTORS.md`** — tracks skill contributors
 
-### Update skill (`/update-nanoclaw`)
+### Update skill (`/update`)
 
 The update skill gets simpler with the branch-based approach. The old skills engine required replaying all applied skills after merging core updates — that entire step disappears. Skill changes are already in the user's git history, so `git merge upstream/main` just works.
 
@@ -625,13 +624,13 @@ The update skill gets simpler with the branch-based approach. The old skills eng
 - Re-running structured operations (npm deps, env vars — these are part of git history now)
 
 **What's added:**
-- Optional step at the end: "Check for skill updates?" which runs the `/update-skills` logic
+- Optional step at the end: "Check for skill updates?" which runs the `/update` logic
 - This checks whether any previously-merged skill branches have new commits (bug fixes, improvements to the skill itself — not just merge-forwards from main)
 
 **Why users don't need to re-merge skills after a core update:**
 When the user merged a skill branch, those changes became part of their git history. When they later merge `upstream/main`, git performs a normal three-way merge — the skill changes in their tree are untouched, and only core changes are brought in. The merge-forward CI ensures skill branches stay compatible with latest main, but that's for new users applying the skill fresh. Existing users who already merged the skill don't need to do anything.
 
-Users only need to re-merge a skill branch if the skill itself was updated (not just merged-forward with main). The `/update-skills` check detects this.
+Users only need to re-merge a skill branch if the skill itself was updated (not just merged-forward with main). The `/update` check detects this.
 
 ## Discord Announcement
 
@@ -644,7 +643,7 @@ Users only need to re-merge a skill branch if the skill itself was updated (not 
 > **What this means for you:**
 > - Applying a skill: `git fetch upstream skill/discord && git merge upstream/skill/discord`
 > - Updating core: `git fetch upstream main && git merge upstream/main`
-> - Checking for skill updates: `/update-skills`
+> - Checking for skill updates: `/update`
 > - No more `.nanoclaw/` state directory or skills engine
 >
 > **We now recommend forking instead of cloning.** This gives you a remote to push your customizations to.

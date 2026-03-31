@@ -27,7 +27,7 @@ grep "@onecli-sh/sdk" package.json
 
 If `@onecli-sh/sdk` appears, OneCLI is the active credential provider. Proceed with Phase 2 to replace it.
 
-If neither check matches, you may be on an older version. Run `/update-nanoclaw` first, then retry.
+If neither check matches, you may be on an older version. Run `/update` first, then retry.
 
 ## Phase 2: Apply Code Changes
 

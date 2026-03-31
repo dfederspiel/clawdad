@@ -39,6 +39,7 @@ export function MessageList() {
                     senderName=${m.senderName}
                     isError=${m.isError}
                     usage=${m.usage}
+                    toolHistory=${m.toolHistory}
                   />
                   ${thread && html`
                     <${ThreadView}
