@@ -160,6 +160,14 @@ jq -r '.event' /workspace/group/event-log.jsonl | sort | uniq -c | sort -rn
 jq -r 'select(.timestamp >= "2026-03-20" and .timestamp < "2026-03-28")' /workspace/group/event-log.jsonl
 ```
 
+## Usage Awareness
+
+Every agent response is tracked with token usage, cost, duration, and turn count. This data is visible to users in the web UI and persisted in the database.
+
+**Be cost-conscious:** If a task requires many tool calls or large context, consider whether there's a more efficient approach. Users can see per-response costs and will flag expensive operations for optimization.
+
+The host exposes usage data via API — agents with web access can query `http://host.docker.internal:3456/api/usage?hours=24` to review their own cost patterns.
+
 ## Scheduling
 
 **ALWAYS use `mcp__nanoclaw__schedule_task` for recurring or delayed work.** Never use `CronCreate` — it's ephemeral and lost when the container stops.
