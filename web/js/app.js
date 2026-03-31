@@ -36,6 +36,7 @@ export const triggers = signal([]);
 export const usage = signal(null); // latest usage stats
 export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group latest run
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
+export const agentProgress = signal({}); // { [jid]: { tool, summary, history[] } }
 
 // --- SSE ---
 
@@ -100,17 +101,38 @@ api.onSSE('typing', (data) => {
     const next = { ...typingStartTime.value };
     delete next[data.jid];
     typingStartTime.value = next;
+    // Clear progress when agent stops typing
+    const prog = { ...agentProgress.value };
+    delete prog[data.jid];
+    agentProgress.value = prog;
   }
+});
+
+api.onSSE('agent_progress', (data) => {
+  const prev = agentProgress.value[data.jid];
+  const history = prev?.history || [];
+  // Keep last 20 progress events for the transcript
+  const updated = [...history, { tool: data.tool, summary: data.summary, timestamp: data.timestamp }];
+  if (updated.length > 20) updated.shift();
+  agentProgress.value = {
+    ...agentProgress.value,
+    [data.jid]: { tool: data.tool, summary: data.summary, history: updated },
+  };
 });
 
 api.onSSE('usage_update', (data) => {
   lastRunUsage.value = { ...lastRunUsage.value, [data.jid]: data };
-  // Attach usage to the last assistant message for the current view
+  // Attach usage + progress history to the last assistant message
   if (data.jid === selectedJid.value) {
     const msgs = [...messages.value];
+    const progressData = agentProgress.value[data.jid];
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i].role === 'assistant' && !msgs[i].usage) {
-        msgs[i] = { ...msgs[i], usage: data };
+        msgs[i] = {
+          ...msgs[i],
+          usage: data,
+          toolHistory: progressData?.history || [],
+        };
         messages.value = msgs;
         break;
       }

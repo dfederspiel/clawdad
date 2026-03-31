@@ -121,6 +121,14 @@ async function readStdin(): Promise<string> {
 
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+const PROGRESS_START_MARKER = '---NANOCLAW_PROGRESS_START---';
+const PROGRESS_END_MARKER = '---NANOCLAW_PROGRESS_END---';
+
+interface ProgressEvent {
+  tool?: string;
+  summary: string;
+  timestamp: string;
+}
 
 function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_START_MARKER);
@@ -128,8 +136,54 @@ function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_END_MARKER);
 }
 
+function writeProgress(event: ProgressEvent): void {
+  console.log(PROGRESS_START_MARKER);
+  console.log(JSON.stringify(event));
+  console.log(PROGRESS_END_MARKER);
+}
+
 function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
+}
+
+/** Create a human-readable summary of a tool call for progress display. */
+function summarizeTool(name: string, input?: Record<string, unknown>): string {
+  if (!input) return name;
+  switch (name) {
+    case 'Bash': {
+      const cmd = String(input.command || '').split('\n')[0].slice(0, 80);
+      return cmd || 'Running command';
+    }
+    case 'Read':
+      return String(input.file_path || '').split(/[/\\]/).pop() || 'Reading file';
+    case 'Write':
+      return `Writing ${String(input.file_path || '').split(/[/\\]/).pop() || 'file'}`;
+    case 'Edit':
+      return `Editing ${String(input.file_path || '').split(/[/\\]/).pop() || 'file'}`;
+    case 'Glob':
+      return `Finding ${String(input.pattern || 'files')}`;
+    case 'Grep':
+      return `Searching for "${String(input.pattern || '').slice(0, 40)}"`;
+    case 'WebSearch':
+      return `Searching: ${String(input.query || '').slice(0, 50)}`;
+    case 'WebFetch':
+      return `Fetching ${String(input.url || '').slice(0, 60)}`;
+    case 'TodoWrite':
+      return 'Updating tasks';
+    case 'Task':
+    case 'TaskOutput':
+      return 'Managing tasks';
+    case 'TeamCreate':
+    case 'SendMessage':
+      return 'Coordinating agents';
+    default:
+      // MCP tools: mcp__nanoclaw__send_message → send_message
+      if (name.startsWith('mcp__')) {
+        const parts = name.split('__');
+        return parts[parts.length - 1].replace(/_/g, ' ');
+      }
+      return name.replace(/_/g, ' ');
+  }
 }
 
 function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
@@ -471,12 +525,16 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
-      // Collect text from assistant messages for fallback if no result message arrives
-      const assistantMsg = message as { message?: { content?: { type: string; text?: string }[] } };
+      // Collect text and emit progress for tool_use blocks
+      const assistantMsg = message as { message?: { content?: { type: string; text?: string; name?: string; input?: Record<string, unknown> }[] } };
       if (assistantMsg.message?.content) {
         for (const block of assistantMsg.message.content) {
           if (block.type === 'text' && block.text) {
             assistantTexts.push(block.text);
+          }
+          if (block.type === 'tool_use' && block.name) {
+            const summary = summarizeTool(block.name, block.input);
+            writeProgress({ tool: block.name, summary, timestamp: new Date().toISOString() });
           }
         }
       }
