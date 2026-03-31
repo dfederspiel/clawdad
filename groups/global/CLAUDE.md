@@ -107,20 +107,22 @@ The tool returns immediately — it does NOT block waiting for the user. The flo
 
 ### Using registered credentials
 
-Once a credential is registered, it is injected **automatically** into all outbound HTTPS requests matching the service's host pattern. You don't need tokens, env vars, or auth headers — just make the API call:
+Once a credential is registered, it is injected **automatically** into all outbound HTTPS requests matching the service's host pattern. You don't need tokens, env vars, or auth headers — just make the API call.
+
+**IMPORTANT: Always try the authenticated endpoint FIRST.** Don't ask the user for usernames, tokens, or credentials. Don't fall back to unauthenticated/public-only APIs. The credential proxy handles auth transparently — assume it works and call the authenticated API directly.
 
 ```bash
-# These work automatically after credential registration — no token needed:
-curl -s https://api.github.com/user                    # GitHub
-curl -s https://yourorg.atlassian.net/rest/api/3/myself # Atlassian
+# GitHub — call /user (authenticated) not /users/{name} (public-only):
+curl -s https://api.github.com/user                    # Returns authenticated user
+curl -s https://api.github.com/user/repos?per_page=100 # All repos including private
+
+# Atlassian:
+curl -s https://yourorg.atlassian.net/rest/api/3/myself
 ```
 
-The credential proxy intercepts HTTPS traffic and injects the right `Authorization` header. Use `WebFetch`, `curl`, or Node `fetch()` — they all work. Do NOT try to read tokens from environment variables or pass auth headers manually.
+Use `WebFetch` or `curl` — both work. Do NOT try to read tokens from environment variables or pass auth headers manually. The credential proxy intercepts HTTPS traffic and injects the right `Authorization` header automatically.
 
-To verify a credential works after registration:
-```bash
-curl -sf https://api.github.com/user          # GitHub — should return user JSON
-```
+If an API call returns 401, THEN ask about credentials — but try the call first.
 
 **Security rules:**
 - NEVER ask the user to paste tokens, keys, or passwords in chat
