@@ -645,6 +645,95 @@ interface CredentialIpcData {
   name?: string;
 }
 
+/**
+ * Register a credential via the OneCLI HTTP API.
+ * Works on all platforms (including Windows where the onecli CLI isn't available).
+ * Falls back to CLI if the API is unreachable.
+ */
+async function registerCredentialViaApi(
+  secretName: string,
+  serviceConfig: { type: string; headerName: string },
+  secretValue: string,
+  hostPattern: string,
+  valueFormat: string,
+): Promise<{ success: boolean; duplicate: boolean; error: string }> {
+  const { ONECLI_URL } = await import('./config.js');
+  const apiUrl = `${ONECLI_URL}/api/secrets`;
+
+  try {
+    const body = JSON.stringify({
+      name: secretName,
+      type: serviceConfig.type,
+      value: secretValue,
+      hostPattern,
+      headerName: serviceConfig.headerName,
+      valueFormat,
+    });
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (response.ok) {
+      return { success: true, duplicate: false, error: '' };
+    }
+
+    const text = await response.text().catch(() => '');
+    if (
+      response.status === 409 ||
+      text.includes('already exists') ||
+      text.includes('conflict')
+    ) {
+      return { success: false, duplicate: true, error: '' };
+    }
+
+    return {
+      success: false,
+      duplicate: false,
+      error: `OneCLI API returned ${response.status}: ${text}`,
+    };
+  } catch (err) {
+    // API unreachable — try CLI fallback
+    try {
+      const args = [
+        'secrets',
+        'create',
+        '--name',
+        secretName,
+        '--type',
+        serviceConfig.type,
+        '--value',
+        secretValue,
+        '--host-pattern',
+        hostPattern,
+        '--header-name',
+        serviceConfig.headerName,
+        '--value-format',
+        valueFormat,
+      ];
+
+      await execAsync(
+        `onecli ${args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`,
+        { timeout: 15_000 },
+      );
+      return { success: true, duplicate: false, error: '' };
+    } catch (cliErr) {
+      const msg = cliErr instanceof Error ? cliErr.message : String(cliErr);
+      if (
+        msg.includes('409') ||
+        msg.includes('already exists') ||
+        msg.includes('conflict')
+      ) {
+        return { success: false, duplicate: true, error: '' };
+      }
+      return { success: false, duplicate: false, error: msg };
+    }
+  }
+}
+
 async function processCredentialIpc(
   data: CredentialIpcData,
   sourceGroup: string,
@@ -689,30 +778,17 @@ async function processCredentialIpc(
     valueFormat = 'Basic {value}';
   }
 
-  try {
-    // Use onecli CLI to register the secret
-    const args = [
-      'secrets',
-      'create',
-      '--name',
-      secretName,
-      '--type',
-      serviceConfig.type,
-      '--value',
-      secretValue,
-      '--host-pattern',
-      host,
-      '--header-name',
-      serviceConfig.headerName,
-      '--value-format',
-      valueFormat,
-    ];
+  // Try HTTP API first (works on all platforms including Windows),
+  // fall back to CLI if the API isn't available.
+  const registered = await registerCredentialViaApi(
+    secretName,
+    serviceConfig,
+    secretValue,
+    host,
+    valueFormat,
+  );
 
-    const { stdout, stderr } = await execAsync(
-      `onecli ${args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`,
-      { timeout: 15_000 },
-    );
-
+  if (registered.success) {
     logger.info(
       { service, sourceGroup, host, secretName },
       'Credential registered via IPC',
@@ -724,38 +800,29 @@ async function processCredentialIpc(
       'Credential registered successfully',
     );
     notifyGroupCredentialResult(deps, sourceGroup, service, true);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    // Check if it's a duplicate — that's OK, just update
-    if (
-      message.includes('409') ||
-      message.includes('already exists') ||
-      message.includes('conflict')
-    ) {
-      logger.info(
-        { service, sourceGroup },
-        'Credential already exists in vault — skipping (use onecli secrets update to change)',
-      );
-      writeCredentialResult(
-        credentialsDir,
-        service,
-        true,
-        'Credential already registered',
-      );
-      notifyGroupCredentialResult(deps, sourceGroup, service, true);
-    } else {
-      logger.error(
-        { service, sourceGroup, err: message },
-        'Failed to register credential via OneCLI',
-      );
-      writeCredentialResult(
-        credentialsDir,
-        service,
-        false,
-        `Registration failed: ${message}`,
-      );
-      notifyGroupCredentialResult(deps, sourceGroup, service, false, message);
-    }
+  } else if (registered.duplicate) {
+    logger.info({ service, sourceGroup }, 'Credential already exists in vault');
+    writeCredentialResult(
+      credentialsDir,
+      service,
+      true,
+      'Credential already registered',
+    );
+    notifyGroupCredentialResult(deps, sourceGroup, service, true);
+  } else {
+    // Sanitize error — never include the secret value
+    const safeError = registered.error.replace(secretValue, '[REDACTED]');
+    logger.error(
+      { service, sourceGroup, err: safeError },
+      'Failed to register credential',
+    );
+    writeCredentialResult(
+      credentialsDir,
+      service,
+      false,
+      `Registration failed: ${safeError}`,
+    );
+    notifyGroupCredentialResult(deps, sourceGroup, service, false, safeError);
   }
 }
 
