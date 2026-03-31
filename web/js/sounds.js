@@ -33,9 +33,28 @@ function playTone(freq, duration, type = 'sine', gain = 0.3, delay = 0) {
   osc.stop(ctx.currentTime + delay + duration);
 }
 
+// Frequency-swept tone (rising or falling)
+function playSwept(startFreq, endFreq, duration, type = 'sine', gain = 0.25, delay = 0) {
+  const ctx = getCtx();
+  const osc = ctx.createOscillator();
+  const env = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(startFreq, ctx.currentTime + delay);
+  osc.frequency.exponentialRampToValueAtTime(endFreq, ctx.currentTime + delay + duration);
+  env.gain.setValueAtTime(0, ctx.currentTime + delay);
+  env.gain.linearRampToValueAtTime(gain, ctx.currentTime + delay + 0.015);
+  env.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration);
+  osc.connect(env);
+  env.connect(ctx.destination);
+  osc.start(ctx.currentTime + delay);
+  osc.stop(ctx.currentTime + delay + duration);
+}
+
 // --- Tone library ---
+// Organized by character: gentle → bright → musical → mechanical → ambient
 
 export const TONES = {
+  // --- Gentle ---
   chime: {
     name: 'Chime',
     play() {
@@ -50,25 +69,66 @@ export const TONES = {
       playTone(900, 0.18, 'sine', 0.15, 0.08);
     },
   },
+  whisper: {
+    name: 'Whisper',
+    play() {
+      playTone(1600, 0.08, 'sine', 0.12);
+      playTone(1400, 0.12, 'sine', 0.08, 0.06);
+    },
+  },
+  dewdrop: {
+    name: 'Dewdrop',
+    play() {
+      playSwept(1800, 800, 0.2, 'sine', 0.2);
+    },
+  },
+  bubble: {
+    name: 'Bubble',
+    play() {
+      playSwept(400, 1200, 0.1, 'sine', 0.2);
+      playSwept(500, 1400, 0.1, 'sine', 0.15, 0.08);
+    },
+  },
+
+  // --- Bright ---
+  ping: {
+    name: 'Ping',
+    play() {
+      playTone(1400, 0.1, 'sine', 0.25);
+    },
+  },
+  sparkle: {
+    name: 'Sparkle',
+    play() {
+      playTone(2400, 0.06, 'sine', 0.15);
+      playTone(2800, 0.06, 'sine', 0.12, 0.05);
+      playTone(3200, 0.08, 'sine', 0.08, 0.1);
+    },
+  },
+  twinkle: {
+    name: 'Twinkle',
+    play() {
+      playTone(1047, 0.08, 'sine', 0.2);   // C6
+      playTone(1319, 0.08, 'sine', 0.18, 0.07);  // E6
+      playTone(1568, 0.08, 'sine', 0.15, 0.14);  // G6
+      playTone(2093, 0.12, 'sine', 0.1, 0.21);   // C7
+    },
+  },
+  coin: {
+    name: 'Coin',
+    play() {
+      playTone(988, 0.06, 'square', 0.12);   // B5
+      playTone(1319, 0.15, 'square', 0.1, 0.06); // E6
+    },
+  },
+
+  // --- Musical ---
   bell: {
     name: 'Bell',
     play() {
       playTone(660, 0.4, 'sine', 0.2);
       playTone(990, 0.3, 'triangle', 0.1, 0.05);
       playTone(1320, 0.2, 'sine', 0.08, 0.1);
-    },
-  },
-  pulse: {
-    name: 'Pulse',
-    play() {
-      playTone(440, 0.08, 'square', 0.15);
-      playTone(440, 0.08, 'square', 0.15, 0.12);
-    },
-  },
-  ping: {
-    name: 'Ping',
-    play() {
-      playTone(1400, 0.1, 'sine', 0.25);
     },
   },
   melody: {
@@ -79,6 +139,112 @@ export const TONES = {
       playTone(784, 0.2, 'triangle', 0.15, 0.2);   // G5
     },
   },
+  harp: {
+    name: 'Harp',
+    play() {
+      playTone(523, 0.3, 'sine', 0.15);        // C5
+      playTone(659, 0.25, 'sine', 0.13, 0.04); // E5
+      playTone(784, 0.2, 'sine', 0.11, 0.08);  // G5
+      playTone(1047, 0.18, 'sine', 0.09, 0.12); // C6
+      playTone(1319, 0.15, 'sine', 0.07, 0.16); // E6
+    },
+  },
+  celeste: {
+    name: 'Celeste',
+    play() {
+      playTone(784, 0.25, 'triangle', 0.15);    // G5
+      playTone(988, 0.25, 'triangle', 0.12, 0.15); // B5
+      playTone(1175, 0.3, 'triangle', 0.1, 0.3);   // D6
+    },
+  },
+  marimba: {
+    name: 'Marimba',
+    play() {
+      playTone(524, 0.15, 'triangle', 0.3);
+      playTone(524 * 4, 0.08, 'sine', 0.08); // harmonic
+      playTone(659, 0.15, 'triangle', 0.25, 0.12);
+      playTone(659 * 4, 0.06, 'sine', 0.06, 0.12);
+    },
+  },
+  doorbell: {
+    name: 'Doorbell',
+    play() {
+      playTone(659, 0.3, 'sine', 0.2);    // E5 — ding
+      playTone(523, 0.4, 'sine', 0.18, 0.25); // C5 — dong
+    },
+  },
+  lullaby: {
+    name: 'Lullaby',
+    play() {
+      playTone(392, 0.2, 'sine', 0.15);       // G4
+      playTone(440, 0.2, 'sine', 0.13, 0.15); // A4
+      playTone(523, 0.3, 'sine', 0.12, 0.3);  // C5
+    },
+  },
+
+  // --- Mechanical ---
+  pulse: {
+    name: 'Pulse',
+    play() {
+      playTone(440, 0.08, 'square', 0.15);
+      playTone(440, 0.08, 'square', 0.15, 0.12);
+    },
+  },
+  click: {
+    name: 'Click',
+    play() {
+      playTone(800, 0.03, 'square', 0.2);
+      playTone(400, 0.02, 'square', 0.1, 0.03);
+    },
+  },
+  radar: {
+    name: 'Radar',
+    play() {
+      playSwept(600, 1200, 0.15, 'sine', 0.2);
+      playSwept(600, 1200, 0.15, 'sine', 0.12, 0.25);
+    },
+  },
+  sonar: {
+    name: 'Sonar',
+    play() {
+      playTone(440, 0.3, 'sine', 0.2);
+      playTone(440, 0.2, 'sine', 0.1, 0.4);
+    },
+  },
+  tap: {
+    name: 'Tap',
+    play() {
+      playTone(600, 0.04, 'triangle', 0.25);
+      playTone(1200, 0.03, 'triangle', 0.1, 0.01);
+    },
+  },
+
+  // --- Ambient ---
+  glow: {
+    name: 'Glow',
+    play() {
+      playSwept(300, 600, 0.4, 'sine', 0.12);
+      playSwept(450, 900, 0.35, 'sine', 0.08, 0.05);
+    },
+  },
+  breeze: {
+    name: 'Breeze',
+    play() {
+      playSwept(800, 400, 0.3, 'sine', 0.1);
+      playSwept(1200, 600, 0.25, 'sine', 0.07, 0.1);
+      playSwept(600, 300, 0.3, 'sine', 0.05, 0.2);
+    },
+  },
+  aurora: {
+    name: 'Aurora',
+    play() {
+      playTone(330, 0.5, 'sine', 0.1);       // E4
+      playSwept(330, 660, 0.4, 'sine', 0.08, 0.1);
+      playTone(494, 0.4, 'sine', 0.06, 0.25);  // B4
+    },
+  },
+
+  // --- Silent ---
   none: {
     name: 'Silent',
     play() {},
