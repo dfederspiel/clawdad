@@ -87,6 +87,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
 \u2022 once: Local time WITHOUT "Z" suffix (e.g., "2026-02-01T15:30:00"). Do NOT use UTC/Z suffix.`,
   {
     prompt: z.string().describe('What the agent should do when the task runs. For isolated mode, include all necessary context here.'),
+    title: z.string().optional().describe('Short display title for the task (e.g., "Daily standup report"). Auto-generated from prompt if omitted.'),
     schedule_type: z.enum(['cron', 'interval', 'once']).describe('cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time'),
     schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
     context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
@@ -136,6 +137,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     const data = {
       type: 'schedule_task',
       taskId,
+      title: args.title || undefined,
       prompt: args.prompt,
       script: args.script || undefined,
       schedule_type: args.schedule_type,

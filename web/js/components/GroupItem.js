@@ -1,5 +1,5 @@
 import { html } from 'htm/preact';
-import { unread, typingGroups } from '../app.js';
+import { unread, typingGroups, tasks } from '../app.js';
 
 function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -8,6 +8,7 @@ function esc(s) {
 export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
   const count = unread.value[group.jid] || 0;
   const isThinking = typingGroups.value[group.jid] || false;
+  const taskCount = tasks.value.filter(t => t.group_folder === group.folder && t.status === 'active').length;
   const base =
     'flex items-center gap-2.5 px-4 py-2.5 cursor-pointer transition-colors text-sm group/item';
   const active = isActive ? 'bg-bg-3 text-txt' : 'text-txt-2 hover:bg-bg-hover';
@@ -35,6 +36,9 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
       `}
       ${group.isMain && !group.isSystem && html`
         <span class="text-[10px] px-1.5 py-0.5 rounded bg-accent-dim text-accent font-medium shrink-0">main</span>
+      `}
+      ${taskCount > 0 && !count && html`
+        <span class="text-[9px] px-1 py-0.5 rounded bg-bg-3 text-txt-muted font-mono shrink-0" title="${taskCount} active task${taskCount > 1 ? 's' : ''}">${taskCount}t</span>
       `}
       ${count > 0 && html`
         <span class="min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-accent text-bg text-[11px] font-semibold px-1 shrink-0">
