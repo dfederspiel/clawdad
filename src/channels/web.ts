@@ -106,10 +106,14 @@ export class WebChannel implements Channel {
       jid.startsWith('web:'),
     );
 
-    // If a web group exists but lost isSystem (not persisted in DB), restore it
+    // If any web group exists, skip creating a default — but only restore
+    // isSystem on the group that is actually marked as main.
     if (existingJid) {
-      if (!groups[existingJid].isSystem) {
-        groups[existingJid].isSystem = true;
+      const mainJid = Object.keys(groups).find(
+        (jid) => jid.startsWith('web:') && groups[jid].isMain,
+      );
+      if (mainJid && !groups[mainJid].isSystem) {
+        groups[mainJid].isSystem = true;
       }
       return;
     }

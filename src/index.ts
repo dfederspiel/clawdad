@@ -484,6 +484,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         resetIdleTimer();
       }
 
+      if (!result.status) {
+        // Intermediate result — agent is still running. Re-assert typing so
+        // the frontend indicator comes back after clearing on message receipt.
+        await responseChannel.setTyping?.(responseJid, true, threadId);
+      }
+
       if (result.status === 'success') {
         queue.notifyIdle(chatJid);
       }
