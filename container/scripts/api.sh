@@ -17,7 +17,7 @@
 #     -H "PRIVATE-TOKEN: $GITLAB_TOKEN"
 #
 #   api.sh atlassian GET "https://your-domain.atlassian.net/rest/api/3/issue/PROJ-1234"
-#     (auth injected by OneCLI gateway, or pass -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" if set)
+#     (pass -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" if set)
 #
 #   api.sh launchdarkly GET "https://app.launchdarkly.com/api/v2/flags/my-project/my-flag" \
 #     -H "Authorization: $LAUNCHDARKLY_API_KEY" -H "Ld-Api-Version: 20240415"

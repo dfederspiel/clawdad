@@ -191,7 +191,7 @@ export function CredentialModal() {
         `}
 
         <p class="text-[10px] text-txt-muted text-center">
-          For advanced credential management, use the CLI: onecli secrets create
+          Credentials are stored in .env and injected via the credential proxy.
         </p>
       </form>
     </dialog>

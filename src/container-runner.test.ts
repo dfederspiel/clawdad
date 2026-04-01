@@ -16,7 +16,6 @@ vi.mock('./config.js', () => ({
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
   OLLAMA_ADMIN_TOOLS: false,
-  ONECLI_URL: 'http://127.0.0.1:10254',
   TIMEZONE: 'America/Los_Angeles',
 }));
 

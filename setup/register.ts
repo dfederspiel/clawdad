@@ -74,7 +74,7 @@ function parseArgs(args: string[]): RegisterArgs {
  */
 async function tryApiRegister(parsed: RegisterArgs): Promise<boolean> {
   // The web API uses web: prefix JIDs and handles folder creation, template
-  // copying, config merge, OneCLI agent, and memory sync automatically.
+  // copying, config merge, and memory sync automatically.
   // For non-web channels, the orchestrator's registerGroup callback handles
   // all the same setup via onRegisterGroup.
   try {

@@ -1,175 +1,104 @@
 # Credential Management
 
-NanoClaw uses **OneCLI Agent Vault** to manage API credentials. The vault is a local gateway that intercepts outbound HTTPS requests from agent containers and injects the correct credentials at request time. Agents never see raw API keys or tokens.
+ClawDad uses a **built-in credential proxy** to manage API credentials. The proxy reads secrets from `.env` and injects them into outbound requests from agent containers. Agents never see raw API keys or tokens.
 
 ## How It Works
 
 ```
-Agent Container  --->  OneCLI Gateway (port 10254)  --->  External API
-                       (injects credentials)
+Agent Container  --->  Credential Proxy (localhost)  --->  External API
+                       (injects credentials from .env)
 ```
 
-1. You register secrets with OneCLI (API keys, OAuth tokens)
-2. Each secret has a **host pattern** (e.g., `api.anthropic.com`)
-3. When a container makes an HTTPS request matching that pattern, the gateway injects the credential
-4. The container itself has no access to the raw key
+1. You store secrets in `.env` (API keys, OAuth tokens)
+2. The credential proxy starts alongside ClawDad and reads `.env` at startup
+3. Containers get `ANTHROPIC_BASE_URL` pointing at the proxy and a placeholder key
+4. The proxy intercepts requests and injects the real credential before forwarding
 
-## Installation
+## Anthropic Credentials
 
-Install the OneCLI gateway and CLI tool:
+The proxy supports two auth modes, auto-detected from `.env`:
 
-```bash
-curl -fsSL onecli.sh/install | sh
-curl -fsSL onecli.sh/cli/install | sh
-```
+| Mode | `.env` variable | Header sent | When to use |
+|------|----------------|-------------|-------------|
+| **API key** | `ANTHROPIC_API_KEY=sk-ant-api03-...` | `x-api-key` | Direct API keys from console.anthropic.com |
+| **OAuth** | `ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-...` | `Authorization: Bearer` | OAuth tokens (e.g. from `claude setup-token`) |
 
-If `onecli` is not found after installation, add `~/.local/bin` to your PATH:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-# Persist for future sessions
-grep -q '.local/bin' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-```
-
-Verify: `onecli version`
-
-## Configuration
-
-Point the CLI at the local gateway:
-
-```bash
-onecli config set api-host http://127.0.0.1:10254
-```
-
-Add the gateway URL to your `.env`:
-
-```bash
-ONECLI_URL=http://127.0.0.1:10254
-```
-
-Start the gateway:
-
-```bash
-onecli gateway start
-```
-
-Verify it's running:
-
-```bash
-curl -sf http://127.0.0.1:10254/health
-```
-
-## Registering Anthropic Credentials
+**Detection logic:** If `ANTHROPIC_API_KEY` is set, the proxy uses api-key mode. Otherwise it falls back to OAuth mode using `ANTHROPIC_AUTH_TOKEN` (or `CLAUDE_CODE_OAUTH_TOKEN`).
 
 ### Option A: Claude Subscription (Pro/Max)
 
-1. In a separate terminal, run `claude setup-token` and copy the token it outputs
-2. Register the token:
+1. In a separate terminal, run `claude setup-token` and complete the flow
+2. Copy the token from Claude Code's credential store:
 
 ```bash
-onecli secrets create \
-  --name Anthropic \
-  --type anthropic \
-  --value YOUR_TOKEN \
-  --host-pattern api.anthropic.com
+python -c "
+import json
+d = json.load(open('$HOME/.claude/.credentials.json'))
+print(d['claudeAiOauth']['accessToken'])
+"
 ```
+
+3. Add to `.env`:
+
+```bash
+ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-your-token
+```
+
+**Important:** Use `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`. OAuth tokens sent as `x-api-key` will fail with "Invalid API key".
 
 ### Option B: Anthropic API Key
 
 1. Get a key from https://console.anthropic.com/settings/keys
-2. Register it:
+2. Add to `.env`:
 
 ```bash
-onecli secrets create \
-  --name Anthropic \
-  --type anthropic \
-  --value sk-ant-your-key \
-  --host-pattern api.anthropic.com
+ANTHROPIC_API_KEY=sk-ant-api03-your-key
 ```
+
+### Refreshing an expired token
+
+OAuth tokens expire. After running `claude setup-token` again:
+
+1. Copy the new token from `~/.claude/.credentials.json` (see command above)
+2. Update `ANTHROPIC_AUTH_TOKEN` in `.env`
+3. Restart ClawDad — the proxy caches the token at startup
 
 ## Custom Anthropic Endpoint
 
-If you use a proxy or custom endpoint instead of `api.anthropic.com`, **two things** must be configured:
-
-1. **Set the endpoint in `.env`** so containers know where to send requests:
+If you use a proxy or custom endpoint instead of `api.anthropic.com`:
 
 ```bash
 ANTHROPIC_BASE_URL=https://your-proxy.example.com
 ```
 
-2. **Set the OneCLI host pattern** to match your endpoint:
-
-```bash
-# If you already have an Anthropic secret, update its host pattern:
-onecli secrets list                    # find the secret ID
-onecli secrets update --id ID --host-pattern your-proxy.example.com
-
-# Or create a new secret with the correct pattern:
-onecli secrets create \
-  --name Anthropic \
-  --type anthropic \
-  --value YOUR_TOKEN \
-  --host-pattern your-proxy.example.com
-```
-
-**Both steps are required.** If `ANTHROPIC_BASE_URL` is missing from `.env`, containers default to `api.anthropic.com` and the gateway can't match your custom host pattern. This causes a silent "Invalid API key" error.
-
 ## Adding Other Service Credentials
 
-For non-Anthropic services (GitLab, Jira, etc.), use `--type generic` with the correct HTTP header:
+Service credentials (GitHub, GitLab, Jira, etc.) are passed directly to containers as environment variables. Add them to `.env`:
 
 ```bash
-# GitLab (PRIVATE-TOKEN header)
-onecli secrets create \
-  --name GitLab \
-  --type generic \
-  --value glpat-your-token \
-  --host-pattern gitlab.example.com \
-  --header-name PRIVATE-TOKEN
+# GitHub
+GITHUB_TOKEN=ghp_your-token
 
-# Atlassian/Jira (Basic auth via Authorization header)
-# Value must be base64(email:api-token) — OneCLI adds the "Basic " prefix via --value-format
-ENCODED=$(echo -n 'you@example.com:your-api-token' | base64)
-onecli secrets create \
-  --name Atlassian \
-  --type generic \
-  --value "$ENCODED" \
-  --host-pattern your-domain.atlassian.net \
-  --header-name Authorization \
-  --value-format "Basic {value}"
+# GitLab
+GITLAB_TOKEN=glpat-your-token
 
-# GitHub (Authorization: token header)
-onecli secrets create \
-  --name GitHub \
-  --type generic \
-  --value "token ghp_your-token" \
-  --host-pattern api.github.com \
-  --header-name Authorization
+# Atlassian (email + API token)
+ATLASSIAN_EMAIL=you@example.com
+ATLASSIAN_API_TOKEN=your-api-token
 
-# Custom Service (Authorization header — adapt header-name and value to your service)
-onecli secrets create \
-  --name MyService \
-  --type generic \
-  --value "your-api-key" \
-  --host-pattern api.example.com \
-  --header-name Authorization
-
-# LaunchDarkly (Authorization header)
-onecli secrets create \
-  --name LaunchDarkly \
-  --type generic \
-  --value your-ld-key \
-  --host-pattern app.launchdarkly.com \
-  --header-name Authorization
+# LaunchDarkly
+LAUNCHDARKLY_API_KEY=your-ld-key
 ```
+
+Variables matching `*_TOKEN`, `*_KEY`, `*_SECRET`, or `*_PASSWORD` are automatically forwarded to containers (excluding `ANTHROPIC_*` and `CLAUDE_CODE_*` which go through the proxy).
 
 ## Env Passthrough: Secrets vs Config
 
 NanoClaw separates credentials from configuration:
 
-- **Secrets** (API keys, tokens) flow through the OneCLI gateway. They never enter containers.
-- **Config** (URLs, account IDs, email addresses) is passed to containers as environment variables via `PASSTHROUGH_ENV_PREFIXES` in `container-runner.ts`.
+- **Anthropic credentials** flow through the credential proxy. They never enter containers directly.
+- **Service credentials** (tokens, keys) are passed as environment variables to containers.
+- **Config** (URLs, account IDs, email addresses) is also passed via env vars through `PASSTHROUGH_ENV_PREFIXES` in `container-runner.ts`.
 
 The passthrough list includes variables matching these prefixes:
 
@@ -182,137 +111,88 @@ The passthrough list includes variables matching these prefixes:
 | `FIGMA_` | `FIGMA_API_KEY` |
 | `ATLASSIAN_` | `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL` |
 
-To add a new service, add its prefix to `PASSTHROUGH_ENV_PREFIXES` in `src/container-runner.ts` and register its credential with OneCLI.
-
-## Verification
-
-Check that OneCLI is configured:
-
-```bash
-# List registered secrets
-onecli secrets list
-
-# Check gateway health
-curl -sf http://127.0.0.1:10254/health
-
-# After starting NanoClaw, check logs for:
-# "OneCLI gateway config applied" — credentials will be injected
-# "OneCLI gateway not reachable" — gateway is down
-```
-
-## Troubleshooting
-
-### "Invalid API key" with a custom Anthropic endpoint
-
-**Cause:** `ANTHROPIC_BASE_URL` is not set in `.env`, so containers default to `api.anthropic.com`. The OneCLI secret's host pattern points to your custom endpoint, so the gateway never matches.
-
-**Fix:** Add `ANTHROPIC_BASE_URL=https://your-endpoint` to `.env` and ensure the OneCLI secret's host pattern matches: `onecli secrets update --id ID --host-pattern your-endpoint`.
-
-### "Not logged in" or "Please run /login"
-
-**Cause:** The OneCLI gateway is not running, so containers have no credentials.
-
-**Fix:** Start the gateway: `onecli gateway start`. Verify: `curl -sf http://127.0.0.1:10254/health`.
-
-### "container will have no credentials" in logs
-
-**Cause:** The gateway is unreachable when the container starts.
-
-**Fix:** Ensure the gateway is running and `ONECLI_URL` in `.env` points to the correct address (default: `http://127.0.0.1:10254`).
-
-### Port 10254 already in use
-
-**Cause:** Another OneCLI instance is running.
-
-**Fix:** `lsof -i :10254` to find the process. Kill it or use a different port.
-
-### Atlassian returns 401 "Client must be authenticated"
-
-**Cause:** The OneCLI secret stores the raw API token, but Atlassian Basic auth requires `base64(email:token)`. Unlike `curl -u` (which auto-encodes), OneCLI injects the value literally.
-
-**Fix:** Recreate the secret with a pre-encoded value:
-
-```bash
-onecli secrets delete --id $(onecli secrets list | python3 -c "import sys,json; print(next(s['id'] for s in json.load(sys.stdin) if s['name']=='Atlassian'))")
-ENCODED=$(echo -n 'you@example.com:your-api-token' | base64)
-onecli secrets create --name Atlassian --type generic --value "$ENCODED" \
-  --host-pattern your-domain.atlassian.net --header-name Authorization \
-  --value-format "Basic {value}"
-```
-
-### Generic secret fails with "Header name is required"
-
-**Cause:** Generic secrets need `--header-name` to know which HTTP header to inject.
-
-**Fix:** Add `--header-name` to the create command (see examples above).
-
 ## In-Chat Credential Registration (IPC)
 
-Agents can register credentials on behalf of users during setup — the user shares their token in chat, the agent registers it in the OneCLI vault via IPC, and the token is never stored on disk.
+Agents can register credentials on behalf of users — the user enters their token in a secure browser popup, and it's saved to `.env` via IPC.
 
 ### How It Works
 
 ```
-User shares PAT  --->  Agent calls register-credential.sh  --->  IPC file (ephemeral)
-                                                                      |
-Host IPC watcher  <---  picks up file, deletes immediately  <---------+
+User clicks popup  --->  Browser form  --->  IPC file (ephemeral)
+                                                   |
+Host IPC watcher  <---  picks up file, deletes  <--+
        |
        v
-onecli secrets create  --->  OneCLI Vault  --->  Injected at request time
+Saved to .env  --->  Available on next proxy/container restart
 ```
 
-1. User shares their API token/PAT in the chat
-2. Agent calls `/workspace/scripts/register-credential.sh` with the token
-3. Script writes a JSON file to `/workspace/ipc/credentials/` (inside the container)
-4. Host IPC watcher picks up the file and **immediately deletes it** (secret is in-flight for at most one poll cycle, ~2s)
-5. Host calls `onecli secrets create` to register the secret in the vault
+1. Agent calls `request_credential` MCP tool — opens a secure popup in the browser
+2. User enters their secret in the form (the agent never sees it)
+3. Script writes a JSON file to the IPC credentials directory
+4. Host IPC watcher picks up the file and **immediately deletes it**
+5. Host saves the credential to `.env`
 6. Host writes a result file back so the agent can confirm success
-7. Future API calls from the container are automatically authenticated by the gateway
 
 ### Supported Services
 
-| Service | Header | Default Host Pattern |
-|---------|--------|---------------------|
-| `atlassian` | `Authorization: Basic {base64(email:token)}` | `*.atlassian.net` |
-| `gitlab` | `PRIVATE-TOKEN` | `gitlab.com` |
-| `github` | `Authorization: token {value}` | `*.github.com` |
-| `launchdarkly` | `Authorization` | `app.launchdarkly.com` |
-
-### Container-Side Script
-
-```bash
-# Atlassian (requires --email for basic auth encoding)
-/workspace/scripts/register-credential.sh atlassian "api-token" --email "user@co.com" --wait
-
-# GitLab (custom host)
-/workspace/scripts/register-credential.sh gitlab "glpat-xxxx" --host-pattern "gitlab.mycompany.com" --wait
-
-# GitHub
-/workspace/scripts/register-credential.sh github "ghp_xxxx" --wait
-
-```
-
-The `--wait` flag blocks until the host confirms registration (up to 30s).
+| Service | Env Variable | Default Host Pattern |
+|---------|-------------|---------------------|
+| `atlassian` | `ATLASSIAN_API_TOKEN` + `ATLASSIAN_EMAIL` | `*.atlassian.net` |
+| `gitlab` | `GITLAB_TOKEN` | `gitlab.com` |
+| `github` | `GITHUB_TOKEN` | `*.github.com` |
+| `launchdarkly` | `LAUNCHDARKLY_API_KEY` | `app.launchdarkly.com` |
 
 ### Security Properties
 
 - The token is on disk for at most one IPC poll cycle (~2s)
-- The IPC file is deleted before processing, not moved to an error directory
+- The IPC file is deleted before processing
 - The token is never stored in `agent-config.json` or any persistent file
-- OneCLI vault handles actual storage and per-request injection
-- Agents never see raw credentials after registration — the gateway injects them
+- Agents never see raw Anthropic credentials — the proxy injects them
 
-### Template Integration
+## Verification
 
-All agent templates (deployments, bug-triage, updates) include credential registration instructions. When an API call returns 401/403, the agent asks the user for their token and registers it via this mechanism. See `templates/*/CLAUDE.md` for the exact instructions.
-
-## Alternative: Native Credential Proxy
-
-For simpler single-user setups, NanoClaw offers a built-in credential proxy that reads directly from `.env`. Apply the skill branch:
+Check that credentials are configured:
 
 ```bash
-git merge origin/skill/native-credential-proxy
-npm run build
+# Check .env has credentials
+grep -E 'ANTHROPIC_(API_KEY|AUTH_TOKEN)' .env
+
+# Check credential proxy health
+curl -s http://localhost:3456/api/health | python -m json.tool
+
+# After starting ClawDad, check logs for:
+# "Credential proxy started" with authMode
 ```
 
-This is simpler but less secure — credentials live in `.env` and are proxied through a single HTTP endpoint. OneCLI is recommended for production use.
+## Troubleshooting
+
+### "Invalid API key"
+
+**Common cause:** An OAuth token (`sk-ant-oat01-...`) is set as `ANTHROPIC_API_KEY` instead of `ANTHROPIC_AUTH_TOKEN`. The proxy sends it as `x-api-key` instead of `Authorization: Bearer`.
+
+**Fix:** Move the token to the correct variable:
+```bash
+# In .env, change:
+#   ANTHROPIC_API_KEY=sk-ant-oat01-...
+# To:
+#   ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-...
+```
+Then restart ClawDad.
+
+### "Invalid API key" with a custom endpoint
+
+**Cause:** `ANTHROPIC_BASE_URL` in `.env` doesn't match where the credential is valid.
+
+**Fix:** Ensure `ANTHROPIC_BASE_URL` points to the correct endpoint for your key.
+
+### "Not logged in" or "Please run /login"
+
+**Cause:** No Anthropic credential found in `.env`.
+
+**Fix:** Add either `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` to `.env` and restart.
+
+### Token expired after working previously
+
+**Cause:** OAuth tokens (`sk-ant-oat01-`) expire periodically.
+
+**Fix:** Run `claude setup-token` again, copy the new token from `~/.claude/.credentials.json`, update `ANTHROPIC_AUTH_TOKEN` in `.env`, and restart ClawDad.

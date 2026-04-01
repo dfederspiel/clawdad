@@ -1,6 +1,6 @@
 ---
 id: credential-management
-teaches: "Secure credential registration via browser popup, OneCLI vault"
+teaches: "Secure credential registration via browser popup, .env credential proxy"
 tools: [request_credential]
 complexity: intermediate
 depends_on: [first-run]
@@ -66,4 +66,4 @@ Then call `request_credential` again.
 
 For advanced cases or if the popup doesn't work:
 
-> If you prefer, you can register credentials from the CLI: `onecli secrets create --name SERVICE --type generic --host-pattern PATTERN`
+> If you prefer, you can add credentials directly to `.env` — variables matching `*_TOKEN`, `*_KEY`, `*_SECRET`, or `*_PASSWORD` are automatically forwarded to containers.
