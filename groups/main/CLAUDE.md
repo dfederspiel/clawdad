@@ -66,7 +66,7 @@ This is the **main channel** with elevated privileges.
 
 ## Authentication
 
-Anthropic credentials must be either an API key from console.anthropic.com (`ANTHROPIC_API_KEY`) or a long-lived OAuth token from `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`). The `/setup` skill walks through this. The native credential proxy manages credentials (including Anthropic auth) via `.env` — see `src/credential-proxy.ts`.
+Anthropic credentials are resolved automatically from Claude Code's credential store (`~/.claude/.credentials.json`), with `.env` as fallback. The credential proxy handles injection — see `src/credential-proxy.ts`. Service credentials use `api.sh` which routes through the proxy's `/forward` endpoint.
 
 ## Container Mounts
 
