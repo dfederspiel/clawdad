@@ -65,10 +65,36 @@ Every agent run records token usage, cost, duration, and turn count. This data i
 
 All credentials live in `.env` (untracked). Two types:
 
-- **Anthropic API key** — routed through a local HTTP proxy (`src/credential-proxy.ts`) that injects the real key. Containers get `ANTHROPIC_BASE_URL` pointing at the proxy and a placeholder key.
+- **Anthropic credentials** — routed through a local HTTP proxy (`src/credential-proxy.ts`) that injects the real credential. Containers get `ANTHROPIC_BASE_URL` pointing at the proxy and a placeholder key.
 - **Service credentials** (GitHub, GitLab, etc.) — passed directly as env vars to containers. Agents use them in curl headers: `curl -H "Authorization: token $GITHUB_TOKEN" ...`
 
-**Adding credentials:** Agents use `mcp__nanoclaw__request_credential` which opens a web popup → user enters secret → saved to `.env`. Or add manually:
+### Anthropic Auth Modes
+
+The credential proxy supports two auth modes, auto-detected from `.env`:
+
+| Mode | `.env` variable | Header sent | When to use |
+|------|----------------|-------------|-------------|
+| **API key** | `ANTHROPIC_API_KEY=sk-ant-api03-...` | `x-api-key` | Direct API keys from console.anthropic.com |
+| **OAuth** | `ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-...` | `Authorization: Bearer` | OAuth tokens (e.g. from `claude setup-token`) |
+
+**Detection logic:** If `ANTHROPIC_API_KEY` is set, the proxy uses api-key mode. Otherwise it falls back to OAuth mode using `ANTHROPIC_AUTH_TOKEN` (or `CLAUDE_CODE_OAUTH_TOKEN`).
+
+**Refreshing an OAuth token (e.g. after `claude setup-token`):**
+```bash
+# 1. Copy the new token from Claude Code's credential store into .env
+python -c "
+import json
+d = json.load(open('$HOME/.claude/.credentials.json'))
+token = d['claudeAiOauth']['accessToken']
+print(token)
+"
+# 2. Set it in .env as ANTHROPIC_AUTH_TOKEN (NOT ANTHROPIC_API_KEY)
+# 3. Restart ClawDad — the proxy caches the token at startup
+```
+
+**Common mistake:** OAuth tokens (`sk-ant-oat01-...`) set as `ANTHROPIC_API_KEY` will fail with "Invalid API key" because the proxy sends them as `x-api-key` instead of `Authorization: Bearer`. Always use `ANTHROPIC_AUTH_TOKEN` for OAuth tokens.
+
+**Adding service credentials:** Agents use `mcp__nanoclaw__request_credential` which opens a web popup → user enters secret → saved to `.env`. Or add manually:
 ```bash
 echo 'GITHUB_TOKEN=ghp_xxxxx' >> .env
 echo 'GITLAB_TOKEN=glpat-xxxxx' >> .env
