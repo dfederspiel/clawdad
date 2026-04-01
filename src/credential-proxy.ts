@@ -1,18 +1,36 @@
 /**
  * Credential proxy for container isolation.
- * Containers connect here instead of directly to the Anthropic API.
- * The proxy injects real credentials so containers never see them.
  *
- * Two auth modes:
- *   API key:  Proxy injects x-api-key on every request.
- *   OAuth:    Container CLI exchanges its placeholder token for a temp
- *             API key via /api/oauth/claude_cli/create_api_key.
- *             Proxy injects real OAuth token on that exchange request;
- *             subsequent requests carry the temp key which is valid as-is.
+ * Two responsibilities:
+ *
+ * 1. **Anthropic reverse proxy** (default path)
+ *    Containers connect here instead of directly to the Anthropic API.
+ *    The proxy injects real Anthropic credentials so containers never
+ *    see them.  Two auth sub-modes:
+ *      - API key:  Proxy injects x-api-key on every request.
+ *      - OAuth:    Container CLI exchanges its placeholder token for a
+ *                  temp API key via /api/oauth/claude_cli/create_api_key.
+ *                  Proxy injects real OAuth token on that exchange request;
+ *                  subsequent requests carry the temp key which is valid.
+ *
+ * 2. **Generic forwarding proxy** (`/forward` path)
+ *    Routes any outbound request through the proxy for credential
+ *    injection.  The caller sets `X-Forward-To` with the real upstream
+ *    URL and includes placeholder strings (`__CRED_<NAME>__`) wherever
+ *    a credential value is needed.  The proxy re-reads `.env` on every
+ *    request, substitutes placeholders with real values, and forwards.
+ *
+ * Anthropic credentials are resolved fresh on every request:
+ *   1. Claude Code credential store (~/.claude/.credentials.json) — preferred,
+ *      auto-refreshed by Claude Code
+ *   2. .env file (ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN) — fallback
  */
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
@@ -23,32 +41,151 @@ export interface ProxyConfig {
   authMode: AuthMode;
 }
 
-export function startCredentialProxy(
-  port: number,
-  host = '127.0.0.1',
-): Promise<Server> {
-  const secrets = readEnvFile([
+// ── Credential substitution helpers ─────────────────────────────────
+
+const PLACEHOLDER_RE = /__CRED_([A-Z0-9_]+)__/g;
+
+const CREDENTIAL_PATTERN =
+  /^(?!ANTHROPIC_|CLAUDE_CODE_).+_(TOKEN|KEY|SECRET|PASSWORD)$/;
+
+/** Build a map from placeholder string → real value using current .env. */
+export function buildCredMap(
+  env?: Record<string, string>,
+): Record<string, string> {
+  const vars = env ?? readEnvFile();
+  const map: Record<string, string> = {};
+  for (const [key, value] of Object.entries(vars)) {
+    if (CREDENTIAL_PATTERN.test(key) && value) {
+      map[`__CRED_${key}__`] = value;
+    }
+  }
+  return map;
+}
+
+/** Replace all `__CRED_<NAME>__` placeholders in a string. */
+export function substituteCredentials(
+  input: string,
+  credMap: Record<string, string>,
+): string {
+  if (!PLACEHOLDER_RE.test(input)) return input;
+  // Reset lastIndex after the test above
+  PLACEHOLDER_RE.lastIndex = 0;
+  return input.replace(PLACEHOLDER_RE, (match) => credMap[match] ?? match);
+}
+
+// ── Max body size for substitution (10 MB) ──────────────────────────
+const MAX_SUB_BODY = 10 * 1024 * 1024;
+
+// ── Claude Code credential store ────────────────────────────────────
+
+const CLAUDE_CREDS_PATH = path.join(
+  os.homedir(),
+  '.claude',
+  '.credentials.json',
+);
+
+interface ClaudeCodeCredentials {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+}
+
+/**
+ * Read the OAuth token from Claude Code's credential store.
+ * Returns the access token if the file exists and the token hasn't expired,
+ * or null otherwise.  Claude Code auto-refreshes this file, so reading it
+ * gives us a fresh token without managing refresh ourselves.
+ */
+export function readClaudeCodeToken(): string | null {
+  try {
+    const raw = fs.readFileSync(CLAUDE_CREDS_PATH, 'utf-8');
+    const data = JSON.parse(raw);
+    const oauth: ClaudeCodeCredentials | undefined = data.claudeAiOauth;
+    if (!oauth?.accessToken) return null;
+
+    // Check expiry — leave 60s buffer
+    if (oauth.expiresAt && Date.now() > oauth.expiresAt - 60_000) {
+      logger.warn('Claude Code OAuth token is expired or expiring soon');
+      // Return it anyway — Claude Code may refresh it momentarily,
+      // and the caller can still try. Better than returning null.
+      return oauth.accessToken;
+    }
+
+    return oauth.accessToken;
+  } catch {
+    // File doesn't exist or isn't readable — that's fine, fall back to .env
+    return null;
+  }
+}
+
+/** Resolve Anthropic credentials, checking Claude Code store first. */
+interface AnthropicCredentials {
+  authMode: AuthMode;
+  apiKey?: string;
+  oauthToken?: string;
+  baseUrl: string;
+}
+
+export function resolveAnthropicCredentials(): AnthropicCredentials {
+  const env = readEnvFile([
     'ANTHROPIC_API_KEY',
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
   ]);
 
-  const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
-  const oauthToken =
-    secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
+  const baseUrl = env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
 
-  const upstreamUrl = new URL(
-    secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
-  );
-  const isHttps = upstreamUrl.protocol === 'https:';
-  const makeRequest = isHttps ? httpsRequest : httpRequest;
+  // API key takes priority (explicit, no expiry concerns)
+  if (env.ANTHROPIC_API_KEY) {
+    return { authMode: 'api-key', apiKey: env.ANTHROPIC_API_KEY, baseUrl };
+  }
+
+  // Try Claude Code credential store (auto-refreshed by Claude Code CLI)
+  const claudeToken = readClaudeCodeToken();
+  if (claudeToken) {
+    return { authMode: 'oauth', oauthToken: claudeToken, baseUrl };
+  }
+
+  // Fall back to .env OAuth tokens
+  const envToken = env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
+  if (envToken) {
+    return { authMode: 'oauth', oauthToken: envToken, baseUrl };
+  }
+
+  // Nothing configured — return oauth mode with no token
+  return { authMode: 'oauth', baseUrl };
+}
+
+// ── Proxy server ────────────────────────────────────────────────────
+
+export function startCredentialProxy(
+  port: number,
+  host = '127.0.0.1',
+): Promise<Server> {
+  // Resolve once at startup for the log message
+  const initial = resolveAnthropicCredentials();
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
+        // ── /forward — generic credential-injecting forward proxy ───
+        if (req.url === '/forward' || req.url?.startsWith('/forward?')) {
+          handleForward(req, res, Buffer.concat(chunks));
+          return;
+        }
+
+        // ── Default path — Anthropic reverse proxy ──────────────────
+        // Re-read credentials on every request so token refreshes
+        // (from Claude Code or manual .env edits) are picked up
+        // without restarting ClawDad.
+        const creds = resolveAnthropicCredentials();
+        const upstreamUrl = new URL(creds.baseUrl);
+        const isHttps = upstreamUrl.protocol === 'https:';
+        const makeRequest = isHttps ? httpsRequest : httpRequest;
+
         const body = Buffer.concat(chunks);
         const headers: Record<string, string | number | string[] | undefined> =
           {
@@ -62,10 +199,10 @@ export function startCredentialProxy(
         delete headers['keep-alive'];
         delete headers['transfer-encoding'];
 
-        if (authMode === 'api-key') {
+        if (creds.authMode === 'api-key') {
           // API key mode: inject x-api-key on every request
           delete headers['x-api-key'];
-          headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
+          headers['x-api-key'] = creds.apiKey;
         } else {
           // OAuth mode: replace placeholder Bearer token with the real one
           // only when the container actually sends an Authorization header
@@ -73,8 +210,8 @@ export function startCredentialProxy(
           // x-api-key only, so they pass through without token injection.
           if (headers['authorization']) {
             delete headers['authorization'];
-            if (oauthToken) {
-              headers['authorization'] = `Bearer ${oauthToken}`;
+            if (creds.oauthToken) {
+              headers['authorization'] = `Bearer ${creds.oauthToken}`;
             }
           }
         }
@@ -110,7 +247,10 @@ export function startCredentialProxy(
     });
 
     server.listen(port, host, () => {
-      logger.info({ port, host, authMode }, 'Credential proxy started');
+      logger.info(
+        { port, host, authMode: initial.authMode },
+        'Credential proxy started',
+      );
       resolve(server);
     });
 
@@ -118,8 +258,92 @@ export function startCredentialProxy(
   });
 }
 
+// ── /forward handler ────────────────────────────────────────────────
+
+function handleForward(
+  req: import('http').IncomingMessage,
+  res: import('http').ServerResponse,
+  rawBody: Buffer,
+): void {
+  const targetUrl = req.headers['x-forward-to'] as string | undefined;
+  if (!targetUrl) {
+    res.writeHead(400);
+    res.end('Missing X-Forward-To header');
+    return;
+  }
+
+  // Re-read .env on every request so newly-registered credentials work
+  // without restarting anything.  The file is <1 KB — cost is negligible.
+  const credMap = buildCredMap();
+
+  // Build outbound headers with placeholder substitution
+  const parsed = new URL(targetUrl);
+  const outIsHttps = parsed.protocol === 'https:';
+  const makeRequest = outIsHttps ? httpsRequest : httpRequest;
+
+  const outHeaders: Record<string, string | string[] | undefined> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    // Skip hop-by-hop and proxy-specific headers
+    if (
+      key === 'x-forward-to' ||
+      key === 'host' ||
+      key === 'connection' ||
+      key === 'keep-alive' ||
+      key === 'transfer-encoding'
+    ) {
+      continue;
+    }
+    if (typeof value === 'string') {
+      outHeaders[key] = substituteCredentials(value, credMap);
+    } else if (Array.isArray(value)) {
+      outHeaders[key] = value.map((v) => substituteCredentials(v, credMap));
+    }
+  }
+
+  outHeaders['host'] = parsed.host;
+
+  // Substitute in body if small enough
+  let body = rawBody;
+  if (rawBody.length > 0 && rawBody.length <= MAX_SUB_BODY) {
+    const bodyStr = rawBody.toString('utf-8');
+    if (PLACEHOLDER_RE.test(bodyStr)) {
+      PLACEHOLDER_RE.lastIndex = 0;
+      body = Buffer.from(substituteCredentials(bodyStr, credMap), 'utf-8');
+    }
+  }
+
+  outHeaders['content-length'] = String(body.length);
+
+  const upstream = makeRequest(
+    {
+      hostname: parsed.hostname,
+      port: parsed.port || (outIsHttps ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method: req.method,
+      headers: outHeaders,
+    } as RequestOptions,
+    (upRes) => {
+      res.writeHead(upRes.statusCode!, upRes.headers);
+      upRes.pipe(res);
+    },
+  );
+
+  upstream.on('error', (err) => {
+    logger.error(
+      { err, target: targetUrl },
+      'Credential proxy /forward upstream error',
+    );
+    if (!res.headersSent) {
+      res.writeHead(502);
+      res.end('Bad Gateway');
+    }
+  });
+
+  upstream.write(body);
+  upstream.end();
+}
+
 /** Detect which auth mode the host is configured for. */
 export function detectAuthMode(): AuthMode {
-  const secrets = readEnvFile(['ANTHROPIC_API_KEY']);
-  return secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
+  return resolveAnthropicCredentials().authMode;
 }

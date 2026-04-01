@@ -65,8 +65,8 @@ Every agent run records token usage, cost, duration, and turn count. This data i
 
 All credentials live in `.env` (untracked). Two types:
 
-- **Anthropic credentials** — routed through a local HTTP proxy (`src/credential-proxy.ts`) that injects the real credential. Containers get `ANTHROPIC_BASE_URL` pointing at the proxy and a placeholder key.
-- **Service credentials** (GitHub, GitLab, etc.) — passed directly as env vars to containers. Agents use them in curl headers: `curl -H "Authorization: token $GITHUB_TOKEN" ...`
+- **Anthropic credentials** — routed through the credential proxy (`src/credential-proxy.ts`) which injects the real credential. Containers get `ANTHROPIC_BASE_URL` pointing at the proxy and a placeholder key.
+- **Service credentials** (GitHub, GitLab, etc.) — also routed through the credential proxy via its `/forward` endpoint. Containers receive placeholder values (`__CRED_GITHUB_TOKEN__`) instead of real tokens. The `api.sh` wrapper routes requests through the proxy, which substitutes placeholders with real values from `.env` at request time. New credentials are available immediately — no container restart needed.
 
 ### Anthropic Auth Modes
 
