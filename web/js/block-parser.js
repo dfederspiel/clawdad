@@ -40,8 +40,15 @@ export function parseBlocks(content) {
           }
         }
       } catch {
-        // Invalid JSON — render as text
-        blocks.push({ type: 'text', content: fenceBody });
+        // JSON.parse failed — attempt recovery for common LLM mistakes:
+        // multiple bare objects not wrapped in an array, or objects
+        // separated by blank lines.
+        const recovered = tryRecoverBareObjects(fenceBody);
+        if (recovered.length > 0) {
+          for (const block of recovered) blocks.push(block);
+        } else {
+          blocks.push({ type: 'text', content: fenceBody });
+        }
       }
     }
 
@@ -53,4 +60,37 @@ export function parseBlocks(content) {
   if (after) blocks.push({ type: 'text', content: after });
 
   return blocks.length > 0 ? blocks : [{ type: 'text', content }];
+}
+
+/**
+ * Attempt to recover when LLM emits multiple bare JSON objects
+ * instead of a proper array.  Tries two strategies:
+ * 1. Wrap the whole body in [ ... ] (handles comma-separated objects)
+ * 2. Split on }{ boundaries and parse each object individually
+ */
+function tryRecoverBareObjects(body) {
+  // Strategy 1: wrap in brackets
+  const wrapped = `[${body}]`;
+  try {
+    const parsed = JSON.parse(wrapped);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((b) => b && b.type);
+    }
+  } catch {
+    // fall through
+  }
+
+  // Strategy 2: split on }...{ boundaries (handles newline-separated objects)
+  const results = [];
+  const objectPattern = /\{[\s\S]*?\}(?=\s*(\{|$))/g;
+  let m;
+  while ((m = objectPattern.exec(body)) !== null) {
+    try {
+      const obj = JSON.parse(m[0]);
+      if (obj && obj.type) results.push(obj);
+    } catch {
+      // skip unparseable chunk
+    }
+  }
+  return results;
 }

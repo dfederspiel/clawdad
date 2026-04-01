@@ -638,8 +638,10 @@ interface CredentialIpcData {
 const SERVICE_ENV_NAMES: Record<string, string> = {
   github: 'GITHUB_TOKEN',
   gitlab: 'GITLAB_TOKEN',
-  atlassian: 'ATLASSIAN_TOKEN',
+  atlassian: 'ATLASSIAN_API_TOKEN',
+  blackduck: 'BLACKDUCK_API_TOKEN',
   launchdarkly: 'LAUNCHDARKLY_API_KEY',
+  harness: 'HARNESS_API_KEY',
 };
 
 /**
