@@ -102,32 +102,41 @@ The tool returns immediately — it does NOT block waiting for the user. The flo
 1. Tool opens a popup in the user's browser
 2. Tool returns right away — continue with other work
 3. User enters their secret in the form (you never see it)
-4. Secret is saved to `.env` and available as an env var on the next container run
+4. Secret is saved and available immediately via the credential proxy — no restart needed
 5. A `[credential_registered]` message appears in the chat — that's your signal to proceed
 
 ### Using registered credentials
 
-Credentials are passed to your container as environment variables. Use them directly in your requests:
+Credentials are injected by the credential proxy. Always use `/workspace/scripts/api.sh` for service API calls — it routes through the proxy automatically:
 
 ```bash
 # GitHub
-curl -s -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/user
+/workspace/scripts/api.sh github GET "https://api.github.com/user" \
+  -H "Authorization: token $GITHUB_TOKEN"
 
 # GitLab
-curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" https://gitlab.com/api/v4/projects
+/workspace/scripts/api.sh gitlab GET "https://gitlab.com/api/v4/projects" \
+  -H "PRIVATE-TOKEN: $GITLAB_TOKEN"
 
 # Atlassian
-curl -s -H "Authorization: Bearer $ATLASSIAN_TOKEN" https://yourorg.atlassian.net/rest/api/3/myself
+/workspace/scripts/api.sh atlassian GET "https://yourorg.atlassian.net/rest/api/3/myself" \
+  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN"
 
 # Custom services — the env var name matches what was registered
-curl -s -H "Authorization: Bearer $BLACKDUCK_TOKEN" https://blackduck.example.com/api/...
+/workspace/scripts/api.sh myservice GET "https://api.example.com/data" \
+  -H "Authorization: Bearer $MYSERVICE_TOKEN"
 ```
 
-**IMPORTANT: Try the API call first** using the env var. If the variable is empty or the call returns 401, THEN use `request_credential` to ask the user.
+The proxy replaces credential placeholders with real values at request time. Newly registered credentials work immediately — no container restart needed.
+
+**IMPORTANT: Try the API call first** using `api.sh`. If the call returns 401, THEN use `request_credential` to ask the user.
+
+**Do NOT use `gh` CLI or raw `curl` for authenticated requests** — use `api.sh` so credentials are injected by the proxy.
 
 **Security rules:**
 - NEVER ask the user to paste tokens, keys, or passwords in chat
-- NEVER echo, log, or print credential values
+- NEVER echo, log, or print credential values — they contain placeholders, not real secrets
+- NEVER use raw curl for authenticated API calls — always use `api.sh`
 - If an API call fails with 401/403, call `request_credential` — the token may have expired
 
 ## Event Logging

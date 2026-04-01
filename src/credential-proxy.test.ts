@@ -11,7 +11,49 @@ vi.mock('./logger.js', () => ({
   logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
 }));
 
-import { startCredentialProxy } from './credential-proxy.js';
+// Mock for Claude Code credential store — default: file not found
+let mockCredsFileContent: string | null = null;
+vi.mock('fs', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('fs');
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      readFileSync: vi.fn(((filepath: string, ...args: unknown[]) => {
+        if (
+          typeof filepath === 'string' &&
+          filepath.includes('.credentials.json')
+        ) {
+          if (mockCredsFileContent === null) {
+            throw new Error('ENOENT: no such file');
+          }
+          return mockCredsFileContent;
+        }
+        return actual.readFileSync(filepath, ...(args as [any]));
+      }) as typeof actual.readFileSync),
+    },
+    readFileSync: vi.fn(((filepath: string, ...args: unknown[]) => {
+      if (
+        typeof filepath === 'string' &&
+        filepath.includes('.credentials.json')
+      ) {
+        if (mockCredsFileContent === null) {
+          throw new Error('ENOENT: no such file');
+        }
+        return mockCredsFileContent;
+      }
+      return actual.readFileSync(filepath, ...(args as [any]));
+    }) as typeof actual.readFileSync),
+  };
+});
+
+import {
+  startCredentialProxy,
+  buildCredMap,
+  substituteCredentials,
+  readClaudeCodeToken,
+  resolveAnthropicCredentials,
+} from './credential-proxy.js';
 
 function makeRequest(
   port: number,
@@ -68,6 +110,7 @@ describe('credential-proxy', () => {
     await new Promise<void>((r) => proxyServer?.close(() => r()));
     await new Promise<void>((r) => upstreamServer?.close(() => r()));
     for (const key of Object.keys(mockEnv)) delete mockEnv[key];
+    mockCredsFileContent = null;
   });
 
   async function startProxy(env: Record<string, string>): Promise<number> {
@@ -168,6 +211,131 @@ describe('credential-proxy', () => {
     expect(lastUpstreamHeaders['transfer-encoding']).toBeUndefined();
   });
 
+  // ── /forward endpoint tests ──────────────────────────────────────
+
+  it('/forward substitutes credential placeholders in headers', async () => {
+    proxyPort = await startProxy({
+      ANTHROPIC_API_KEY: 'sk-ant-real-key',
+      GITHUB_TOKEN: 'ghp_real_github_token',
+    });
+
+    await makeRequest(proxyPort, {
+      method: 'GET',
+      path: '/forward',
+      headers: {
+        'x-forward-to': `http://127.0.0.1:${upstreamPort}/api/user`,
+        authorization: 'token __CRED_GITHUB_TOKEN__',
+      },
+    });
+
+    expect(lastUpstreamHeaders['authorization']).toBe(
+      'token ghp_real_github_token',
+    );
+    // x-forward-to must not be forwarded upstream
+    expect(lastUpstreamHeaders['x-forward-to']).toBeUndefined();
+  });
+
+  it('/forward substitutes placeholders in request body', async () => {
+    let lastUpstreamBody = '';
+    // Replace the upstream handler to capture body
+    upstreamServer.removeAllListeners('request');
+    upstreamServer.on('request', (req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        lastUpstreamBody = Buffer.concat(chunks).toString();
+        lastUpstreamHeaders = { ...req.headers };
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+
+    proxyPort = await startProxy({
+      ANTHROPIC_API_KEY: 'sk-ant-real-key',
+      MY_SECRET: 'super_secret_value',
+    });
+
+    await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/forward',
+        headers: {
+          'x-forward-to': `http://127.0.0.1:${upstreamPort}/api/data`,
+          'content-type': 'application/json',
+        },
+      },
+      JSON.stringify({ token: '__CRED_MY_SECRET__' }),
+    );
+
+    expect(JSON.parse(lastUpstreamBody).token).toBe('super_secret_value');
+  });
+
+  it('/forward returns 400 when X-Forward-To is missing', async () => {
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const res = await makeRequest(proxyPort, {
+      method: 'GET',
+      path: '/forward',
+      headers: {},
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toBe('Missing X-Forward-To header');
+  });
+
+  it('/forward passes through unknown placeholders unchanged', async () => {
+    proxyPort = await startProxy({
+      ANTHROPIC_API_KEY: 'sk-ant-real-key',
+      // Note: UNKNOWN_TOKEN is NOT in .env
+    });
+
+    await makeRequest(proxyPort, {
+      method: 'GET',
+      path: '/forward',
+      headers: {
+        'x-forward-to': `http://127.0.0.1:${upstreamPort}/api/test`,
+        authorization: 'Bearer __CRED_UNKNOWN_TOKEN__',
+      },
+    });
+
+    expect(lastUpstreamHeaders['authorization']).toBe(
+      'Bearer __CRED_UNKNOWN_TOKEN__',
+    );
+  });
+
+  it('/forward re-reads .env on each request', async () => {
+    proxyPort = await startProxy({
+      ANTHROPIC_API_KEY: 'sk-ant-real-key',
+      GITHUB_TOKEN: 'old_token',
+    });
+
+    // First request with old token
+    await makeRequest(proxyPort, {
+      method: 'GET',
+      path: '/forward',
+      headers: {
+        'x-forward-to': `http://127.0.0.1:${upstreamPort}/api/user`,
+        authorization: 'token __CRED_GITHUB_TOKEN__',
+      },
+    });
+    expect(lastUpstreamHeaders['authorization']).toBe('token old_token');
+
+    // Simulate .env change (mock returns new value)
+    mockEnv.GITHUB_TOKEN = 'new_token';
+
+    // Second request picks up the new value without restart
+    await makeRequest(proxyPort, {
+      method: 'GET',
+      path: '/forward',
+      headers: {
+        'x-forward-to': `http://127.0.0.1:${upstreamPort}/api/user`,
+        authorization: 'token __CRED_GITHUB_TOKEN__',
+      },
+    });
+    expect(lastUpstreamHeaders['authorization']).toBe('token new_token');
+  });
+
   it('returns 502 when upstream is unreachable', async () => {
     Object.assign(mockEnv, {
       ANTHROPIC_API_KEY: 'sk-ant-real-key',
@@ -188,5 +356,151 @@ describe('credential-proxy', () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.body).toBe('Bad Gateway');
+  });
+});
+
+describe('buildCredMap', () => {
+  it('builds map from credential-pattern env vars', () => {
+    const map = buildCredMap({
+      GITHUB_TOKEN: 'ghp_abc',
+      GITLAB_TOKEN: 'glpat_xyz',
+      SOME_CONFIG: 'not-a-credential',
+    });
+    expect(map).toEqual({
+      __CRED_GITHUB_TOKEN__: 'ghp_abc',
+      __CRED_GITLAB_TOKEN__: 'glpat_xyz',
+    });
+  });
+
+  it('excludes ANTHROPIC_ and CLAUDE_CODE_ prefixes', () => {
+    const map = buildCredMap({
+      ANTHROPIC_API_KEY: 'sk-ant-xxx',
+      CLAUDE_CODE_OAUTH_TOKEN: 'oat-xxx',
+      GITHUB_TOKEN: 'ghp_abc',
+    });
+    expect(map).toEqual({ __CRED_GITHUB_TOKEN__: 'ghp_abc' });
+  });
+
+  it('excludes empty values', () => {
+    const map = buildCredMap({ GITHUB_TOKEN: '' });
+    expect(map).toEqual({});
+  });
+});
+
+describe('substituteCredentials', () => {
+  it('replaces known placeholders', () => {
+    const result = substituteCredentials('token __CRED_GITHUB_TOKEN__', {
+      __CRED_GITHUB_TOKEN__: 'ghp_real',
+    });
+    expect(result).toBe('token ghp_real');
+  });
+
+  it('leaves unknown placeholders unchanged', () => {
+    const result = substituteCredentials('token __CRED_UNKNOWN_TOKEN__', {
+      __CRED_GITHUB_TOKEN__: 'ghp_real',
+    });
+    expect(result).toBe('token __CRED_UNKNOWN_TOKEN__');
+  });
+
+  it('replaces multiple placeholders in one string', () => {
+    const result = substituteCredentials('__CRED_A_KEY__:__CRED_B_SECRET__', {
+      __CRED_A_KEY__: 'aaa',
+      __CRED_B_SECRET__: 'bbb',
+    });
+    expect(result).toBe('aaa:bbb');
+  });
+
+  it('returns input unchanged when no placeholders present', () => {
+    const result = substituteCredentials('no placeholders here', {
+      __CRED_GITHUB_TOKEN__: 'ghp_real',
+    });
+    expect(result).toBe('no placeholders here');
+  });
+});
+
+describe('readClaudeCodeToken', () => {
+  afterEach(() => {
+    mockCredsFileContent = null;
+  });
+
+  it('returns access token from Claude Code credential store', () => {
+    mockCredsFileContent = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'sk-ant-oat01-fresh',
+        refreshToken: 'rt-xxx',
+        expiresAt: Date.now() + 3600_000, // 1 hour from now
+      },
+    });
+    expect(readClaudeCodeToken()).toBe('sk-ant-oat01-fresh');
+  });
+
+  it('returns null when file does not exist', () => {
+    mockCredsFileContent = null;
+    expect(readClaudeCodeToken()).toBeNull();
+  });
+
+  it('still returns token even if expired (Claude Code may refresh soon)', () => {
+    mockCredsFileContent = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'sk-ant-oat01-expired',
+        refreshToken: 'rt-xxx',
+        expiresAt: Date.now() - 60_000, // expired 1 min ago
+      },
+    });
+    expect(readClaudeCodeToken()).toBe('sk-ant-oat01-expired');
+  });
+
+  it('returns null when accessToken is missing', () => {
+    mockCredsFileContent = JSON.stringify({
+      claudeAiOauth: { refreshToken: 'rt-xxx' },
+    });
+    expect(readClaudeCodeToken()).toBeNull();
+  });
+});
+
+describe('resolveAnthropicCredentials', () => {
+  afterEach(() => {
+    for (const key of Object.keys(mockEnv)) delete mockEnv[key];
+    mockCredsFileContent = null;
+  });
+
+  it('prefers API key from .env over everything else', () => {
+    Object.assign(mockEnv, { ANTHROPIC_API_KEY: 'sk-ant-api03-xxx' });
+    mockCredsFileContent = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'sk-ant-oat01-fromclaude',
+        expiresAt: Date.now() + 3600_000,
+      },
+    });
+    const creds = resolveAnthropicCredentials();
+    expect(creds.authMode).toBe('api-key');
+    expect(creds.apiKey).toBe('sk-ant-api03-xxx');
+  });
+
+  it('uses Claude Code credential store when no API key in .env', () => {
+    mockCredsFileContent = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'sk-ant-oat01-fromclaude',
+        expiresAt: Date.now() + 3600_000,
+      },
+    });
+    const creds = resolveAnthropicCredentials();
+    expect(creds.authMode).toBe('oauth');
+    expect(creds.oauthToken).toBe('sk-ant-oat01-fromclaude');
+  });
+
+  it('falls back to .env ANTHROPIC_AUTH_TOKEN when Claude Code store unavailable', () => {
+    Object.assign(mockEnv, { ANTHROPIC_AUTH_TOKEN: 'sk-ant-oat01-fromenv' });
+    mockCredsFileContent = null;
+    const creds = resolveAnthropicCredentials();
+    expect(creds.authMode).toBe('oauth');
+    expect(creds.oauthToken).toBe('sk-ant-oat01-fromenv');
+  });
+
+  it('returns oauth mode with no token when nothing is configured', () => {
+    mockCredsFileContent = null;
+    const creds = resolveAnthropicCredentials();
+    expect(creds.authMode).toBe('oauth');
+    expect(creds.oauthToken).toBeUndefined();
   });
 });

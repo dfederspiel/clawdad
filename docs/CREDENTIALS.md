@@ -6,13 +6,20 @@ ClawDad uses a **built-in credential proxy** to manage API credentials. The prox
 
 ```
 Agent Container  --->  Credential Proxy (localhost)  --->  External API
-                       (injects credentials from .env)
+                       (substitutes placeholders with
+                        real values from .env)
 ```
 
 1. You store secrets in `.env` (API keys, OAuth tokens)
-2. The credential proxy starts alongside ClawDad and reads `.env` at startup
-3. Containers get `ANTHROPIC_BASE_URL` pointing at the proxy and a placeholder key
-4. The proxy intercepts requests and injects the real credential before forwarding
+2. The credential proxy starts alongside ClawDad
+3. Containers get **placeholder values** instead of real credentials (e.g. `GITHUB_TOKEN=__CRED_GITHUB_TOKEN__`)
+4. Agents use `api.sh` which routes requests through the proxy's `/forward` endpoint
+5. The proxy re-reads `.env` on every request, substitutes `__CRED_*__` placeholders with real values, and forwards to the upstream API
+6. New credentials are available immediately after registration — no container restart needed
+
+**Two proxy paths:**
+- **Anthropic** (default path) — reverse proxy for Claude API, injects Anthropic credentials
+- **`/forward`** (generic path) — forward proxy for any service, does placeholder string substitution in headers and body
 
 ## Anthropic Credentials
 
