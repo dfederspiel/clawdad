@@ -249,6 +249,16 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Mount credential proxy scripts (api.sh, auth-args.sh, etc.)
+  const containerScriptsDir = path.join(projectRoot, 'container', 'scripts');
+  if (fs.existsSync(containerScriptsDir)) {
+    mounts.push({
+      hostPath: containerScriptsDir,
+      containerPath: '/workspace/scripts',
+      readonly: true,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
