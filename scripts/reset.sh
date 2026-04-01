@@ -13,7 +13,7 @@ echo "  - logs/          (application logs)"
 echo "  - groups/*/      (user-created groups, keeps main/ and global/)"
 echo "  - dist/          (build output — will regenerate)"
 echo ""
-echo "Channel auth (OneCLI vault) is NOT affected."
+echo "Channel auth is NOT affected."
 echo ".env is NOT affected."
 echo ""
 
