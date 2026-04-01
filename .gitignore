@@ -15,14 +15,17 @@ groups/*
 !groups/global/
 !groups/discord_deployments/
 !groups/discord_updates/
+!groups/global-web/
 groups/main/*
 groups/global/*
 groups/discord_deployments/*
 groups/discord_updates/*
+groups/global-web/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
 !groups/discord_deployments/CLAUDE.md
 !groups/discord_updates/CLAUDE.md
+!groups/global-web/CLAUDE.md
 
 # Secrets & machine-specific config
 *.keys.json

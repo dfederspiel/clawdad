@@ -20,14 +20,6 @@ vi.mock('./config.js', () => ({
   TIMEZONE: 'America/Los_Angeles',
 }));
 
-// Mock @onecli-sh/sdk — dynamic import, defaults to unavailable
-const mockApplyContainerConfig = vi.fn(async () => false);
-vi.mock('@onecli-sh/sdk', () => ({
-  OneCLI: vi.fn().mockImplementation(() => ({
-    applyContainerConfig: mockApplyContainerConfig,
-  })),
-}));
-
 // Mock logger
 vi.mock('./logger.js', () => ({
   logger: {
@@ -110,11 +102,7 @@ vi.mock('child_process', async () => {
   };
 });
 
-import {
-  runContainerAgent,
-  ContainerOutput,
-  _resetOneCLI,
-} from './container-runner.js';
+import { runContainerAgent, ContainerOutput } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -143,7 +131,6 @@ describe('container-runner timeout behavior', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     fakeProc = createFakeProcess();
-    _resetOneCLI();
   });
 
   afterEach(() => {

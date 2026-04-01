@@ -4,48 +4,11 @@ These instructions apply to all agents running in ClawDad. Your individual CLAUD
 
 ## Communication
 
-Your output is sent to the user in the web UI.
+Your output is sent to the user via the channel this group is connected to (web UI, Discord, Telegram, etc.).
 
 You also have `mcp__nanoclaw__send_message` which sends a message immediately while you're still working. Useful for acknowledging a request before starting longer work.
 
-### Rich content blocks
-
-The web UI renders structured content blocks. Use them to make responses visual and scannable — tables, metrics, alerts, and interactive elements are all better as blocks than plain text.
-
-Wrap a JSON array in `:::blocks` / `:::` fences. You can mix prose and block fences freely in the same message.
-
-```
-Here's what I found:
-
-:::blocks
-[
-  { "type": "alert", "level": "success", "body": "All checks passed." },
-  { "type": "stat", "items": [{ "label": "Tests", "value": "142" }, { "label": "Duration", "value": "38s" }] }
-]
-:::
-
-Let me know if you want to proceed.
-```
-
-**Available block types:**
-
-| Block | When to use | Key fields |
-|-------|-------------|------------|
-| `alert` | Status messages, warnings, errors, success confirmations | `level`: `success`, `warn`, `error`, `info`; `body` |
-| `table` | 3+ rows of structured data — tickets, comparisons, status lists | `columns`, `rows` |
-| `stat` | Metrics at a glance — counts, durations, costs | `items`: array of `{ label, value }` |
-| `card` | Self-contained summaries with a title and body | `title`, `body` |
-| `progress` | Step-by-step progress through a workflow | `steps`: array of `{ label, status }` |
-| `action` | Buttons for user choices — approve/reject, create/skip | `buttons`: array of `{ label, action }` |
-| `form` | Collect multiple inputs at once | `fields`: array of `{ name, type, label }` |
-| `code` | Code snippets, logs, config with syntax highlighting | `code`, `language`, `filename` |
-| `diff` | Before/after comparisons | `before`, `after` |
-
-**When to use blocks vs prose:**
-- **Use blocks** for: data tables, metrics, status readouts, pipeline results, decision points, code/logs
-- **Use prose** for: explanations, conversational replies, short answers, reasoning
-- **Mix both** freely — lead with a sentence, drop a block, continue in prose
-- Don't force everything into blocks. A one-line answer doesn't need a `card`.
+Channel-specific capabilities (rich content blocks, sounds, credential popups) are loaded separately for channels that support them.
 
 ### Internal thoughts
 
@@ -60,22 +23,6 @@ Here's what I found...
 ### Sub-agents and teammates
 
 When working as a sub-agent or teammate, only use `send_message` if instructed by the main agent.
-
-### Sounds and status
-
-You can play notification sounds and set your sidebar status using MCP tools:
-
-- `mcp__nanoclaw__play_sound` — play a named tone (e.g. `treasure`, `levelup`, `encounter`) or compose a custom sound
-- `mcp__nanoclaw__set_subtitle` — set a status line under your group name (e.g. "Monitoring 3 PRs")
-
-You can also embed sounds inline in your message output:
-```
-:::sound
-{"tone": "treasure", "label": "Task complete!"}
-:::
-```
-
-Use sounds sparingly and meaningfully — to signal completion, errors, or attention-needed moments. Don't spam them.
 
 ## Your Workspace
 
@@ -148,42 +95,40 @@ If you need API credentials for a service, use the `mcp__nanoclaw__request_crede
 ```
 Use mcp__nanoclaw__request_credential with:
 - service: "github" (or "atlassian", "gitlab", "launchdarkly", or a custom name)
-- host_pattern: "api.github.com" (optional — uses service default if omitted)
 - description: "Why this credential is needed — shown to the user in the popup"
-- email: "user@example.com" (required for Atlassian Basic auth)
 ```
 
 The tool returns immediately — it does NOT block waiting for the user. The flow is:
-1. Tool opens a popup in the user's browser with pre-filled metadata
-2. Tool returns right away — continue with other work or tell the user what you're waiting for
+1. Tool opens a popup in the user's browser
+2. Tool returns right away — continue with other work
 3. User enters their secret in the form (you never see it)
-4. Secret goes directly to the encrypted vault
-5. A `[credential_registered]` message appears in the chat when done — that's your signal to proceed
+4. Secret is saved to `.env` and available as an env var on the next container run
+5. A `[credential_registered]` message appears in the chat — that's your signal to proceed
 
 ### Using registered credentials
 
-Once a credential is registered, it is injected **automatically** into all outbound HTTPS requests matching the service's host pattern. You don't need tokens, env vars, or auth headers — just make the API call.
-
-**IMPORTANT: Always try the authenticated endpoint FIRST.** Don't ask the user for usernames, tokens, or credentials. Don't fall back to unauthenticated/public-only APIs. The credential proxy handles auth transparently — assume it works and call the authenticated API directly.
+Credentials are passed to your container as environment variables. Use them directly in your requests:
 
 ```bash
-# GitHub — call /user (authenticated) not /users/{name} (public-only):
-curl -s https://api.github.com/user                    # Returns authenticated user
-curl -s https://api.github.com/user/repos?per_page=100 # All repos including private
+# GitHub
+curl -s -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/user
 
-# Atlassian:
-curl -s https://yourorg.atlassian.net/rest/api/3/myself
+# GitLab
+curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" https://gitlab.com/api/v4/projects
+
+# Atlassian
+curl -s -H "Authorization: Bearer $ATLASSIAN_TOKEN" https://yourorg.atlassian.net/rest/api/3/myself
+
+# Custom services — the env var name matches what was registered
+curl -s -H "Authorization: Bearer $BLACKDUCK_TOKEN" https://blackduck.example.com/api/...
 ```
 
-Use `WebFetch` or `curl` — both work. Do NOT try to read tokens from environment variables or pass auth headers manually. The credential proxy intercepts HTTPS traffic and injects the right `Authorization` header automatically.
-
-If an API call returns 401, THEN ask about credentials — but try the call first.
+**IMPORTANT: Try the API call first** using the env var. If the variable is empty or the call returns 401, THEN use `request_credential` to ask the user.
 
 **Security rules:**
 - NEVER ask the user to paste tokens, keys, or passwords in chat
-- NEVER store credentials in files, variables, or config
 - NEVER echo, log, or print credential values
-- If an API call fails with 401/403, call `request_credential` again — the token may have expired
+- If an API call fails with 401/403, call `request_credential` — the token may have expired
 
 ## Event Logging
 
