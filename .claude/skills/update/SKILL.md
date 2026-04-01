@@ -29,7 +29,7 @@ If not on `main`, warn: "You're on branch `<name>`. Updates pull from `main`. Sw
 ## 2. Pull
 
 ```bash
-git pull origin main
+git fetch upstream main && git merge upstream/main
 ```
 
 If the pull fails (merge conflict), tell the user and stop. Don't try to auto-resolve.
