@@ -1135,7 +1135,12 @@ async function main(): Promise<void> {
     sendMessage: (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      const text = formatOutbound(rawText, channel.name as ChannelType);
+      // Web channel renders blocks client-side — formatOutbound would corrupt
+      // :::blocks JSON by transforming markdown inside the fences.
+      const text =
+        channel.name === 'web'
+          ? rawText
+          : formatOutbound(rawText, channel.name as ChannelType);
       if (!text) return Promise.resolve();
       return channel.sendMessage(jid, text);
     },
