@@ -232,6 +232,43 @@ Want me to run the smoke tests?
 :::
 ```
 
+## Critical: always use a JSON array
+
+The content inside `:::blocks` **MUST** be a JSON array (`[...]`), even for a single block. This is the most common mistake.
+
+```
+✅ CORRECT — array with one item:
+:::blocks
+[{ "type": "card", "title": "Status", "body": "All good." }]
+:::
+
+✅ CORRECT — array with multiple items:
+:::blocks
+[
+  { "type": "alert", "level": "success", "body": "Deployed." },
+  { "type": "stat", "items": [{ "label": "Duration", "value": "2m" }] }
+]
+:::
+
+❌ WRONG — bare object (no array):
+:::blocks
+{ "type": "card", "title": "Status", "body": "All good." }
+:::
+
+❌ WRONG — multiple objects without array wrapping:
+:::blocks
+{ "type": "alert", "level": "success", "body": "Deployed." }
+{ "type": "stat", "items": [{ "label": "Duration", "value": "2m" }] }
+:::
+```
+
+## Common mistakes to avoid
+
+1. **Bare objects without `[...]` wrapper** — Always wrap in an array, even for one block.
+2. **Broken markdown links inside blocks** — Use `[Title](url)` not `*[Title (url)*`. Block body fields support standard markdown.
+3. **Mixing blocks and prose inside the same fence** — Prose goes OUTSIDE the `:::blocks` fence. Inside is JSON only.
+4. **Forgetting the closing `:::`** — Every `:::blocks` must have a matching `:::` on its own line.
+
 ## Guidelines
 
 1. **Don't overuse blocks.** A simple text answer doesn't need blocks. Use them when structure adds value.
