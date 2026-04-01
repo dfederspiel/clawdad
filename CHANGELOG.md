@@ -6,7 +6,7 @@ For detailed release notes, see the [full changelog on the documentation site](h
 
 ## [1.2.35] - 2026-03-26
 
-- [BREAKING] OneCLI Agent Vault replaces the built-in credential proxy. Existing `.env` credentials must be migrated to the vault. Run `/init-onecli` to install OneCLI and migrate credentials.
+- [BREAKING] Credential proxy now reads directly from `.env`. Supports both API keys (`ANTHROPIC_API_KEY`) and OAuth tokens (`ANTHROPIC_AUTH_TOKEN`).
 
 ## [1.2.21] - 2026-03-22
 

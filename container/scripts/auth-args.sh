@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build auth arguments for curl based on available credentials.
-# OneCLI gateway injects credentials automatically for outbound HTTPS.
-# When env vars are set (native credential proxy or legacy .env), pass them explicitly.
+# The credential proxy injects Anthropic credentials automatically.
+# When service env vars are set, pass them explicitly to curl.
 #
 # Usage:
 #   source /workspace/scripts/auth-args.sh

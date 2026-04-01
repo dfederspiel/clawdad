@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Register a credential with the host's OneCLI vault via IPC.
+# Register a credential with the host via IPC.
 # The credential is written to a temporary file, picked up by the host,
 # registered in the vault, and then deleted. The secret never touches disk
 # permanently — it's in-flight for at most one IPC poll cycle (~2s).

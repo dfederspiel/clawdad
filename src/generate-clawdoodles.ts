@@ -98,13 +98,9 @@ function buildUserMessage(answers: InterviewAnswers): string {
 
 /**
  * Resolve the Anthropic API key. Tries:
- * 1. onecli secrets list → find anthropic secret → extract value (not available — secrets are injected at request time)
- * 2. ANTHROPIC_API_KEY from .env
- * 3. ANTHROPIC_API_KEY from process.env
+ * Tries ANTHROPIC_API_KEY from .env, then from process.env.
  */
 function resolveApiKey(): string | null {
-  // OneCLI secrets don't expose raw values — they're injected as headers.
-  // For host-side calls, we need the raw key from .env or process.env.
   const envVars = readEnvFile(['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL']);
   return process.env.ANTHROPIC_API_KEY || envVars.ANTHROPIC_API_KEY || null;
 }
@@ -119,7 +115,7 @@ function resolveBaseUrl(): string {
   );
 }
 
-/** Call the Claude API via OneCLI proxy or direct with API key. */
+/** Call the Claude API directly with an API key. */
 async function callClaude(
   systemPrompt: string,
   userMessage: string,

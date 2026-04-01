@@ -996,12 +996,12 @@ export class WebChannel implements Channel {
       } catch (err) {
         logger.error({ err }, 'Failed to save Anthropic key');
         return this.json(res, 500, {
-          error: 'Failed to register key. Is OneCLI running?',
+          error: 'Failed to save API key to .env',
         });
       }
     }
 
-    // POST /api/register-credential — register any credential via IPC→OneCLI
+    // POST /api/register-credential — register any credential via IPC
     // Used by the CredentialModal when an agent requests a credential via popup
     if (method === 'POST' && url.pathname === '/api/register-credential') {
       const remote = req.socket.remoteAddress;
@@ -1022,7 +1022,7 @@ export class WebChannel implements Channel {
       }
 
       // Write to IPC credentials dir — the existing IPC poll loop
-      // picks it up, runs OneCLI, and writes the result file
+      // picks it up, saves to .env, and writes the result file
       const targetFolder = groupFolder || 'web_general';
       const credDir = path.join(DATA_DIR, 'ipc', targetFolder, 'credentials');
       fs.mkdirSync(credDir, { recursive: true });

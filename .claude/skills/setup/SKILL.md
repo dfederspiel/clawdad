@@ -17,11 +17,10 @@ Welcome the user briefly. Explain what will happen:
 
 > I'll walk you through getting ClawDad running. This sets up:
 > 1. Node.js dependencies
-> 2. OneCLI (credential vault)
-> 3. Docker (container runtime)
-> 4. Your Anthropic API credentials
-> 5. The agent container image
-> 6. The web UI
+> 2. Docker (container runtime)
+> 3. Your Anthropic API credentials (stored in .env, injected by the credential proxy)
+> 4. The agent container image
+> 5. The web UI
 >
 > Most steps are automatic. I'll ask when I need your input.
 
@@ -90,7 +89,11 @@ docker info 2>/dev/null && echo "DOCKER_RUNNING" || (which docker 2>/dev/null &&
 
 ## 3. Anthropic Credentials
 
-NanoClaw uses OneCLI to manage credentials. Check if already configured:
+ClawDad uses a built-in credential proxy that reads from `.env`. Check if already configured:
+
+```bash
+grep -E 'ANTHROPIC_(API_KEY|AUTH_TOKEN)' .env 2>/dev/null
+```
 
 ### 3c. Build and test
 
@@ -104,50 +107,51 @@ Run `npx tsx setup/index.ts --step container -- --runtime <chosen>` and parse th
 
 ## 4. Credential System
 
-The credential system depends on the container runtime chosen in step 3.
-
-### 4a. Docker → OneCLI
-
-Install OneCLI and its CLI tool:
-
-```bash
-curl -fsSL onecli.sh/install | sh
-curl -fsSL onecli.sh/cli/install | sh
-```
-
-Verify both installed: `onecli version`. If the command is not found, the CLI was likely installed to `~/.local/bin/`. Add it to PATH for the current session and persist it:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-# Persist for future sessions (append to shell profile if not already present)
-grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-grep -q '.local/bin' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-```
-
-Then re-verify with `onecli version`.
-
-Point the CLI at the local OneCLI instance (it defaults to the cloud service otherwise):
-```bash
-onecli config set api-host http://127.0.0.1:10254
-```
-
-Ensure `.env` has the OneCLI URL (create the file if it doesn't exist):
-```bash
-grep -q 'ONECLI_URL' .env 2>/dev/null || echo 'ONECLI_URL=http://127.0.0.1:10254' >> .env
-```
-
-Check if a secret already exists:
-```bash
-onecli secrets list
-```
-
-If an Anthropic secret is listed, confirm with user: keep or reconfigure?
+All credentials are stored in `.env` and injected by the built-in credential proxy. The proxy auto-detects the auth mode based on which variable is set.
 
 AskUserQuestion: How do you connect to Claude?
 
-1. **LiteLLM proxy (recommended)** — description: "Your team runs a LiteLLM proxy that routes to Anthropic. You'll need the proxy URL and an API key."
-2. **Direct Anthropic API** — description: "Pay-per-use API key from console.anthropic.com, hitting api.anthropic.com directly."
-3. **Claude subscription (Pro/Max)** — description: "Uses your existing Claude Pro or Max subscription via setup-token."
+1. **Claude subscription (Pro/Max)** — description: "Uses your existing Claude Pro or Max subscription via setup-token."
+2. **Direct Anthropic API** — description: "Pay-per-use API key from console.anthropic.com."
+3. **LiteLLM proxy** — description: "Your team runs a LiteLLM proxy that routes to Anthropic. You'll need the proxy URL and an API key."
+
+### Subscription path (OAuth token)
+
+Tell the user:
+
+> Run `claude setup-token` in another terminal and complete the authentication flow.
+
+Then stop and wait for the user to confirm they've completed it. Do NOT proceed until they respond.
+
+Once confirmed, copy the token from Claude Code's credential store and save to `.env`:
+
+```bash
+# Extract token from Claude Code credentials
+TOKEN=$(python -c "import json; d=json.load(open('$HOME/.claude/.credentials.json')); print(d['claudeAiOauth']['accessToken'])")
+# On Windows with Git Bash, use the Windows-style home path if needed:
+# TOKEN=$(python -c "import json,os; d=json.load(open(os.path.expanduser('~/.claude/.credentials.json'))); print(d['claudeAiOauth']['accessToken'])")
+
+# Save as ANTHROPIC_AUTH_TOKEN (NOT ANTHROPIC_API_KEY — OAuth tokens require Bearer auth)
+grep -q 'ANTHROPIC_AUTH_TOKEN' .env 2>/dev/null && \
+  sed -i "s|.*ANTHROPIC_AUTH_TOKEN.*|ANTHROPIC_AUTH_TOKEN=$TOKEN|" .env || \
+  echo "ANTHROPIC_AUTH_TOKEN=$TOKEN" >> .env
+```
+
+**Important:** OAuth tokens (`sk-ant-oat01-...`) must use `ANTHROPIC_AUTH_TOKEN`. Setting them as `ANTHROPIC_API_KEY` will fail with "Invalid API key" because the proxy sends them as `x-api-key` instead of `Authorization: Bearer`.
+
+### Direct API path
+
+Tell user to get a key from https://console.anthropic.com/settings/keys if they don't have one.
+
+**If the user pastes a key starting with `sk-ant-api03-`:** save it directly to `.env`.
+
+```bash
+grep -q 'ANTHROPIC_API_KEY' .env 2>/dev/null && \
+  sed -i "s|.*ANTHROPIC_API_KEY.*|ANTHROPIC_API_KEY=<KEY>|" .env || \
+  echo "ANTHROPIC_API_KEY=<KEY>" >> .env
+```
+
+Make sure `ANTHROPIC_BASE_URL` is NOT set (or commented out) in `.env` for direct API.
 
 ### LiteLLM proxy path
 
@@ -155,83 +159,25 @@ AskUserQuestion: "What's your LiteLLM proxy URL?" with placeholder `https://your
 
 Then ask: "What API key should I use for the proxy?" (They can paste it directly — handle gracefully.)
 
-Set `ANTHROPIC_BASE_URL` in `.env`:
+Set both in `.env`:
 ```bash
 grep -q 'ANTHROPIC_BASE_URL' .env 2>/dev/null && \
-  sed -i '' "s|.*ANTHROPIC_BASE_URL.*|ANTHROPIC_BASE_URL=<proxy-url>|" .env || \
+  sed -i "s|.*ANTHROPIC_BASE_URL.*|ANTHROPIC_BASE_URL=<proxy-url>|" .env || \
   echo "ANTHROPIC_BASE_URL=<proxy-url>" >> .env
+
+grep -q 'ANTHROPIC_API_KEY' .env 2>/dev/null && \
+  sed -i "s|.*ANTHROPIC_API_KEY.*|ANTHROPIC_API_KEY=<KEY>|" .env || \
+  echo "ANTHROPIC_API_KEY=<KEY>" >> .env
 ```
-
-Extract hostname from the URL for the host pattern. Register with OneCLI:
-```bash
-onecli secrets create --name Anthropic --type anthropic --value <KEY> --host-pattern <proxy-hostname>
-```
-
-**If the user pastes a key starting with `sk-ant-`:** handle it — run the `onecli secrets create` command with that value directly.
-
-### Direct API path
-
-Tell user to get a key from https://console.anthropic.com/settings/keys if they don't have one.
-
-AskUserQuestion with two registration methods:
-1. **Dashboard** — "Open http://127.0.0.1:10254 and add the secret in the UI. Type: anthropic."
-2. **CLI** — "Run: `onecli secrets create --name Anthropic --type anthropic --value YOUR_KEY --host-pattern api.anthropic.com`"
-
-Make sure `ANTHROPIC_BASE_URL` is NOT set (or commented out) in `.env` for direct API.
-
-#### Subscription path
-
-Tell the user:
-
-> Run `claude setup-token` in another terminal. It will output a token — copy it but don't paste it here.
-
-Then stop and wait for the user to confirm they have the token. Do NOT proceed until they respond.
-
-Once they confirm, they register it with OneCLI. AskUserQuestion with two options:
 
 ### After any path
 
-#### API key path
-
-**Verify endpoint match:** If `ANTHROPIC_BASE_URL` is set in `.env`, confirm the OneCLI secret's `hostPattern` matches. If they don't match, warn and offer to fix.
-
-Then AskUserQuestion with two options:
-
-1. **Dashboard** — description: "Best if you have a browser on this machine. Open http://127.0.0.1:10254 and add the secret in the UI."
-2. **CLI** — description: "Best for remote/headless servers. Run: `onecli secrets create --name Anthropic --type anthropic --value YOUR_KEY --host-pattern api.anthropic.com`"
-
-#### After either path
-
-Ask them to let you know when done.
-
-**If the user's response happens to contain a token or key** (starts with `sk-ant-`): handle it gracefully — run the `onecli secrets create` command with that value on their behalf.
-
-**After user confirms:** verify with `onecli secrets list` that an Anthropic secret exists. If not, ask again.
-
-### 4b. Apple Container → Native Credential Proxy
-
-Apple Container is not compatible with OneCLI. The credential proxy code is already included in the apple-container branch — do NOT invoke `/use-native-credential-proxy` (it would conflict with already-applied code).
-
-Instead, just configure the credentials in `.env`:
-
-AskUserQuestion: Do you want to use your **Claude subscription** (Pro/Max) or an **Anthropic API key**?
-
-1. **Claude subscription (Pro/Max)** — description: "Uses your existing Claude Pro or Max subscription. Run `claude setup-token` in another terminal to get your token."
-2. **Anthropic API key** — description: "Pay-per-use API key from console.anthropic.com."
-
-For subscription: tell the user to run `claude setup-token` in another terminal. Stop and wait for the user to confirm they have completed this step successfully before proceeding.
-
-Once confirmed, add the token to `.env`:
+Verify credentials are configured:
 ```bash
-echo 'CLAUDE_CODE_OAUTH_TOKEN=<their-token>' >> .env
+grep -E 'ANTHROPIC_(API_KEY|AUTH_TOKEN)' .env
 ```
 
-For API key: add to `.env`:
-```bash
-echo 'ANTHROPIC_API_KEY=<their-key>' >> .env
-```
-
-Verify the proxy starts: `npm run dev` should show "Credential proxy listening" in the logs.
+If neither is found, ask the user to try again.
 
 ## 5. Set Up Channels
 
@@ -282,7 +228,7 @@ Run `npx tsx setup/index.ts --step environment` and parse the status block.
 **If STATUS=failed, fix each:**
 - SERVICE=stopped → `npm run build`, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux) or `bash start-nanoclaw.sh` (WSL nohup)
 - SERVICE=not_found → re-run step 7
-- CREDENTIALS=missing → re-run step 4 (Docker: check `onecli secrets list`; Apple Container: check `.env` for credentials)
+- CREDENTIALS=missing → re-run step 4 (check `.env` for `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`)
 - CHANNEL_AUTH shows `not_found` for any channel → re-invoke that channel's skill (e.g. `/add-telegram`)
 - REGISTERED_GROUPS=0 → re-invoke the channel skills from step 5
 - MOUNT_ALLOWLIST=missing → `npx tsx setup/index.ts --step mounts -- --empty`
@@ -359,7 +305,7 @@ curl -s http://localhost:3456/api/health | python3 -m json.tool
 
 Check that:
 - `docker.status` = "running"
-- `onecli.status` = "running"
+- `credential_proxy.status` = "configured"
 - `anthropic.status` = "configured"
 - `container_image.status` = "built"
 - `overall` = "ready"
@@ -379,10 +325,10 @@ Tell the user:
 
 ## Troubleshooting
 
-**Service not starting:** Check `logs/nanoclaw.error.log`. Common: wrong Node path (re-run step 7), credential system not running (Docker: check `curl http://127.0.0.1:10254/api/health`; Apple Container: check `.env` credentials), missing channel credentials (re-invoke channel skill).
+**Service not starting:** Check `logs/nanoclaw.error.log`. Common: wrong Node path (re-run step 7), missing credentials in `.env` (re-run step 4), missing channel credentials (re-invoke channel skill).
 
 **Container agent fails:** Ensure Docker is running. Check container logs in `groups/*/logs/container-*.log`.
 
-**"Invalid API key" errors:** `ANTHROPIC_BASE_URL` in `.env` and OneCLI `hostPattern` must match the same host. Run `onecli secrets list` to check.
+**"Invalid API key" errors:** If using an OAuth token (`sk-ant-oat01-`), it must be set as `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`. If using a custom endpoint, ensure `ANTHROPIC_BASE_URL` in `.env` is correct.
 
 **Web UI won't load:** Ensure `WEB_UI_ENABLED=true` in `.env`. Check port conflicts: `lsof -i :3456`.

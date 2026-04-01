@@ -16,7 +16,7 @@ The web UI at `http://localhost:3456` gives you a local environment to create ag
 
 As you build that intuition, ClawDad grows with you. Advanced users graduate to building agents directly in Claude Code's CLI, where you have full control over instructions, tools, and container configuration. The web UI stays useful as a dashboard for monitoring tasks, reviewing execution history, and chatting with running agents.
 
-Under the hood, ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoclaw), which handles the hard parts: Docker container isolation, credential injection via OneCLI Agent Vault, and the Claude Agent SDK runtime.
+Under the hood, ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoclaw), which handles the hard parts: Docker container isolation, credential injection via a local proxy, and the Claude Agent SDK runtime.
 
 ## Quick Start
 
@@ -57,7 +57,7 @@ Browser  ──>  Web UI (Preact)  ──>  Orchestrator (Node.js)  ──>  Doc
 ```
 
 - **Agents run in Docker containers** with filesystem isolation. Each agent only sees its own workspace.
-- **Credentials flow through OneCLI Agent Vault** — a local gateway that intercepts outbound HTTPS and injects API keys at request time. Agents never see raw tokens.
+- **Credentials flow through a local proxy** — reads from `.env` and injects API keys into outbound requests. Agents never see raw tokens.
 - **Claude Code is the admin tool.** Use it to add templates, tune agent behavior, configure integrations, or debug issues.
 
 ## Prerequisites
@@ -67,23 +67,14 @@ Browser  ──>  Web UI (Preact)  ──>  Orchestrator (Node.js)  ──>  Doc
 | Claude Code | [claude.com/product/claude-code](https://claude.com/product/claude-code) |
 | Node.js 20+ | Setup installs this for you |
 | Docker | Setup checks and guides installation |
-| OneCLI | Setup installs this for you |
 
 The `/setup` skill checks all prerequisites and walks you through fixing anything that's missing.
 
 ## Credentials
 
-API credentials are managed by [OneCLI Agent Vault](https://github.com/onecli/onecli). The vault runs locally and intercepts outbound HTTPS from containers, injecting credentials per host pattern.
+API credentials are stored in `.env` and injected by a built-in credential proxy. Supports both API keys (`ANTHROPIC_API_KEY`) and OAuth tokens (`ANTHROPIC_AUTH_TOKEN` from `claude setup-token`).
 
-```bash
-onecli secrets list                     # See registered credentials
-onecli secrets create --name Anthropic \
-  --type anthropic \
-  --value YOUR_KEY \
-  --host-pattern api.anthropic.com
-```
-
-You can also register credentials through the web UI's credential modal during setup or at any time from the dashboard.
+You can also register credentials through the web UI's credential modal during setup or at any time from the dashboard. See [docs/CREDENTIALS.md](docs/CREDENTIALS.md) for details.
 
 ## Extending with Skills
 
@@ -119,7 +110,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for skill types, PR guidelines, and the c
 
 ## Upstream
 
-ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoclaw) by [Qwibit](https://github.com/qwibitai). The core container runtime, agent SDK integration, credential vault, and skill system all come from NanoClaw. Use `/update` to pull the latest ClawDad code.
+ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoclaw) by [Qwibit](https://github.com/qwibitai). The core container runtime, agent SDK integration, credential proxy, and skill system all come from NanoClaw. Use `/update` to pull the latest ClawDad code.
 
 ## License
 

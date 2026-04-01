@@ -11,7 +11,7 @@
  *   - Group folder + CLAUDE.md creation
  *   - Template file copying (if --template provided)
  *   - Global user-config merge into agent-config.json
- *   - OneCLI agent provisioning
+ *   - Credential proxy configuration
  *
  * If --schedule is provided, also creates a scheduled task via POST /api/tasks.
  */
