@@ -674,7 +674,7 @@ async function processCredentialIpc(
       credentialsDir,
       service || envName,
       true,
-      `Saved as ${envName} — available to agents as $${envName}`,
+      `Saved as ${envName} — available immediately via the credential proxy`,
     );
     notifyGroupCredentialResult(deps, sourceGroup, service || envName, true);
   } catch (err) {

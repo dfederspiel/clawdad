@@ -43,12 +43,26 @@ trap 'rm -f "$TMPFILE" "$CURL_STDERR"' EXIT
 # Time the request and capture stderr separately
 START_MS=$(python3 -c "import time; print(int(time.time()*1000))")
 
-HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" \
-  --connect-timeout 15 --max-time 120 \
-  -X "$METHOD" "$URL" "$@" 2>"$CURL_STDERR") || {
-  CURL_EXIT=$?
-  HTTP_CODE="000"
-}
+# Route through credential proxy if available — the proxy substitutes
+# __CRED_*__ placeholders with real values from .env, so containers
+# never see raw tokens and newly-registered credentials work immediately.
+if [[ -n "${CRED_PROXY_URL:-}" ]]; then
+  HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" \
+    --connect-timeout 15 --max-time 120 \
+    -X "$METHOD" "${CRED_PROXY_URL}/forward" \
+    -H "X-Forward-To: $URL" \
+    "$@" 2>"$CURL_STDERR") || {
+    CURL_EXIT=$?
+    HTTP_CODE="000"
+  }
+else
+  HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" \
+    --connect-timeout 15 --max-time 120 \
+    -X "$METHOD" "$URL" "$@" 2>"$CURL_STDERR") || {
+    CURL_EXIT=$?
+    HTTP_CODE="000"
+  }
+fi
 
 END_MS=$(python3 -c "import time; print(int(time.time()*1000))")
 DURATION_MS=$(( END_MS - START_MS ))

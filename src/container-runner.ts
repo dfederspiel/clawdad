@@ -399,8 +399,8 @@ async function buildContainerArgs(
   // Anthropic: route through our local HTTP proxy which injects the real
   // API key or OAuth token. The SDK sends a placeholder value.
   //
-  // Service credentials (GitHub, GitLab, etc.): passed as env vars from
-  // .env. Agents use them directly in curl headers.
+  // Anthropic credentials: routed through the credential proxy.
+  // Containers get a placeholder and ANTHROPIC_BASE_URL pointing at the proxy.
   args.push(
     '-e',
     `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
@@ -413,17 +413,24 @@ async function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
-  // Pass service credentials from .env as env vars.
-  // Any variable ending in _TOKEN, _KEY, _SECRET, or _PASSWORD is forwarded.
-  // Agents use these directly: curl -H "Authorization: token $GITHUB_TOKEN" ...
+  // Service credentials: pass PLACEHOLDER values, not real secrets.
+  // The credential proxy substitutes __CRED_<NAME>__ → real value at
+  // request time via /forward, so agents never see raw tokens.
+  // Agents route API calls through api.sh which uses the proxy.
   const allEnv = readEnvFile();
   const credentialPattern =
     /^(?!ANTHROPIC_|CLAUDE_CODE_).+_(TOKEN|KEY|SECRET|PASSWORD)$/;
   for (const [key, value] of Object.entries(allEnv)) {
     if (credentialPattern.test(key) && value) {
-      args.push('-e', `${key}=${value}`);
+      args.push('-e', `${key}=__CRED_${key}__`);
     }
   }
+
+  // Tell the container where the credential proxy lives for /forward calls
+  args.push(
+    '-e',
+    `CRED_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+  );
 
   // Pass model override for LiteLLM proxy routing
   const claudeModel = process.env.CLAUDE_MODEL || allEnv.CLAUDE_MODEL;
