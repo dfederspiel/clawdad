@@ -296,16 +296,22 @@ async function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
-  // Service credentials: pass PLACEHOLDER values, not real secrets.
-  // The credential proxy substitutes __CRED_<NAME>__ → real value at
-  // request time via /forward, so agents never see raw tokens.
-  // Agents route API calls through api.sh which uses the proxy.
+  // Forward .env vars into containers in two categories:
+  // 1. Credentials (_TOKEN, _KEY, _SECRET, _PASSWORD) → placeholder values
+  //    that the credential proxy substitutes at request time via /forward.
+  // 2. Config vars (_URL, _EMAIL, _ACCOUNT_ID, etc.) → passed directly.
+  // Excluded: Anthropic/Claude vars (handled by proxy), web UI config,
+  // and host-only settings that are irrelevant inside containers.
   const allEnv = readEnvFile();
-  const credentialPattern =
-    /^(?!ANTHROPIC_|CLAUDE_CODE_).+_(TOKEN|KEY|SECRET|PASSWORD)$/;
+  const excludePattern =
+    /^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_MODEL$|WEB_UI_|LOG_LEVEL$|PORT$)/;
+  const credentialPattern = /.+_(TOKEN|KEY|SECRET|PASSWORD)$/;
   for (const [key, value] of Object.entries(allEnv)) {
-    if (credentialPattern.test(key) && value) {
+    if (excludePattern.test(key) || !value) continue;
+    if (credentialPattern.test(key)) {
       args.push('-e', `${key}=__CRED_${key}__`);
+    } else {
+      args.push('-e', `${key}=${value}`);
     }
   }
 
