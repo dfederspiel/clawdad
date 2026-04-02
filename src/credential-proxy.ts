@@ -258,6 +258,31 @@ export function startCredentialProxy(
   });
 }
 
+/**
+ * Substitute credentials in a header value, with special handling for
+ * Basic auth. Curl's `-u user:pass` encodes the value as Base64 in an
+ * `Authorization: Basic <b64>` header, hiding any __CRED_*__ placeholders.
+ * Decode first, substitute, then re-encode so the proxy can inject creds.
+ */
+function substituteInHeader(
+  key: string,
+  value: string,
+  credMap: Record<string, string>,
+): string {
+  if (key === 'authorization') {
+    const basicMatch = value.match(/^Basic\s+(.+)$/i);
+    if (basicMatch) {
+      const decoded = Buffer.from(basicMatch[1], 'base64').toString('utf-8');
+      if (PLACEHOLDER_RE.test(decoded)) {
+        PLACEHOLDER_RE.lastIndex = 0;
+        const substituted = substituteCredentials(decoded, credMap);
+        return `Basic ${Buffer.from(substituted).toString('base64')}`;
+      }
+    }
+  }
+  return substituteCredentials(value, credMap);
+}
+
 // ── /forward handler ────────────────────────────────────────────────
 
 function handleForward(
@@ -294,9 +319,9 @@ function handleForward(
       continue;
     }
     if (typeof value === 'string') {
-      outHeaders[key] = substituteCredentials(value, credMap);
+      outHeaders[key] = substituteInHeader(key, value, credMap);
     } else if (Array.isArray(value)) {
-      outHeaders[key] = value.map((v) => substituteCredentials(v, credMap));
+      outHeaders[key] = value.map((v) => substituteInHeader(key, v, credMap));
     }
   }
 

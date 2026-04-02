@@ -19,7 +19,9 @@ URL="${BASE_URL}${API_PATH}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Auth: use env var if available, otherwise rely on credential proxy
+# Auth: use env var if available, otherwise rely on credential proxy.
+# The credential proxy decodes Basic auth headers to substitute
+# __CRED_*__ placeholders before re-encoding and forwarding.
 AUTH_ARGS=()
 if [[ -n "${ATLASSIAN_API_TOKEN:-}" ]]; then
   AUTH_ARGS+=(-u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN")
