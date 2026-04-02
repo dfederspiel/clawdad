@@ -4,6 +4,14 @@
   margin-top: 10px;
 }
 
+.block-container a {
+  color: var(--accent, #6c8aff);
+  text-decoration: underline;
+}
+.block-container a:hover {
+  opacity: 0.8;
+}
+
 /* ─── Code Block ─── */
 .code-block {
   border-radius: 6px;
