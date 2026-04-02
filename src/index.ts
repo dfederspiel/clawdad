@@ -60,6 +60,7 @@ import {
   attachUsageToLastBotMessage,
   setGroupSubtitle,
   storeMessage,
+  storeMessageDirect,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
@@ -97,6 +98,10 @@ let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
+// Track silent-completion retries per chat to avoid infinite loops.
+// Key = chatJid, value = timestamp of the message that triggered the silent
+// completion. Cleared on successful output.
+const silentRetryPending: Record<string, string> = {};
 let messageLoopRunning = false;
 
 // Maps triggered agent JID → origin info for cross-chat response routing
@@ -458,7 +463,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await responseChannel.setTyping?.(responseJid, true, threadId);
   let hadError = false;
+  // Track output per query within streaming containers. Reset on each
+  // query completion so silent completions are detected even when a
+  // prior query in the same container session produced output.
+  let outputSentForCurrentQuery = false;
   let outputSentToUser = false;
+  let silentCompletion = false;
 
   const output = await runAgent(
     group,
@@ -480,6 +490,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         if (text) {
           await responseChannel.sendMessage(responseJid, text, threadId);
           outputSentToUser = true;
+          outputSentForCurrentQuery = true;
         }
         // Only reset idle timer on actual results, not session-update markers (result: null)
         resetIdleTimer();
@@ -497,6 +508,21 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         // and setTyping(false) after runAgent only fires on container exit.
         await responseChannel.setTyping?.(responseJid, false, threadId);
         queue.notifyIdle(chatJid);
+
+        // Detect silent completion: agent returned success with null result
+        // and no output was sent for THIS query. This happens when the agent
+        // only performs internal tool calls (e.g. writing to an interaction
+        // log) without producing a text response — common after session
+        // resume or when the agent does bookkeeping mid-conversation.
+        if (!outputSentForCurrentQuery && !result.result) {
+          silentCompletion = true;
+          logger.warn(
+            { group: group.name },
+            'Agent returned success with null result — silent completion detected',
+          );
+        }
+        // Reset per-query tracking for the next query in this container
+        outputSentForCurrentQuery = false;
       }
 
       if (result.status === 'error') {
@@ -516,6 +542,55 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     delete pendingOrigins[chatJid];
   }
   if (idleTimer) clearTimeout(idleTimer);
+
+  // Silent completion: agent returned success with null result on the last
+  // query — it performed tool calls but never produced a text response.
+  // This leaves the user staring at a cleared typing indicator with no reply.
+  if (silentCompletion) {
+    if (!outputSentToUser) {
+      // No output was sent at all (single-query case or every query was
+      // silent). Clear the stale session and retry once with a fresh session.
+      if (silentRetryPending[chatJid] === previousCursor) {
+        logger.warn(
+          { group: group.name },
+          'Silent completion on retry — giving up to avoid loop',
+        );
+        delete silentRetryPending[chatJid];
+      } else {
+        logger.warn(
+          { group: group.name },
+          'Silent completion — clearing session and rolling back cursor for retry',
+        );
+        silentRetryPending[chatJid] = previousCursor;
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+        lastAgentTimestamp[chatJid] = previousCursor;
+        saveState();
+        return false;
+      }
+    } else {
+      // Earlier queries produced output but the last one was silent.
+      // Can't safely retry (would duplicate earlier responses). Log it and
+      // send a nudge back into the container so the agent knows to respond.
+      logger.warn(
+        { group: group.name },
+        'Silent completion on latest query (earlier queries had output) — sending nudge',
+      );
+      // Queue a synthetic nudge that the next poll will pick up
+      storeMessageDirect({
+        id: `nudge_${Date.now()}`,
+        chat_jid: chatJid,
+        sender: 'system',
+        sender_name: 'System',
+        content:
+          '[system] Your last action completed without a visible response. Please reply to the user.',
+        timestamp: new Date().toISOString(),
+        is_from_me: false,
+      });
+    }
+  } else {
+    delete silentRetryPending[chatJid];
+  }
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
