@@ -63,7 +63,7 @@ This opens a popup in the browser. The user enters their API token there — you
 Then verify the connection:
 
 ```bash
-/workspace/scripts/atlassian-api.sh GET "/rest/api/3/myself"
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/rest/api/3/myself"
 ```
 
 Show the result:
@@ -99,7 +99,7 @@ After connecting, ask what project to track:
 
 Verify it exists:
 ```bash
-/workspace/scripts/atlassian-api.sh GET "/rest/api/3/project/PROJ"
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/rest/api/3/project/PROJ"
 ```
 
 **GitHub:**
@@ -145,7 +145,7 @@ Immediately pull current project state and show it:
 
 **For Jira — recent activity:**
 ```bash
-/workspace/scripts/atlassian-api.sh POST "/rest/api/3/search/jql" \
+/workspace/scripts/api.sh atlassian POST "${INSTANCE}/rest/api/3/search/jql" \
   -d '{"jql":"project = PROJ AND updated >= -7d ORDER BY updated DESC","fields":["summary","status","assignee","priority","updated"],"maxResults":10}'
 ```
 
@@ -269,22 +269,24 @@ If you read from Confluence (wiki pages, documentation):
 
 ## Jira Operations
 
+Read `atlassian_instance` from config into `INSTANCE` before making API calls. Auth is handled automatically by the credential proxy via `api.sh`.
+
 ### Query tickets
 ```bash
-/workspace/scripts/atlassian-api.sh POST "/rest/api/3/search/jql" \
+/workspace/scripts/api.sh atlassian POST "${INSTANCE}/rest/api/3/search/jql" \
   -d '{"jql":"project = PROJ AND updated >= -1d ORDER BY updated DESC","fields":["summary","status","assignee","priority","updated","created"],"maxResults":20}'
 ```
 
 ### Create a ticket
 ```bash
-/workspace/scripts/atlassian-api.sh POST "/rest/api/3/issue" \
+/workspace/scripts/api.sh atlassian POST "${INSTANCE}/rest/api/3/issue" \
   -H "Content-Type: application/json" \
   -d '{"fields":{"project":{"key":"PROJ"},"summary":"Title","issuetype":{"name":"Task"},"description":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Description"}]}]}}}'
 ```
 
 ### Update a ticket
 ```bash
-/workspace/scripts/atlassian-api.sh PUT "/rest/api/3/issue/PROJ-123" \
+/workspace/scripts/api.sh atlassian PUT "${INSTANCE}/rest/api/3/issue/PROJ-123" \
   -H "Content-Type: application/json" \
   -d '{"fields":{"summary":"Updated title"}}'
 ```

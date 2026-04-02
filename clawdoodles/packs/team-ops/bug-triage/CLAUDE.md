@@ -24,7 +24,7 @@ If the config file is completely empty or missing, ask for everything:
 
 **After config has the Atlassian URL**, automatically look up their account ID:
 ```bash
-/workspace/scripts/atlassian-api.sh GET "/rest/api/3/myself" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Account ID: {d[\"accountId\"]}\nDisplay name: {d[\"displayName\"]}')"
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/rest/api/3/myself" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Account ID: {d[\"accountId\"]}\nDisplay name: {d[\"displayName\"]}')"
 ```
 Do NOT ask the user for their account ID or API tokens — auth is handled by the API wrapper automatically.
 
@@ -63,10 +63,11 @@ fi
 
 ## IMPORTANT: Use the API wrapper for all curl calls
 
-**Always use `/workspace/scripts/atlassian-api.sh`** instead of raw curl. It handles auth, logging, and error tracking automatically.
+**Always use `/workspace/scripts/api.sh`** instead of raw curl. It routes through the credential proxy, which injects auth credentials automatically. No tokens needed in the command.
 
 ```bash
-/workspace/scripts/atlassian-api.sh METHOD PATH [CURL_ARGS...]
+INSTANCE="<atlassian_instance from config>"
+/workspace/scripts/api.sh atlassian METHOD "${INSTANCE}/rest/api/3/..." [CURL_ARGS...]
 ```
 
 Errors are logged to `/workspace/group/api-logs/atlassian.jsonl`.
@@ -82,7 +83,7 @@ Read project key from config. Run queries in priority order — process bugs fro
 ```bash
 PROJECT_KEY="<from config>"
 TRIAGE_LABEL="<from config, default: triage-analyzed>"
-/workspace/scripts/atlassian-api.sh POST "/rest/api/3/search/jql" \
+/workspace/scripts/api.sh atlassian POST "${INSTANCE}/rest/api/3/search/jql" \
   -d "{
     \"jql\": \"project = ${PROJECT_KEY} AND issuetype = Bug AND status not in (\\\"Deployed\\\", \\\"Closed\\\", \\\"Development Done\\\", \\\"Code Review\\\") AND created >= -7d AND labels not in (\\\"${TRIAGE_LABEL}\\\") ORDER BY created DESC\",
     \"fields\": [\"summary\",\"description\",\"status\",\"assignee\",\"priority\",\"components\",\"labels\",\"created\",\"reporter\"],
@@ -254,7 +255,7 @@ If a path doesn't exist, use `find` or `ls` to discover the actual structure.
 Post triage analysis as Jira comments using Atlassian Document Format:
 
 ```bash
-/workspace/scripts/atlassian-api.sh POST "/rest/api/3/issue/PROJ-XXXX/comment" \
+/workspace/scripts/api.sh atlassian POST "${INSTANCE}/rest/api/3/issue/PROJ-XXXX/comment" \
   -H "Content-Type: application/json" \
   -d "$COMMENT_JSON"
 ```
@@ -262,7 +263,7 @@ Post triage analysis as Jira comments using Atlassian Document Format:
 ### Add label after processing
 
 ```bash
-/workspace/scripts/atlassian-api.sh PUT "/rest/api/3/issue/PROJ-XXXX" \
+/workspace/scripts/api.sh atlassian PUT "${INSTANCE}/rest/api/3/issue/PROJ-XXXX" \
   -H "Content-Type: application/json" \
   -d "{\"update\":{\"labels\":[{\"add\":\"${TRIAGE_LABEL}\"}]}}"
 ```
@@ -395,7 +396,7 @@ Read from config: `config.team_members`. Use `git blame` on relevant files to su
 
 ## Connectivity & Error Handling
 
-If the atlassian-api.sh wrapper shows consecutive failures:
+If the api.sh wrapper shows consecutive failures:
 - 1-2 failures: Continue, may be transient
 - 3+ failures: Stop and report. Do not burn tokens retrying.
 

@@ -1,7 +1,7 @@
 ---
 id: api-integration
 teaches: "HTTP API calls via api.sh, auth wrappers, error handling"
-tools: [api.sh, atlassian-api.sh, auth-args.sh]
+tools: [api.sh, auth-args.sh]
 complexity: intermediate
 depends_on: [credential-management]
 ---
@@ -24,16 +24,23 @@ Agents can call external APIs using wrapper scripts that handle authentication, 
 
 The first argument is the service name (matches the credential registered in the vault). The script auto-injects authentication and logs all requests to `/workspace/group/api-logs/`.
 
-### Atlassian-specific wrapper
+### Atlassian (Jira / Confluence)
+
+Read the instance URL from `agent-config.json` (`atlassian_instance`). Pass the full URL to `api.sh`:
 
 ```bash
+INSTANCE="https://your-team.atlassian.net"  # from config
+
 # GET from Jira
-/workspace/scripts/atlassian-api.sh GET "/rest/api/3/myself"
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/rest/api/3/myself"
 
 # POST to Jira (e.g., search)
-/workspace/scripts/atlassian-api.sh POST "/rest/api/3/search/jql" \
+/workspace/scripts/api.sh atlassian POST "${INSTANCE}/rest/api/3/search/jql" \
+  -H "Content-Type: application/json" \
   -d '{"jql":"project = PROJ AND updated >= -1d ORDER BY updated DESC","maxResults":10}'
 ```
+
+Authentication is handled automatically by the credential proxy — `api.sh` routes through it when `CRED_PROXY_URL` is set.
 
 ### Auth helpers
 

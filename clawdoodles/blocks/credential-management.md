@@ -41,8 +41,9 @@ When walking a user through credential setup, explain the flow:
 After the credential is registered, verify it works:
 
 ```bash
-# Verify Atlassian
-/workspace/scripts/atlassian-api.sh GET "/rest/api/3/myself"
+# Verify Atlassian (read instance URL from agent-config.json)
+INSTANCE="https://your-team.atlassian.net"  # from config
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/rest/api/3/myself"
 
 # Verify GitHub
 GH_TOKEN=$GITHUB_TOKEN gh api user

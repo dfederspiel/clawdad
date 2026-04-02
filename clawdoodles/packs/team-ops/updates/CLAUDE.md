@@ -25,7 +25,7 @@ If the config file is completely empty or missing, ask for everything:
 
 **After config has the Atlassian URL**, automatically look up their account ID:
 ```bash
-/workspace/scripts/atlassian-api.sh GET "/rest/api/3/myself" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Account ID: {d[\"accountId\"]}\nDisplay name: {d[\"displayName\"]}')"
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/rest/api/3/myself" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Account ID: {d[\"accountId\"]}\nDisplay name: {d[\"displayName\"]}')"
 ```
 Do NOT ask the user for their account ID or API tokens — auth is handled by the API wrapper automatically.
 
@@ -71,10 +71,11 @@ Keep it conversational and low-friction. The user is busy — ask focused questi
 
 ## Atlassian Access
 
-**Always use the API wrapper** for all Jira/Confluence calls:
+**Always use the API wrapper** for all Jira/Confluence calls. It routes through the credential proxy which injects auth automatically.
 
 ```bash
-/workspace/scripts/atlassian-api.sh METHOD PATH [CURL_ARGS...]
+INSTANCE="<atlassian_instance from config>"
+/workspace/scripts/api.sh atlassian METHOD "${INSTANCE}/rest/api/3/..." [CURL_ARGS...]
 ```
 
 See the `jira-ticket` skill for full API reference, field IDs, and constraints.
@@ -87,7 +88,7 @@ Recent activity (last 7 days):
 ```bash
 PROJECT_KEY="<from config>"
 USER_ID="<from config>"
-/workspace/scripts/atlassian-api.sh GET "/rest/api/3/search" \
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/rest/api/3/search" \
   --data-urlencode "jql=project = ${PROJECT_KEY} AND assignee = '${USER_ID}' AND updated >= -7d ORDER BY updated DESC" \
   --data-urlencode "fields=summary,status,issuetype,priority,labels,updated,created,customfield_10014,parent" \
   --data-urlencode "maxResults=50"
@@ -95,7 +96,7 @@ USER_ID="<from config>"
 
 In-progress work:
 ```bash
-/workspace/scripts/atlassian-api.sh GET "/rest/api/3/search" \
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/rest/api/3/search" \
   --data-urlencode "jql=project = ${PROJECT_KEY} AND assignee = '${USER_ID}' AND status in ('In Progress', 'Code Review', 'Development Done') ORDER BY updated DESC" \
   --data-urlencode "fields=summary,status,issuetype,priority,labels,updated,customfield_10014,parent"
 ```
@@ -106,7 +107,7 @@ Read page IDs from config: `config.confluence_reference_pages`. These are READ-O
 
 ```bash
 PAGE_ID="<from config>"
-/workspace/scripts/atlassian-api.sh GET "/wiki/rest/api/content/${PAGE_ID}?expand=body.storage"
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/wiki/rest/api/content/${PAGE_ID}?expand=body.storage"
 ```
 
 ### Confluence Space
