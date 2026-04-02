@@ -706,7 +706,12 @@ async function runAgent(
     if (output.status === 'error') {
       // If the error is a missing session, clear the stale session so the next
       // attempt starts fresh instead of retrying the same broken session forever.
-      if (output.error?.includes('No conversation found with session ID')) {
+      if (
+        output.error &&
+        /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
+          output.error,
+        )
+      ) {
         logger.warn(
           { group: group.name },
           'Clearing stale session after "not found" error',
