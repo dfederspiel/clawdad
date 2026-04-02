@@ -20,10 +20,6 @@ groups/global-web/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
 !groups/global-web/CLAUDE.md
-!groups/web_ghost-writer/
-groups/web_ghost-writer/logs/
-groups/web_ghost-writer/memory/
-groups/web_ghost-writer/conversations/
 
 # Secrets
 *.keys.json

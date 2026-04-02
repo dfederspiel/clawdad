@@ -1,5 +1,0 @@
-{
-  "name": "Ghost Writer",
-  "description": "Blog ghost writer for the Procedural blog. Writes articles in David's voice and deploys to GitHub for auto-publish to the Pi.",
-  "tier": "recipe"
-}
