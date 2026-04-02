@@ -434,6 +434,8 @@ async function runQuery(
   let lastAssistantUuid: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
+  let nullResultRetries = 0;
+  const MAX_NULL_RESULT_RETRIES = 1;
   const assistantTexts: string[] = [];
 
   // Accumulate usage across all result messages in this query
@@ -569,12 +571,29 @@ async function runQuery(
       if (typeof msg.num_turns === 'number') accumulatedUsage.numTurns = msg.num_turns;
 
       log(`Result #${resultCount}: subtype=${message.subtype} turns=${accumulatedUsage.numTurns} cost=$${accumulatedUsage.costUsd.toFixed(4)}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
+
+      // SDK bug workaround: when the agent completes with only tool calls
+      // and no text response, result is null. Instead of forwarding null to
+      // the host (which leaves the user with no reply), push a follow-up
+      // message into the stream so the agent continues within this session.
+      if (!textResult && nullResultRetries < MAX_NULL_RESULT_RETRIES) {
+        nullResultRetries++;
+        log(`Null result on user query — injecting retry prompt (attempt ${nullResultRetries}/${MAX_NULL_RESULT_RETRIES})`);
+        stream.push('[system] You completed tool calls but did not send a visible reply. Please respond to the user.');
+        // Don't emit this null result to the host — wait for the retry
+        continue;
+      }
+
       writeOutput({
         status: 'success',
         result: textResult || null,
         newSessionId,
         usage: accumulatedUsage,
       });
+      // Reset retry counter on successful text output
+      if (textResult) {
+        nullResultRetries = 0;
+      }
     }
   }
 
