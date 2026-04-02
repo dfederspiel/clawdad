@@ -280,7 +280,12 @@ export class WebChannel implements Channel {
       const allGroups = this.opts.registeredGroups();
       const webGroups = Object.entries(allGroups)
         .filter(([jid]) => jid.startsWith('web:'))
-        .filter(([, g]) => g.triggerScope !== 'web-all') // Exclude triggered agents from sidebar
+        // Exclude trigger-only agents (requiresTrigger + web-all) from sidebar.
+        // Agents with web-all scope but requiresTrigger=false appear in both.
+        .filter(
+          ([, g]) =>
+            g.triggerScope !== 'web-all' || g.requiresTrigger === false,
+        )
         .map(([jid, g]) => ({
           jid,
           name: g.name,

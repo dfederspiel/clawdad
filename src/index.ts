@@ -147,8 +147,19 @@ function loadState(): void {
   }
   sessions = getAllSessions();
   registeredGroups = getAllRegisteredGroups();
+
+  // Apply group-config.json from disk for all loaded groups so that
+  // disk-based config (triggerScope, containerConfig, etc.) stays authoritative.
+  let configApplied = 0;
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    if (applyDiskGroupConfig(group)) {
+      setRegisteredGroup(jid, group);
+      configApplied++;
+    }
+  }
+
   logger.info(
-    { groupCount: Object.keys(registeredGroups).length },
+    { groupCount: Object.keys(registeredGroups).length, configApplied },
     'State loaded',
   );
 }
@@ -179,6 +190,37 @@ function saveState(): void {
   setRouterState('last_agent_timestamp', JSON.stringify(lastAgentTimestamp));
 }
 
+/**
+ * Apply group-config.json from the group folder onto a RegisteredGroup.
+ * Disk config is authoritative — it always overwrites DB values for the
+ * fields it declares, so edits on disk take effect after a restart.
+ */
+function applyDiskGroupConfig(group: RegisteredGroup): boolean {
+  let groupDir: string;
+  try {
+    groupDir = resolveGroupFolderPath(group.folder);
+  } catch {
+    return false;
+  }
+  const configPath = path.join(groupDir, 'group-config.json');
+  if (!fs.existsSync(configPath)) return false;
+  try {
+    const disk = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    if (disk.containerConfig) group.containerConfig = disk.containerConfig;
+    if (disk.triggerScope) group.triggerScope = disk.triggerScope;
+    if (disk.requiresTrigger != null)
+      group.requiresTrigger = disk.requiresTrigger;
+    if (disk.description) group.description = disk.description;
+    return true;
+  } catch (err) {
+    logger.warn(
+      { folder: group.folder, err },
+      'Failed to parse group-config.json',
+    );
+    return false;
+  }
+}
+
 function registerGroup(jid: string, group: RegisteredGroup): void {
   let groupDir: string;
   try {
@@ -191,36 +233,7 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     return;
   }
 
-  // Apply group-config.json from the group folder if present.
-  // Allows groups to declare containerConfig, triggerScope, description, etc.
-  // on disk so they survive DB resets and are version-controllable.
-  const groupConfigPath = path.join(groupDir, 'group-config.json');
-  if (fs.existsSync(groupConfigPath)) {
-    try {
-      const diskConfig = JSON.parse(fs.readFileSync(groupConfigPath, 'utf-8'));
-      if (diskConfig.containerConfig && !group.containerConfig) {
-        group.containerConfig = diskConfig.containerConfig;
-      }
-      if (diskConfig.triggerScope && !group.triggerScope) {
-        group.triggerScope = diskConfig.triggerScope;
-      }
-      if (diskConfig.requiresTrigger != null && group.requiresTrigger == null) {
-        group.requiresTrigger = diskConfig.requiresTrigger;
-      }
-      if (diskConfig.description && !group.description) {
-        group.description = diskConfig.description;
-      }
-      logger.info(
-        { folder: group.folder },
-        'Applied group-config.json from group folder',
-      );
-    } catch (err) {
-      logger.warn(
-        { folder: group.folder, err },
-        'Failed to parse group-config.json',
-      );
-    }
-  }
+  applyDiskGroupConfig(group);
 
   registeredGroups[jid] = group;
   setRegisteredGroup(jid, group);
@@ -1195,9 +1208,19 @@ async function main(): Promise<void> {
         logger.warn({ jid }, 'No channel owns JID, cannot send message');
         return;
       }
-      const text = formatOutbound(rawText, channel.name as ChannelType);
+      // Web channel renders blocks client-side — formatOutbound would corrupt
+      // :::blocks JSON by transforming markdown inside the fences.
+      const text =
+        channel.name === 'web'
+          ? rawText
+          : formatOutbound(rawText, channel.name as ChannelType);
       if (text) await channel.sendMessage(jid, text);
     },
+    setTyping: async (jid, isTyping) => {
+      const channel = findChannel(channels, jid);
+      await channel?.setTyping?.(jid, isTyping);
+    },
+    onProgress: (jid, event) => broadcastProgress(jid, event),
   });
   startIpcWatcher({
     sendMessage: (jid, rawText) => {

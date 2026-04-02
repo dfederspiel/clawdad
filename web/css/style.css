@@ -25,6 +25,11 @@
 dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 
 /* Markdown prose inside assistant messages */
+.prose {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
 .prose code {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
   background: var(--bg3);

@@ -6,6 +6,7 @@ import { getAchievementsForContainer } from './achievements.js';
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
   ContainerOutput,
+  ProgressEvent,
   runContainerAgent,
   writeTasksSnapshot,
 } from './container-runner.js';
@@ -74,6 +75,8 @@ export interface SchedulerDependencies {
     groupFolder: string,
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
+  setTyping?: (jid: string, isTyping: boolean) => Promise<void>;
+  onProgress?: (jid: string, event: ProgressEvent) => void;
 }
 
 async function runTask(
@@ -171,6 +174,8 @@ async function runTask(
   };
 
   try {
+    await deps.setTyping?.(task.chat_jid, true);
+
     const output = await runContainerAgent(
       group,
       {
@@ -195,12 +200,19 @@ async function runTask(
         }
         if (streamedOutput.status === 'success') {
           deps.queue.notifyIdle(task.chat_jid);
+          await deps.setTyping?.(task.chat_jid, false);
           scheduleClose(); // Close promptly even when result is null (e.g. IPC-only tasks)
         }
         if (streamedOutput.status === 'error') {
+          await deps.setTyping?.(task.chat_jid, false);
           error = streamedOutput.error || 'Unknown error';
         }
+        if (!streamedOutput.status) {
+          // Intermediate result — re-assert typing so the indicator comes back
+          await deps.setTyping?.(task.chat_jid, true);
+        }
       },
+      (event) => deps.onProgress?.(task.chat_jid, event),
     );
 
     if (closeTimer) clearTimeout(closeTimer);
@@ -218,6 +230,7 @@ async function runTask(
     );
   } catch (err) {
     if (closeTimer) clearTimeout(closeTimer);
+    await deps.setTyping?.(task.chat_jid, false);
     error = err instanceof Error ? err.message : String(err);
     logger.error({ taskId: task.id, error }, 'Task failed');
   }

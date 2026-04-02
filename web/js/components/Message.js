@@ -2,10 +2,7 @@ import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
 import { parseBlocks } from '../block-parser.js';
 import { BlockRenderer } from './blocks/BlockRenderer.js';
-
-function esc(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+import { md } from '../markdown.js';
 
 function formatTokens(n) {
   if (!n) return '0';
@@ -88,12 +85,12 @@ export function Message({ role, content, timestamp, senderName, isError, compact
   const blocks = isAssistant ? parseBlocks(content) : null;
 
   return html`
-    <div class="${sizeClass} leading-relaxed ${bubbleClass} ${errorClass}">
+    <div class="${sizeClass} leading-relaxed ${bubbleClass} ${errorClass} overflow-hidden break-words">
       ${blocks
         ? html`<div class="block-container">
             ${blocks.map((block, i) => html`<${BlockRenderer} key=${i} block=${block} />`)}
           </div>`
-        : html`<div>${esc(content)}</div>`}
+        : html`<div class="prose" dangerouslySetInnerHTML=${{ __html: md(content) }} />`}
       <div class="text-[11px] text-txt-muted mt-1.5">
         ${senderName ? `${senderName} \u00B7 ${time}` : time}
       </div>

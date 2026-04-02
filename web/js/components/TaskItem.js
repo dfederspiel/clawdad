@@ -1,6 +1,7 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
 import { pauseTask, resumeTask, cancelTask, getTaskLogs } from '../app.js';
+import { ConfirmDialog } from './ConfirmDialog.js';
 
 function relativeTime(iso) {
   if (!iso) return '-';
@@ -43,6 +44,7 @@ export function TaskItem({ task, compact }) {
   const [expanded, setExpanded] = useState(false);
   const [logs, setLogs] = useState(null);
   const [acting, setActing] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const isPaused = task.status === 'paused';
   const isCompleted = task.status === 'completed';
@@ -67,14 +69,18 @@ export function TaskItem({ task, compact }) {
     }
   }
 
-  async function onCancel(e) {
+  function onDeleteClick(e) {
     e.stopPropagation();
-    if (!confirm('Delete this task and all its logs?')) return;
+    setDeleteOpen(true);
+  }
+
+  async function onDeleteConfirm() {
     setActing(true);
     try {
       await cancelTask(task.id);
     } finally {
       setActing(false);
+      setDeleteOpen(false);
     }
   }
 
@@ -113,7 +119,7 @@ export function TaskItem({ task, compact }) {
           `}
           <button
             class="p-0.5 rounded text-txt-muted hover:text-err hover:bg-err/10 transition-colors"
-            onClick=${onCancel}
+            onClick=${onDeleteClick}
             disabled=${acting}
             title="Delete"
           >
@@ -158,5 +164,15 @@ export function TaskItem({ task, compact }) {
         </div>
       `}
     </div>
+    <${ConfirmDialog}
+      open=${deleteOpen}
+      title="Delete task?"
+      message="This removes the task and all its run history. This cannot be undone."
+      confirmLabel="Delete"
+      destructive=${true}
+      loading=${acting}
+      onConfirm=${onDeleteConfirm}
+      onCancel=${() => setDeleteOpen(false)}
+    />
   `;
 }

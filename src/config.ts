@@ -58,7 +58,7 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
   10,
 ); // 10MB default
 export const CREDENTIAL_PROXY_PORT = parseInt(
-  process.env.CREDENTIAL_PROXY_PORT || '3001',
+  process.env.CREDENTIAL_PROXY_PORT || '3457',
   10,
 );
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
