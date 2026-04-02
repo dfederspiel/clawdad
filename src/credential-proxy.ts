@@ -301,6 +301,15 @@ function handleForward(
   // without restarting anything.  The file is <1 KB — cost is negligible.
   const credMap = buildCredMap();
 
+  logger.debug(
+    {
+      target: targetUrl,
+      credMapKeys: Object.keys(credMap),
+      hasGithubToken: '__CRED_GITHUB_TOKEN__' in credMap,
+    },
+    'Credential proxy /forward request',
+  );
+
   // Build outbound headers with placeholder substitution
   const parsed = new URL(targetUrl);
   const outIsHttps = parsed.protocol === 'https:';
