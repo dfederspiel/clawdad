@@ -64,7 +64,12 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound } from './router.js';
+import {
+  findChannel,
+  formatMessages,
+  formatOutbound,
+  stripInternalTags,
+} from './router.js';
 import { ChannelType } from './text-styles.js';
 import {
   restoreRemoteControl,
@@ -1208,12 +1213,15 @@ async function main(): Promise<void> {
         logger.warn({ jid }, 'No channel owns JID, cannot send message');
         return;
       }
+      // Always strip <internal> tags — agents use these for reasoning
+      const stripped = stripInternalTags(rawText);
+      if (!stripped) return;
       // Web channel renders blocks client-side — formatOutbound would corrupt
       // :::blocks JSON by transforming markdown inside the fences.
       const text =
         channel.name === 'web'
-          ? rawText
-          : formatOutbound(rawText, channel.name as ChannelType);
+          ? stripped
+          : formatOutbound(stripped, channel.name as ChannelType);
       if (text) await channel.sendMessage(jid, text);
     },
     setTyping: async (jid, isTyping) => {
@@ -1226,12 +1234,15 @@ async function main(): Promise<void> {
     sendMessage: (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      // Always strip <internal> tags — agents use these for reasoning
+      const stripped = stripInternalTags(rawText);
+      if (!stripped) return Promise.resolve();
       // Web channel renders blocks client-side — formatOutbound would corrupt
       // :::blocks JSON by transforming markdown inside the fences.
       const text =
         channel.name === 'web'
-          ? rawText
-          : formatOutbound(rawText, channel.name as ChannelType);
+          ? stripped
+          : formatOutbound(stripped, channel.name as ChannelType);
       if (!text) return Promise.resolve();
       return channel.sendMessage(jid, text);
     },
