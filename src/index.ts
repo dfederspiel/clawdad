@@ -2,7 +2,14 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  DEFAULT_AGENT_NAME,
+  buildMultiAgentContext,
+  discoverAgents,
+} from './agent-discovery.js';
+import { setActiveAgentName, clearActiveAgentName } from './agent-state.js';
+import {
   ASSISTANT_NAME,
+  buildAgentTriggerPattern,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   DEFAULT_TRIGGER,
@@ -92,7 +99,7 @@ import {
   getAchievementsForContainer,
 } from './achievements.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { Channel, NewMessage, RegisteredGroup } from './types.js';
+import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
 // Re-export for backwards compatibility during refactor
@@ -101,6 +108,8 @@ export { escapeXml, formatMessages } from './router.js';
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
+// Agents per group: groupJid → Agent[]
+let groupAgents: Record<string, Agent[]> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
@@ -163,8 +172,73 @@ function loadState(): void {
     }
   }
 
+  // Discover agents for each registered group
+  let totalAgents = 0;
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    try {
+      const agents = discoverAgents(group);
+      groupAgents[jid] = agents;
+      totalAgents += agents.length;
+    } catch (err) {
+      logger.warn(
+        { jid, err },
+        'Failed to discover agents, using implicit default',
+      );
+      groupAgents[jid] = [
+        {
+          id: `${group.folder}/${DEFAULT_AGENT_NAME}`,
+          groupFolder: group.folder,
+          name: DEFAULT_AGENT_NAME,
+          displayName: group.name,
+        },
+      ];
+    }
+  }
+
+  // Migrate legacy session keys: group_folder → group_folder/default
+  // Existing sessions are keyed by group folder; new ones use agentId.
+  for (const [key, sessionId] of Object.entries(sessions)) {
+    if (!key.includes('/')) {
+      const agentId = `${key}/${DEFAULT_AGENT_NAME}`;
+      if (!sessions[agentId]) {
+        sessions[agentId] = sessionId;
+        setSession(agentId, sessionId);
+        logger.info({ from: key, to: agentId }, 'Migrated session key');
+      }
+
+      // Migrate session files on disk: data/sessions/{folder}/.claude/ → data/sessions/{folder}/default/.claude/
+      const oldSessionDir = path.join(DATA_DIR, 'sessions', key, '.claude');
+      const newSessionDir = path.join(
+        DATA_DIR,
+        'sessions',
+        key,
+        DEFAULT_AGENT_NAME,
+        '.claude',
+      );
+      if (
+        fs.existsSync(oldSessionDir) &&
+        fs.existsSync(path.join(oldSessionDir, 'projects')) &&
+        !fs.existsSync(path.join(newSessionDir, 'projects'))
+      ) {
+        try {
+          fs.cpSync(oldSessionDir, newSessionDir, { recursive: true });
+          logger.info(
+            { from: oldSessionDir, to: newSessionDir },
+            'Migrated session files to per-agent dir',
+          );
+        } catch (err) {
+          logger.warn({ key, err }, 'Failed to migrate session files');
+        }
+      }
+    }
+  }
+
   logger.info(
-    { groupCount: Object.keys(registeredGroups).length, configApplied },
+    {
+      groupCount: Object.keys(registeredGroups).length,
+      agentCount: totalAgents,
+      configApplied,
+    },
     'State loaded',
   );
 }
@@ -266,8 +340,27 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     }
   }
 
+  // Discover agents for the newly registered group
+  try {
+    groupAgents[jid] = discoverAgents(group);
+  } catch {
+    groupAgents[jid] = [
+      {
+        id: `${group.folder}/${DEFAULT_AGENT_NAME}`,
+        groupFolder: group.folder,
+        name: DEFAULT_AGENT_NAME,
+        displayName: group.name,
+      },
+    ];
+  }
+
   logger.info(
-    { jid, name: group.name, folder: group.folder },
+    {
+      jid,
+      name: group.name,
+      folder: group.folder,
+      agents: groupAgents[jid].map((a) => a.name),
+    },
     'Group registered',
   );
 }
@@ -287,7 +380,13 @@ function unregisterGroup(jid: string, group: RegisteredGroup): void {
   // Clean up in-memory state
   queue.deleteGroup(jid);
   delete registeredGroups[jid];
-  delete sessions[group.folder];
+  // Clean up per-agent sessions
+  const agents = groupAgents[jid] || [];
+  for (const agent of agents) {
+    delete sessions[agent.id];
+  }
+  delete sessions[group.folder]; // legacy key
+  delete groupAgents[jid];
   delete lastAgentTimestamp[jid];
 
   // Clean up database
@@ -385,8 +484,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       sendMessage: (text) => channel.sendMessage(chatJid, text),
       setTyping: (typing) =>
         channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
-      runAgent: (prompt, onOutput) =>
-        runAgent(group, prompt, chatJid, onOutput),
+      runAgent: (prompt, onOutput) => {
+        const defaultAgent = (groupAgents[chatJid] || [])[0];
+        return runAgent(
+          group,
+          prompt,
+          chatJid,
+          onOutput,
+          undefined,
+          defaultAgent,
+        );
+      },
       closeStdin: () => queue.closeStdin(chatJid),
       advanceCursor: (ts) => {
         lastAgentTimestamp[chatJid] = ts;
@@ -479,124 +587,178 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     missedMessages[missedMessages.length - 1].timestamp;
   saveState();
 
+  // Determine which agents should respond to these messages
+  const agents = groupAgents[chatJid] || [];
+  const triggeredAgents = agents.filter((agent) => {
+    if (!agent.trigger) return true; // No agent trigger → responds to all
+    const agentTrigger = buildAgentTriggerPattern(agent.trigger);
+    return missedMessages.some((m) => agentTrigger.test(m.content.trim()));
+  });
+
+  if (triggeredAgents.length === 0) {
+    // No explicit trigger matched — fall back to the group agent (the one
+    // without a trigger). This is the coordinator/default responder, equivalent
+    // to today's single-agent group behavior. If no triggerless agent exists,
+    // fall back to the first agent.
+    const groupAgent = agents.find((a) => !a.trigger) || agents[0];
+    if (groupAgent) {
+      triggeredAgents.push(groupAgent);
+      logger.info(
+        { group: group.name, fallback: groupAgent.name },
+        'No agent trigger matched, routing to group agent',
+      );
+    } else {
+      logger.debug({ group: group.name }, 'No agents triggered');
+      return true;
+    }
+  }
+
+  // When multiple agents are triggered from the same user message, only run
+  // the first-mentioned agent. The cross-agent mechanism handles handoffs —
+  // if the first agent tags another in its output, that agent runs next with
+  // proper context. Running all simultaneously causes confusion (each agent
+  // sees instructions meant for the others).
+  if (triggeredAgents.length > 1) {
+    const combinedText = missedMessages.map((m) => m.content).join('\n');
+    triggeredAgents.sort((a, b) => {
+      const posA = a.trigger ? combinedText.indexOf(a.trigger) : Infinity;
+      const posB = b.trigger ? combinedText.indexOf(b.trigger) : Infinity;
+      return (posA === -1 ? Infinity : posA) - (posB === -1 ? Infinity : posB);
+    });
+    // Only keep the first-mentioned agent; others will be triggered via cross-agent routing
+    const first = triggeredAgents[0];
+    triggeredAgents.length = 1;
+    logger.info(
+      {
+        group: group.name,
+        primary: first.name,
+        deferred: agents.filter((a) => a.id !== first.id).map((a) => a.name),
+      },
+      'Multi-agent: running first-mentioned agent, others deferred to cross-agent routing',
+    );
+  }
+
   logger.info(
-    { group: group.name, messageCount: missedMessages.length },
+    {
+      group: group.name,
+      messageCount: missedMessages.length,
+      agents: triggeredAgents.map((a) => a.name),
+    },
     'Processing messages',
   );
 
-  // Track idle timer for closing stdin when agent is idle
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const resetIdleTimer = () => {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(
-      () => {
-        logger.debug(
-          { group: group.name },
-          'Idle timeout, closing container stdin',
-        );
-        queue.closeStdin(chatJid);
-      },
-      group.requiresTrigger ? TRIGGER_IDLE_TIMEOUT : IDLE_TIMEOUT,
-    );
-  };
   const responseJid = originJid || chatJid;
   const responseChannel = originJid
     ? findChannel(channels, originJid) || channel
     : channel;
 
-  await responseChannel.setTyping?.(responseJid, true, threadId);
-  let hadError = false;
-  // Track output per query within streaming containers. Reset on each
-  // query completion so silent completions are detected even when a
-  // prior query in the same container session produced output.
-  let outputSentForCurrentQuery = false;
-  let outputSentToUser = false;
-  let silentCompletion = false;
+  let anyError = false;
+  let anyOutputSent = false;
 
-  const output = await runAgent(
-    group,
-    prompt,
-    chatJid,
-    async (result) => {
-      // Streaming output callback — called for each agent result
-      if (result.result) {
-        const raw =
-          typeof result.result === 'string'
-            ? result.result
-            : JSON.stringify(result.result);
-        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-        logger.info(
-          { group: group.name, responseJid, threadId: threadId || null },
-          `Agent output: ${raw.length} chars → ${threadId ? 'thread' : 'main'}`,
-        );
-        if (text) {
-          await responseChannel.sendMessage(responseJid, text, threadId);
-          outputSentToUser = true;
-          outputSentForCurrentQuery = true;
-        }
-        // Only reset idle timer on actual results, not session-update markers (result: null)
-        resetIdleTimer();
-      }
+  // Run each triggered agent sequentially (concurrent execution in Phase 2)
+  for (const agent of triggeredAgents) {
+    // Build agent-specific prompt with multi-agent context
+    const multiAgentCtx = buildMultiAgentContext(agent, agents);
+    const agentPrompt = multiAgentCtx ? multiAgentCtx + prompt : prompt;
 
-      if (!result.status) {
-        // Intermediate result — agent is still running. Re-assert typing so
-        // the frontend indicator comes back after clearing on message receipt.
-        await responseChannel.setTyping?.(responseJid, true, threadId);
-      }
+    // Set active agent name so the channel uses it as sender_name on bot messages
+    setActiveAgentName(responseJid, agent.displayName);
 
-      if (result.status === 'success') {
-        queue.notifyIdle(chatJid);
+    // Track idle timer for closing stdin when agent is idle
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
-        // Detect silent completion: agent returned success with null result
-        // and no output was sent for THIS query. The agent-runner handles
-        // retries internally (pushes a follow-up prompt into the SDK stream),
-        // so this should be rare — only happens if the retry also fails.
-        if (!outputSentForCurrentQuery && !result.result) {
-          silentCompletion = true;
-          logger.warn(
-            { group: group.name },
-            'Agent returned null result after agent-runner retry — silent completion',
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(
+        () => {
+          logger.debug(
+            { agent: agent.id },
+            'Idle timeout, closing container stdin',
           );
+          queue.closeStdin(chatJid);
+        },
+        group.requiresTrigger ? TRIGGER_IDLE_TIMEOUT : IDLE_TIMEOUT,
+      );
+    };
+
+    await responseChannel.setTyping?.(responseJid, true, threadId);
+    let hadError = false;
+    let outputSentForCurrentQuery = false;
+    let outputSentToUser = false;
+
+    const output = await runAgent(
+      group,
+      agentPrompt,
+      chatJid,
+      async (result) => {
+        if (result.result) {
+          const raw =
+            typeof result.result === 'string'
+              ? result.result
+              : JSON.stringify(result.result);
+          const text = raw
+            .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+            .trim();
+          logger.info(
+            { agent: agent.id, responseJid, threadId: threadId || null },
+            `Agent output: ${raw.length} chars → ${threadId ? 'thread' : 'main'}`,
+          );
+          if (text) {
+            await responseChannel.sendMessage(responseJid, text, threadId);
+            outputSentToUser = true;
+            outputSentForCurrentQuery = true;
+          }
+          resetIdleTimer();
         }
-        // Clear typing on every completion. The agent-runner retry happens
-        // inside the container (no host round-trip), so the SDK will
-        // re-assert typing via progress events if it continues.
-        await responseChannel.setTyping?.(responseJid, false, threadId);
-        // Reset per-query tracking for the next query in this container
-        outputSentForCurrentQuery = false;
-      }
 
-      if (result.status === 'error') {
-        await responseChannel.setTyping?.(responseJid, false, threadId);
-        hadError = true;
-      }
-    },
-    (event) => {
-      broadcastProgress(responseJid, event);
-    },
-  );
+        if (!result.status) {
+          await responseChannel.setTyping?.(responseJid, true, threadId);
+        }
 
-  await responseChannel.setTyping?.(responseJid, false, threadId);
-  // Clean up origin tracking after processing — but only if it hasn't been
-  // re-set by a new thread reply arriving during this processing cycle.
+        if (result.status === 'success') {
+          queue.notifyIdle(chatJid);
+          if (!outputSentForCurrentQuery && !result.result) {
+            logger.warn(
+              { agent: agent.id },
+              'Agent returned null result after retry — silent completion',
+            );
+          }
+          await responseChannel.setTyping?.(responseJid, false, threadId);
+          outputSentForCurrentQuery = false;
+        }
+
+        if (result.status === 'error') {
+          await responseChannel.setTyping?.(responseJid, false, threadId);
+          hadError = true;
+        }
+      },
+      (event) => {
+        broadcastProgress(responseJid, event);
+      },
+      agent,
+    );
+
+    await responseChannel.setTyping?.(responseJid, false, threadId);
+    if (idleTimer) clearTimeout(idleTimer);
+    clearActiveAgentName(responseJid);
+
+    if (outputSentToUser) anyOutputSent = true;
+    if (output === 'error' || hadError) anyError = true;
+  }
+
+  // Clean up origin tracking after all agents have processed
   if (originJid && pendingOrigins[chatJid] === pendingOrigin) {
     delete pendingOrigins[chatJid];
   }
-  if (idleTimer) clearTimeout(idleTimer);
 
-  if (output === 'error' || hadError) {
-    // If we already sent output to the user, don't roll back the cursor —
-    // the user got their response and re-processing would send duplicates.
-    if (outputSentToUser) {
+  if (anyError) {
+    if (anyOutputSent) {
       logger.warn(
         { group: group.name },
         'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
       );
       return true;
     }
-    // Roll back cursor so retries can re-process these messages
     lastAgentTimestamp[chatJid] = previousCursor;
     saveState();
     logger.warn(
@@ -615,9 +777,12 @@ async function runAgent(
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
   onProgress?: (event: ProgressEvent) => void,
+  agent?: Agent,
+  isDelegation?: boolean,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
+  const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
+  const sessionId = sessions[agentId] || sessions[group.folder];
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -649,8 +814,8 @@ async function runAgent(
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
         if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
+          sessions[agentId] = output.newSessionId;
+          setSession(agentId, output.newSessionId);
         }
         // Send the message first, then store/broadcast usage.
         // Order matters: the message SSE must arrive before usage_update
@@ -664,7 +829,7 @@ async function runAgent(
           storeAgentRun({
             chat_jid: chatJid,
             group_folder: group.folder,
-            session_id: sessions[group.folder],
+            session_id: sessions[agentId],
             timestamp: new Date().toISOString(),
             input_tokens: u.inputTokens,
             output_tokens: u.outputTokens,
@@ -679,7 +844,7 @@ async function runAgent(
           broadcastUsage(chatJid, u);
           logger.info(
             {
-              group: group.name,
+              agent: agentId,
               cost: u.costUsd,
               turns: u.numTurns,
               tokens: u.inputTokens + u.outputTokens,
@@ -699,7 +864,11 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         isMain,
-        assistantName: ASSISTANT_NAME,
+        assistantName: agent?.displayName || ASSISTANT_NAME,
+        agentId,
+        agentName: agent?.name || DEFAULT_AGENT_NAME,
+        canDelegate: agent ? !agent.trigger : false,
+        isDelegation: isDelegation || false,
         achievements: getAchievementsForContainer(),
       },
       (proc, containerName) =>
@@ -718,22 +887,22 @@ async function runAgent(
         )
       ) {
         logger.warn(
-          { group: group.name },
+          { agent: agentId },
           'Clearing stale session after "not found" error',
         );
-        delete sessions[group.folder];
-        deleteSession(group.folder);
+        delete sessions[agentId];
+        deleteSession(agentId);
       }
       logger.error(
-        { group: group.name, error: output.error },
+        { agent: agentId, error: output.error },
         'Container agent error',
       );
       return 'error';
     }
 
     if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
+      sessions[agentId] = output.newSessionId;
+      setSession(agentId, output.newSessionId);
     }
 
     return 'success';
@@ -801,7 +970,13 @@ async function startMessageLoop(): Promise<void> {
 
           // Skip groups with pending thread routing — processGroupMessages
           // handles these via the queue with proper thread context.
-          if (pendingOrigins[chatJid]) continue;
+          if (pendingOrigins[chatJid]) {
+            logger.debug(
+              { chatJid, origin: pendingOrigins[chatJid] },
+              'Skipping — pending thread routing',
+            );
+            continue;
+          }
 
           const channel = findChannel(channels, chatJid);
           if (!channel) {
@@ -894,7 +1069,29 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          // Multi-agent groups: if the message targets a different agent than
+          // the one currently running, don't pipe — close and re-enqueue so
+          // processGroupMessages can route to the correct agent.
+          const agents = groupAgents[chatJid] || [];
+          const isMultiAgent = agents.length > 1;
+          let shouldPipe = true;
+
+          if (isMultiAgent) {
+            const anyAgentTriggered = groupMessages.some((m) =>
+              agents.some(
+                (a) =>
+                  a.trigger &&
+                  buildAgentTriggerPattern(a.trigger).test(m.content.trim()),
+              ),
+            );
+            if (anyAgentTriggered) {
+              // A specific agent trigger was used — don't pipe to whatever
+              // container happens to be running; enqueue for proper routing.
+              shouldPipe = false;
+            }
+          }
+
+          if (shouldPipe && queue.sendMessage(chatJid, formatted)) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
@@ -909,7 +1106,7 @@ async function startMessageLoop(): Promise<void> {
                 logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
               );
           } else {
-            // No active container — enqueue for a new one
+            // No active container, or multi-agent routing needed — enqueue
             queue.enqueueMessageCheck(chatJid);
           }
         }
@@ -1165,6 +1362,13 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    getGroupAgents: (jid: string) =>
+      (groupAgents[jid] || []).map((a) => ({
+        id: a.id,
+        name: a.name,
+        displayName: a.displayName,
+        trigger: a.trigger,
+      })),
     getStatus: () => ({
       containers: queue.getSnapshot(),
       uptime: process.uptime(),
@@ -1315,6 +1519,146 @@ async function main(): Promise<void> {
           break;
         }
       }
+    },
+    onDelegateToAgent: (request) => {
+      const {
+        sourceGroup,
+        chatJid: delegationChatJid,
+        targetAgent,
+        message,
+        sourceAgent,
+      } = request;
+
+      // Find the group JID from the source folder
+      const groupJid = Object.keys(registeredGroups).find(
+        (jid) => registeredGroups[jid].folder === sourceGroup,
+      );
+      if (!groupJid) {
+        logger.warn(
+          { sourceGroup, targetAgent },
+          'Delegation: group not found',
+        );
+        return;
+      }
+      const group = registeredGroups[groupJid];
+      const agents = groupAgents[groupJid] || [];
+      const agent = agents.find((a) => a.name === targetAgent);
+      if (!agent) {
+        logger.warn(
+          { sourceGroup, targetAgent, available: agents.map((a) => a.name) },
+          'Delegation: target agent not found',
+        );
+        return;
+      }
+
+      const chatJid = delegationChatJid || groupJid;
+      const channel = findChannel(channels, chatJid);
+      if (!channel) {
+        logger.warn({ chatJid }, 'Delegation: no channel for JID');
+        return;
+      }
+
+      logger.info(
+        {
+          group: group.name,
+          source: sourceAgent,
+          target: targetAgent,
+          messageLen: message.length,
+        },
+        'Processing agent delegation',
+      );
+
+      // Queue the delegation as a task — this waits for the current container
+      // to finish, then runs the delegated agent in its own container.
+      // Use a shorter timeout for delegated agents to prevent queue blocking.
+      const savedConfig = group.containerConfig;
+      const DELEGATION_TIMEOUT = 120_000; // 2 minutes
+      const taskId = `delegation-${agent.name}-${Date.now()}`;
+      queue.enqueueTask(chatJid, taskId, async () => {
+        group.containerConfig = {
+          ...savedConfig,
+          timeout: Math.min(
+            savedConfig?.timeout || Infinity,
+            DELEGATION_TIMEOUT,
+          ),
+        };
+        // Build prompt at execution time (not enqueue time) so conversation
+        // context includes any messages that arrived while queued.
+        const multiAgentCtx = buildMultiAgentContext(agent, agents);
+        const recentMessages = getMessagesSince(
+          chatJid,
+          '',
+          ASSISTANT_NAME,
+          MAX_MESSAGES_PER_PROMPT,
+          true, // include bot messages for full context
+        );
+        const conversationCtx = formatMessages(recentMessages, TIMEZONE);
+        const delegationPrompt =
+          multiAgentCtx +
+          conversationCtx +
+          `\n\n--- Delegation from ${sourceAgent} ---\n${message}\n--- End delegation ---\n`;
+
+        setActiveAgentName(chatJid, agent.displayName);
+        await channel.setTyping?.(chatJid, true);
+
+        const status = await runAgent(
+          group,
+          delegationPrompt,
+          chatJid,
+          async (result) => {
+            if (result.result) {
+              const raw =
+                typeof result.result === 'string'
+                  ? result.result
+                  : JSON.stringify(result.result);
+              const text = raw
+                .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                .trim();
+              if (text) {
+                await channel.sendMessage(chatJid, text);
+              }
+            }
+            if (result.status === 'success') {
+              queue.notifyIdle(chatJid);
+              await channel.setTyping?.(chatJid, false);
+            }
+            if (result.status === 'error') {
+              await channel.setTyping?.(chatJid, false);
+            }
+          },
+          (event) => broadcastProgress(chatJid, event),
+          agent,
+          true, // isDelegation — use shorter timeout
+        );
+
+        group.containerConfig = savedConfig; // restore original config
+        clearActiveAgentName(chatJid);
+        await channel.setTyping?.(chatJid, false);
+
+        // Notify the coordinator that the delegation completed.
+        // Store a system message so the coordinator sees the result attribution,
+        // then enqueue a message check to re-trigger the coordinator.
+        const resultNote =
+          status === 'error'
+            ? `[${agent.displayName} was unable to complete the delegated task.]`
+            : `[${agent.displayName} has responded above.]`;
+        storeMessage({
+          id: `delegation-result-${Date.now()}`,
+          chat_jid: chatJid,
+          sender: 'system',
+          sender_name: 'System',
+          content: resultNote,
+          timestamp: new Date().toISOString(),
+          is_from_me: false,
+          is_bot_message: false,
+        });
+        // Re-trigger the coordinator so it can review and continue orchestrating
+        queue.enqueueMessageCheck(chatJid);
+        logger.info(
+          { group: group.name, target: targetAgent, status },
+          'Delegation complete, notifying coordinator',
+        );
+      });
     },
     onSetSubtitle: (jid, subtitle) => {
       // Update DB and broadcast

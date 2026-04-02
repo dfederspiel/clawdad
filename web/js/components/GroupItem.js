@@ -1,11 +1,33 @@
 import { html } from 'htm/preact';
+import { useState } from 'preact/hooks';
 import { unread, typingGroups, tasks } from '../app.js';
 
 function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function AgentRow({ agent }) {
+  // Small indented row for each agent in a multi-agent group
+  const triggerLabel = agent.trigger
+    ? agent.trigger.replace(/[\\^$.*+?()[\]{}|]/g, '').trim()
+    : null;
+
+  return html`
+    <div class="flex items-center gap-2 pl-9 pr-4 py-1 text-xs text-txt-2">
+      <span class="w-1.5 h-1.5 rounded-full bg-txt-muted/50 flex-shrink-0" />
+      <span class="truncate flex-1">${esc(agent.displayName)}</span>
+      ${triggerLabel && html`
+        <span class="text-[9px] px-1 py-0.5 rounded bg-bg-3 text-txt-muted font-mono shrink-0">${esc(triggerLabel)}</span>
+      `}
+    </div>
+  `;
+}
+
 export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
+  const agents = group.agents || [];
+  const isMultiAgent = agents.length > 1;
+  const [expanded, setExpanded] = useState(false);
+
   const count = unread.value[group.jid] || 0;
   const isThinking = typingGroups.value[group.jid] || false;
   const taskCount = tasks.value.filter(t => t.group_folder === group.folder && t.status === 'active').length;
@@ -22,49 +44,83 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
 
   const canDelete = !group.isSystem && !group.isMain;
 
+  function handleClick() {
+    onSelect(group.jid);
+  }
+
+  function handleExpand(e) {
+    e.stopPropagation();
+    setExpanded(!expanded);
+  }
+
   return html`
-    <div class="${base} ${active}" onClick=${() => onSelect(group.jid)}>
-      <span class="w-2 h-2 rounded-full flex-shrink-0 ${dotClass}" />
-      <div class="flex-1 min-w-0">
-        <div class="truncate">${esc(group.name)}</div>
-        ${group.subtitle && html`
-          <div class="text-[10px] text-txt-muted truncate leading-tight">${esc(group.subtitle)}</div>
-        `}
-      </div>
-      ${group.isSystem && html`
-        <span class="text-[10px] px-1.5 py-0.5 rounded bg-bg-3 text-txt-muted font-medium shrink-0">system</span>
-      `}
-      ${group.isMain && !group.isSystem && html`
-        <span class="text-[10px] px-1.5 py-0.5 rounded bg-accent-dim text-accent font-medium shrink-0">main</span>
-      `}
-      ${taskCount > 0 && !count && html`
-        <span class="text-[9px] px-1 py-0.5 rounded bg-bg-3 text-txt-muted font-mono shrink-0" title="${taskCount} active task${taskCount > 1 ? 's' : ''}">${taskCount}t</span>
-      `}
-      ${count > 0 && html`
-        <span class="min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-accent text-bg text-[11px] font-semibold px-1 shrink-0">
-          ${count}
-        </span>
-      `}
-      <div class="flex items-center gap-0.5 opacity-0 group-hover/item:opacity-100 transition-all shrink-0">
-        ${onSettings && html`
+    <div>
+      <div class="${base} ${active}" onClick=${handleClick}>
+        ${isMultiAgent ? html`
           <button
-            class="w-5 h-5 flex items-center justify-center rounded text-txt-muted hover:text-txt hover:bg-bg-hover text-xs"
-            title="Group settings"
-            onClick=${(e) => { e.stopPropagation(); onSettings(group); }}
+            class="w-4 h-4 flex items-center justify-center text-txt-muted hover:text-txt transition-transform ${expanded ? 'rotate-90' : ''}"
+            onClick=${handleExpand}
+            title="${expanded ? 'Collapse' : 'Expand'} agents"
           >
-            <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/>
+            <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
             </svg>
           </button>
+        ` : html`
+          <span class="w-2 h-2 rounded-full flex-shrink-0 ${dotClass}" />
         `}
-        ${canDelete && html`
-          <button
-            class="w-5 h-5 flex items-center justify-center rounded text-txt-muted hover:text-red-400 hover:bg-red-400/10 text-xs leading-none"
-            title="Delete group"
-            onClick=${(e) => { e.stopPropagation(); onDelete(group); }}
-          >\u00D7</button>
+        <div class="flex-1 min-w-0">
+          <div class="truncate">${esc(group.name)}</div>
+          ${group.subtitle && html`
+            <div class="text-[10px] text-txt-muted truncate leading-tight">${esc(group.subtitle)}</div>
+          `}
+          ${isMultiAgent && !expanded && html`
+            <div class="text-[10px] text-txt-muted leading-tight">${agents.length} agents</div>
+          `}
+        </div>
+        ${isMultiAgent && html`
+          <span class="w-2 h-2 rounded-full flex-shrink-0 ${dotClass}" />
         `}
+        ${group.isSystem && html`
+          <span class="text-[10px] px-1.5 py-0.5 rounded bg-bg-3 text-txt-muted font-medium shrink-0">system</span>
+        `}
+        ${group.isMain && !group.isSystem && html`
+          <span class="text-[10px] px-1.5 py-0.5 rounded bg-accent-dim text-accent font-medium shrink-0">main</span>
+        `}
+        ${taskCount > 0 && !count && html`
+          <span class="text-[9px] px-1 py-0.5 rounded bg-bg-3 text-txt-muted font-mono shrink-0" title="${taskCount} active task${taskCount > 1 ? 's' : ''}">${taskCount}t</span>
+        `}
+        ${count > 0 && html`
+          <span class="min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-accent text-bg text-[11px] font-semibold px-1 shrink-0">
+            ${count}
+          </span>
+        `}
+        <div class="flex items-center gap-0.5 opacity-0 group-hover/item:opacity-100 transition-all shrink-0">
+          ${onSettings && html`
+            <button
+              class="w-5 h-5 flex items-center justify-center rounded text-txt-muted hover:text-txt hover:bg-bg-hover text-xs"
+              title="Group settings"
+              onClick=${(e) => { e.stopPropagation(); onSettings(group); }}
+            >
+              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/>
+              </svg>
+            </button>
+          `}
+          ${canDelete && html`
+            <button
+              class="w-5 h-5 flex items-center justify-center rounded text-txt-muted hover:text-red-400 hover:bg-red-400/10 text-xs leading-none"
+              title="Delete group"
+              onClick=${(e) => { e.stopPropagation(); onDelete(group); }}
+            >\u00D7</button>
+          `}
+        </div>
       </div>
+      ${isMultiAgent && expanded && html`
+        <div class="bg-bg-2">
+          ${agents.map(a => html`<${AgentRow} key=${a.id} agent=${a} />`)}
+        </div>
+      `}
     </div>
   `;
 }

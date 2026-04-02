@@ -8,6 +8,7 @@ import {
   checkTelemetryAchievements,
   AchievementDef,
 } from '../achievements.js';
+import { getActiveAgentName } from '../agent-state.js';
 import {
   DATA_DIR,
   GROUPS_DIR,
@@ -167,12 +168,15 @@ export class WebChannel implements Channel {
   ): Promise<void> {
     const timestamp = new Date().toISOString();
 
+    // Use active agent name if set (multi-agent groups), else default
+    const senderName = getActiveAgentName(jid) || ASSISTANT_NAME;
+
     // Persist agent response so it survives page reloads
     storeMessageDirect({
       id: randomUUID(),
       chat_jid: jid,
-      sender: ASSISTANT_NAME,
-      sender_name: ASSISTANT_NAME,
+      sender: senderName,
+      sender_name: senderName,
       content: text,
       timestamp,
       is_from_me: true,
@@ -180,7 +184,13 @@ export class WebChannel implements Channel {
       thread_id: threadId,
     });
 
-    this.broadcast('message', { jid, text, timestamp, thread_id: threadId });
+    this.broadcast('message', {
+      jid,
+      text,
+      timestamp,
+      thread_id: threadId,
+      sender_name: senderName,
+    });
     logger.info({ jid, length: text.length, threadId }, 'Web message sent');
   }
 
@@ -293,6 +303,7 @@ export class WebChannel implements Channel {
           isMain: g.isMain,
           isSystem: g.isSystem || false,
           subtitle: g.subtitle || '',
+          agents: this.opts.getGroupAgents?.(jid) || [],
         }));
       return this.json(res, 200, { groups: webGroups });
     }

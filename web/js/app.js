@@ -34,6 +34,7 @@ export const status = signal(null);
 export const tasks = signal([]);
 export const telemetry = signal(null);
 export const triggers = signal([]);
+export const pendingInput = signal(''); // set externally to inject text into ChatInput
 export const usage = signal(null); // latest usage stats
 export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group latest run
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
@@ -78,6 +79,7 @@ api.onSSE('message', (data) => {
         role: 'assistant',
         content: data.text,
         timestamp: data.timestamp,
+        senderName: data.sender_name,
       },
     ];
     // Ding for completed response in active group

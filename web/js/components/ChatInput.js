@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
-import { useState, useRef, useEffect } from 'preact/hooks';
-import { handleSend, triggers } from '../app.js';
+import { useState, useRef, useEffect, useMemo } from 'preact/hooks';
+import { handleSend, triggers, selectedGroup, pendingInput } from '../app.js';
 
 export function ChatInput() {
   const [text, setText] = useState('');
@@ -12,9 +12,40 @@ export function ChatInput() {
   const ref = useRef(null);
   const menuRef = useRef(null);
 
+  // Watch for external input injection (e.g. clicking an @mention in a message)
+  useEffect(() => {
+    if (pendingInput.value) {
+      const inject = pendingInput.value;
+      pendingInput.value = '';
+      setText((prev) => {
+        // Append to existing text, or set fresh
+        const base = prev.trim();
+        return base ? `${base} ${inject} ` : `${inject} `;
+      });
+      requestAnimationFrame(() => ref.current?.focus());
+    }
+  }, [pendingInput.value]);
+
+  // Combine global triggers with current group's agent triggers
+  const allTriggers = useMemo(() => {
+    const group = selectedGroup.value;
+    const agentTriggers = (group?.agents || [])
+      .filter((a) => a.trigger) // only agents with explicit triggers
+      .map((a) => ({
+        jid: a.id,
+        name: a.displayName,
+        trigger: a.trigger,
+        description: `Agent in ${group.name}`,
+        isAgent: true,
+      }));
+    const global = triggers.value.map((t) => ({ ...t, isAgent: false }));
+    return [...agentTriggers, ...global];
+  }, [selectedGroup.value, triggers.value]);
+
   // Filter triggers by query
-  const filtered = triggers.value.filter((t) =>
-    !mentionQuery || t.name.toLowerCase().includes(mentionQuery.toLowerCase()),
+  const filtered = allTriggers.filter((t) =>
+    !mentionQuery || t.name.toLowerCase().includes(mentionQuery.toLowerCase())
+      || t.trigger.toLowerCase().includes(mentionQuery.toLowerCase()),
   );
 
   // Close menu on outside click
@@ -98,7 +129,7 @@ export function ChatInput() {
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
 
     // Check for @-mention trigger
-    if (triggers.value.length > 0) {
+    if (allTriggers.length > 0) {
       const cursor = el.selectionStart;
       const textBeforeCursor = val.slice(0, cursor);
       // Find the last @ that starts a word (preceded by start-of-string, space, or newline)
@@ -135,6 +166,9 @@ export function ChatInput() {
               <span class="text-sm text-txt font-medium">
                 <span class="text-accent font-mono">${t.trigger}</span>
                 ${' '}${t.name}
+                ${t.isAgent && html`
+                  <span class="text-[10px] text-txt-muted ml-1 font-normal">agent</span>
+                `}
               </span>
               ${t.description && html`
                 <span class="text-xs text-txt-muted truncate">${t.description}</span>

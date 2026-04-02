@@ -29,7 +29,45 @@ Single Node.js process with web UI channel (always-on) and optional messaging ch
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
+| `groups/{name}/agents/{agent}/CLAUDE.md` | Per-agent identity (multi-agent groups) |
+| `groups/{name}/agents/{agent}/agent.json` | Per-agent config (trigger, display name) |
+| `src/agent-discovery.ts` | Agent discovery, multi-agent context injection |
+| `src/agent-state.ts` | Active agent name tracking for message attribution |
 | `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
+
+## Multi-Agent Groups
+
+Groups support 1:N agents. A group with no `agents/` dir behaves as a single-agent group (backward compatible).
+
+**Architecture:**
+- **Coordinator** (no trigger) — handles untriggered messages, delegates to specialists via `delegate_to_agent` MCP tool. Every multi-agent group should have exactly one.
+- **Specialists** (with trigger, e.g. `@analyst`) — respond when @-mentioned by users or delegated to by the coordinator. Cannot delegate to other agents.
+
+**Folder structure:**
+```
+groups/web_my-team/
+  CLAUDE.md              # Group-level context (team charter)
+  agents/
+    coordinator/
+      CLAUDE.md          # Coordinator identity and orchestration rules
+      agent.json         # { "displayName": "Coordinator" }  (no trigger)
+    analyst/
+      CLAUDE.md          # Specialist identity
+      agent.json         # { "displayName": "Analyst", "trigger": "@analyst" }
+```
+
+**How it works:**
+- On startup, `discoverAgents()` scans `agents/` subdirs for each group
+- User messages route to agents by @-mention trigger matching (anywhere in message)
+- Untriggered messages go to the coordinator (first agent without a trigger)
+- Coordinators delegate via `mcp__nanoclaw__delegate_to_agent` IPC tool
+- Delegations queue via `GroupQueue.enqueueTask` — run after the current container exits
+- Each agent gets its own Claude session, container, and CLAUDE.md
+- All agents share `/workspace/group/` filesystem for artifacts
+- Multi-agent context is auto-injected into prompts (role, teammates, instructions)
+- Bot messages carry the agent's display name as `sender_name`
+
+**Key files:** `src/agent-discovery.ts`, `src/agent-state.ts`, `src/index.ts` (processGroupMessages, onDelegateToAgent), `container/agent-runner/src/ipc-mcp-stdio.ts` (delegate_to_agent tool)
 
 ## Usage Tracking & Cost Observability
 

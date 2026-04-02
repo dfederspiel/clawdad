@@ -42,6 +42,9 @@ export function md(text) {
   // Links
   h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 
+  // @mentions — render as styled, clickable pills (skip inside code/pre)
+  h = h.replace(/(^|[\s>])(@\w[\w-]*)/g, '$1<span class="mention" data-trigger="$2">$2</span>');
+
   // Checkboxes (must come before regular lists)
   h = h.replace(/^- \[x\] (.+)$/gm, '<li class="cb checked"><input type="checkbox" checked disabled> $1</li>');
   h = h.replace(/^- \[ \] (.+)$/gm, '<li class="cb"><input type="checkbox" disabled> $1</li>');
