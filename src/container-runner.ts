@@ -90,19 +90,15 @@ function buildVolumeMounts(
   const groupDir = resolveGroupFolderPath(group.folder);
 
   if (isMain) {
-    // Main gets the project root read-only. Writable paths the agent needs
-    // (group folder, IPC, .claude/) are mounted separately below.
-    // Read-only prevents the agent from modifying host application code
-    // (src/, dist/, package.json, etc.) which would bypass the sandbox
-    // entirely on next restart.
+    // Empty marker so `test -d /workspace/project` works as a main-channel
+    // detection heuristic without exposing any host files (especially .env).
+    const markerDir = path.join(DATA_DIR, 'marker-project');
+    fs.mkdirSync(markerDir, { recursive: true });
     mounts.push({
-      hostPath: projectRoot,
+      hostPath: markerDir,
       containerPath: '/workspace/project',
       readonly: true,
     });
-
-    // .env shadowing is handled inside the container entrypoint via mount --bind
-    // (Apple Container only supports directory mounts, not file mounts like /dev/null)
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -341,24 +337,15 @@ async function buildContainerArgs(
   args.push(...hostGatewayArgs());
 
   // Run as host user so bind-mounted files are accessible.
-  // On Windows (getuid unavailable), run as the container's node user (uid 1000)
-  // because Claude Code refuses --dangerously-skip-permissions as root.
+  // Claude Code refuses --dangerously-skip-permissions as root, so we must
+  // always specify a non-root user.
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
-  if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    if (isMain) {
-      // Main containers start as root so the entrypoint can mount --bind
-      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
-      args.push('-e', `RUN_UID=${hostUid}`);
-      args.push('-e', `RUN_GID=${hostGid}`);
-    } else {
-      args.push('--user', `${hostUid}:${hostGid}`);
-    }
-  } else if (hostUid == null) {
-    // Windows: getuid unavailable — run as node user to avoid root restriction.
-    // Claude Code refuses --dangerously-skip-permissions as root.
-    // The .env shadowing (mount --bind) in the entrypoint requires root, but
-    // Credentials are injected by the credential proxy, not read from .env inside the container.
+  if (hostUid != null && hostUid !== 0) {
+    args.push('--user', `${hostUid}:${hostGid}`);
+  } else {
+    // Root host or Windows (getuid unavailable) — run as the container's
+    // node user (uid 1000) to avoid the root restriction.
     args.push('--user', '1000:1000');
   }
   // Always set HOME=/home/node — .claude/ settings are mounted there.

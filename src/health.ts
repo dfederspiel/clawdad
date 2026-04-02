@@ -4,11 +4,23 @@
  * through setup before they try to use agents.
  */
 import { execSync } from 'child_process';
+import os from 'os';
 
-import { CONTAINER_IMAGE } from './config.js';
-import { CONTAINER_RUNTIME_BIN } from './container-runtime.js';
+import { CONTAINER_IMAGE, CREDENTIAL_PROXY_PORT } from './config.js';
+import {
+  CONTAINER_HOST_GATEWAY,
+  CONTAINER_RUNTIME_BIN,
+  hostGatewayArgs,
+} from './container-runtime.js';
+import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+
+export interface SmokeTestResult {
+  status: 'passed' | 'failed' | 'skipped';
+  error?: string;
+  claudeVersion?: string;
+}
 
 export interface HealthStatus {
   docker: {
@@ -25,6 +37,7 @@ export interface HealthStatus {
     status: 'built' | 'not_found';
     image: string;
   };
+  container_smoke?: SmokeTestResult;
   overall: 'ready' | 'needs_setup';
 }
 
@@ -79,6 +92,64 @@ function checkContainerImage(): HealthStatus['container_image'] {
     };
   } catch {
     return { status: 'not_found', image: CONTAINER_IMAGE };
+  }
+}
+
+/**
+ * Spawn a throwaway container that runs `claude --version` to verify:
+ * - Container image works
+ * - UID/permissions are correct (Claude Code refuses root)
+ * - Credential proxy is reachable
+ *
+ * Call after the credential proxy is started.
+ */
+export function checkContainerSmoke(): SmokeTestResult {
+  const args: string[] = ['run', '--rm', '--entrypoint', 'npx'];
+
+  // Match the UID logic from container-runner to catch permission issues
+  const hostUid = process.getuid?.();
+  const hostGid = process.getgid?.();
+  if (hostUid != null && hostUid !== 0) {
+    args.push('--user', `${hostUid}:${hostGid}`);
+  } else {
+    args.push('--user', '1000:1000');
+  }
+
+  // Credential env vars (same as container-runner)
+  args.push(
+    '-e',
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    '-e',
+    'HOME=/home/node',
+  );
+  const authMode = detectAuthMode();
+  if (authMode === 'api-key') {
+    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+  } else {
+    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Host gateway for container→host networking
+  args.push(...hostGatewayArgs());
+
+  args.push(CONTAINER_IMAGE, 'claude', '--version');
+
+  try {
+    const output = execSync(
+      `${CONTAINER_RUNTIME_BIN} ${args.map((a) => `'${a}'`).join(' ')}`,
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        encoding: 'utf-8',
+        timeout: 30000,
+      },
+    );
+    const version = output.trim().split('\n').pop()?.trim();
+    return { status: 'passed', claudeVersion: version };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Extract meaningful part from Docker/Claude Code errors
+    const stderr = (err as { stderr?: string })?.stderr?.trim();
+    return { status: 'failed', error: stderr || msg };
   }
 }
 

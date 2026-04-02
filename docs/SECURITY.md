@@ -85,7 +85,7 @@ Real Anthropic credentials **never enter containers**. ClawDad uses a built-in c
 
 | Capability | Main Group | Non-Main Group |
 |------------|------------|----------------|
-| Project root access | `/workspace/project` (ro) | None |
+| Project marker | `/workspace/project` (empty, ro) | None |
 | Group folder | `/workspace/group` (rw) | `/workspace/group` (rw) |
 | Global memory | Implicit via project | `/workspace/global` (ro) |
 | Additional mounts | Configurable | Read-only unless allowed |

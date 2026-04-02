@@ -25,14 +25,9 @@ fi
 >
 > Let me scan your current setup first.
 
-Check what agents are running by examining available groups and tasks:
+Check what agents are running using MCP tools:
 
-```bash
-# Check for existing groups
-ls /workspace/project/groups/ 2>/dev/null || echo "NO_PROJECT_ACCESS"
-```
-
-Use `list_tasks` MCP tool to see all scheduled tasks across groups.
+Use `mcp__nanoclaw__list_groups` to see registered groups and `mcp__nanoclaw__list_tasks` to see all scheduled tasks across groups.
 
 Present the dashboard:
 

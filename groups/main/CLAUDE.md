@@ -39,11 +39,11 @@ When a user asks to create an agent:
 
 1. **Understand the goal** — what do they want the agent to do? This is a teaching moment: help them think about scope, triggers, and what data the agent needs.
 
-2. **Pick or create a template** — check if an existing template in `/workspace/project/templates/` fits. If not, create one with a CLAUDE.md and meta.json.
+2. **Pick or create a template** — use `mcp__nanoclaw__list_templates` to see available templates. If none fit, create one from scratch.
 
 3. **Register the group** — use `mcp__nanoclaw__register_group` with JID `web:{name}` and folder `web_{name}`.
 
-4. **Write the agent's CLAUDE.md** — copy or customize the template into `/workspace/project/groups/{folder}/CLAUDE.md`.
+4. **Write the agent's CLAUDE.md** — write directly to `/workspace/group/../web_{name}/CLAUDE.md` or use the MCP tools to set up the group.
 
 5. **Set up scheduling** if the use case implies recurring behavior (e.g., "daily digest" → schedule a cron task).
 
@@ -70,16 +70,14 @@ Anthropic credentials are resolved automatically from Claude Code's credential s
 
 ## Container Mounts
 
-Main has read-only access to the project and read-write access to its group folder:
+Main has read-write access to its group folder. `/workspace/project` is an empty marker directory used only for main-channel detection — it does not contain host files.
 
 | Container Path | Host Path | Access |
 |----------------|-----------|--------|
-| `/workspace/project` | Project root | read-only |
+| `/workspace/project` | Empty marker | read-only |
 | `/workspace/group` | `groups/main/` | read-write |
 
-Key paths inside the container:
-- `/workspace/project/store/messages.db` — SQLite database
-- `/workspace/project/groups/` — All group folders
+Use MCP tools (`mcp__nanoclaw__*`) to interact with groups, templates, and system state — not filesystem paths.
 
 ## Managing Groups
 
@@ -118,14 +116,11 @@ The directory appears at `/workspace/extra/webapp` in that group's container.
 
 ### Removing a Group
 
-1. Read `/workspace/project/data/registered_groups.json`
-2. Remove the entry for that group
-3. Write the updated JSON back
-4. The group folder and files remain (don't delete them)
+Use `mcp__nanoclaw__unregister_group` with the group's JID. The group folder and files remain on disk.
 
 ## Global Memory
 
-Read and write to `/workspace/project/groups/global/CLAUDE.md` for facts that apply to all groups. Only update when explicitly asked to "remember this globally."
+Use `mcp__nanoclaw__update_global_memory` to write facts that apply to all groups. Only update when explicitly asked to "remember this globally."
 
 ## Scheduling for Other Groups
 

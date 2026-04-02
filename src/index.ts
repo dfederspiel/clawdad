@@ -15,6 +15,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
+import { checkContainerSmoke } from './health.js';
 import './channels/index.js';
 import {
   ChannelOpts,
@@ -976,6 +977,22 @@ async function main(): Promise<void> {
     CREDENTIAL_PROXY_PORT,
     PROXY_BIND_HOST,
   );
+
+  // Verify containers can actually run (catches UID issues, bad tokens, etc.)
+  if (containerReady) {
+    const smoke = checkContainerSmoke();
+    if (smoke.status === 'passed') {
+      logger.info(
+        { version: smoke.claudeVersion },
+        'Container smoke test passed',
+      );
+    } else {
+      logger.error(
+        { error: smoke.error },
+        'Container smoke test FAILED — agents may not work',
+      );
+    }
+  }
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {

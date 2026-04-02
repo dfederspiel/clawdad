@@ -143,7 +143,10 @@ def build_mounts(folder: str, is_main: bool) -> list[tuple[str, str, bool]]:
 
     mounts: list[tuple[str, str, bool]] = []
     if is_main:
-        mounts.append((str(NANOCLAW_DIR), "/workspace/project", True))
+        # Empty marker directory for main-channel detection heuristic
+        marker_dir = NANOCLAW_DIR / "data" / "marker-project"
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        mounts.append((str(marker_dir), "/workspace/project", True))
     mounts.append((str(group_dir),           "/workspace/group",    False))
     mounts.append((str(sessions_dir / ".claude"), "/home/node/.claude", False))
     mounts.append((str(ipc_dir),             "/workspace/ipc",      False))

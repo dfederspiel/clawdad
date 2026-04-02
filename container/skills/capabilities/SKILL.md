@@ -7,7 +7,7 @@ description: Show what this NanoClaw instance can do — installed skills, avail
 
 Generate a structured read-only report of what this NanoClaw instance can do.
 
-**Main-channel check:** Only the main channel has `/workspace/project` mounted. Run:
+**Main-channel check:** Only the main channel has the `/workspace/project` marker directory. Run:
 
 ```bash
 test -d /workspace/project && echo "MAIN" || echo "NOT_MAIN"
