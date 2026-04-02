@@ -1,0 +1,15 @@
+{
+  "triggerScope": "web-all",
+  "requiresTrigger": true,
+  "description": "Ghost writer for the Procedural blog. @Ghost Writer from any chat to start a post.",
+  "containerConfig": {
+    "additionalMounts": [
+      {
+        "hostPath": "/home/david/code/procedural",
+        "containerPath": "procedural",
+        "readonly": false
+      }
+    ],
+    "timeout": 600000
+  }
+}

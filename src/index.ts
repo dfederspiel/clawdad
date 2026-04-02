@@ -191,6 +191,37 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     return;
   }
 
+  // Apply group-config.json from the group folder if present.
+  // Allows groups to declare containerConfig, triggerScope, description, etc.
+  // on disk so they survive DB resets and are version-controllable.
+  const groupConfigPath = path.join(groupDir, 'group-config.json');
+  if (fs.existsSync(groupConfigPath)) {
+    try {
+      const diskConfig = JSON.parse(fs.readFileSync(groupConfigPath, 'utf-8'));
+      if (diskConfig.containerConfig && !group.containerConfig) {
+        group.containerConfig = diskConfig.containerConfig;
+      }
+      if (diskConfig.triggerScope && !group.triggerScope) {
+        group.triggerScope = diskConfig.triggerScope;
+      }
+      if (diskConfig.requiresTrigger != null && group.requiresTrigger == null) {
+        group.requiresTrigger = diskConfig.requiresTrigger;
+      }
+      if (diskConfig.description && !group.description) {
+        group.description = diskConfig.description;
+      }
+      logger.info(
+        { folder: group.folder },
+        'Applied group-config.json from group folder',
+      );
+    } catch (err) {
+      logger.warn(
+        { folder: group.folder, err },
+        'Failed to parse group-config.json',
+      );
+    }
+  }
+
   registeredGroups[jid] = group;
   setRegisteredGroup(jid, group);
 
