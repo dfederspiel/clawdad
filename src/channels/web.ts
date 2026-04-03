@@ -199,7 +199,13 @@ export class WebChannel implements Channel {
     isTyping: boolean,
     threadId?: string,
   ): Promise<void> {
-    this.broadcast('typing', { jid, isTyping, thread_id: threadId });
+    const agentName = isTyping ? getActiveAgentName(jid) : undefined;
+    this.broadcast('typing', {
+      jid,
+      isTyping,
+      thread_id: threadId,
+      agent_name: agentName,
+    });
   }
 
   /** Broadcast an achievement unlock to all connected clients. */
@@ -232,7 +238,12 @@ export class WebChannel implements Channel {
     chatJid: string,
     event: { tool?: string; summary: string; timestamp: string },
   ): void {
-    this.broadcast('agent_progress', { jid: chatJid, ...event });
+    const agentName = getActiveAgentName(chatJid);
+    this.broadcast('agent_progress', {
+      jid: chatJid,
+      ...event,
+      agent_name: agentName,
+    });
   }
 
   broadcastUsageUpdate(

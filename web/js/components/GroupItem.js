@@ -6,15 +6,22 @@ function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Persist drawer state per group across refreshes
+function getDrawerKey(jid) { return `clawdad-drawer-${jid}`; }
+function loadDrawerState(jid) { return localStorage.getItem(getDrawerKey(jid)) === '1'; }
+function saveDrawerState(jid, open) {
+  if (open) localStorage.setItem(getDrawerKey(jid), '1');
+  else localStorage.removeItem(getDrawerKey(jid));
+}
+
 function AgentRow({ agent }) {
-  // Small indented row for each agent in a multi-agent group
   const triggerLabel = agent.trigger
     ? agent.trigger.replace(/[\\^$.*+?()[\]{}|]/g, '').trim()
     : null;
 
   return html`
-    <div class="flex items-center gap-2 pl-9 pr-4 py-1 text-xs text-txt-2">
-      <span class="w-1.5 h-1.5 rounded-full bg-txt-muted/50 flex-shrink-0" />
+    <div class="flex items-center gap-2 pl-8 pr-4 py-1.5 text-xs text-txt-2 border-l-2 border-border/50 ml-4">
+      <span class="w-1 h-1 rounded-full bg-txt-muted/40 flex-shrink-0" />
       <span class="truncate flex-1">${esc(agent.displayName)}</span>
       ${triggerLabel && html`
         <span class="text-[9px] px-1 py-0.5 rounded bg-bg-3 text-txt-muted font-mono shrink-0">${esc(triggerLabel)}</span>
@@ -25,8 +32,10 @@ function AgentRow({ agent }) {
 
 export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
   const agents = group.agents || [];
-  const isMultiAgent = agents.length > 1;
-  const [expanded, setExpanded] = useState(false);
+  // Specialists only — coordinator is the group itself, not a sub-agent
+  const specialists = agents.filter(a => a.trigger);
+  const isMultiAgent = specialists.length > 0;
+  const [expanded, setExpanded] = useState(() => isMultiAgent && loadDrawerState(group.jid));
 
   const count = unread.value[group.jid] || 0;
   const isThinking = typingGroups.value[group.jid] || false;
@@ -50,37 +59,21 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
 
   function handleExpand(e) {
     e.stopPropagation();
-    setExpanded(!expanded);
+    const next = !expanded;
+    setExpanded(next);
+    saveDrawerState(group.jid, next);
   }
 
   return html`
     <div>
       <div class="${base} ${active}" onClick=${handleClick}>
-        ${isMultiAgent ? html`
-          <button
-            class="w-4 h-4 flex items-center justify-center text-txt-muted hover:text-txt transition-transform ${expanded ? 'rotate-90' : ''}"
-            onClick=${handleExpand}
-            title="${expanded ? 'Collapse' : 'Expand'} agents"
-          >
-            <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
-            </svg>
-          </button>
-        ` : html`
-          <span class="w-2 h-2 rounded-full flex-shrink-0 ${dotClass}" />
-        `}
+        <span class="w-2 h-2 rounded-full flex-shrink-0 ${dotClass}" />
         <div class="flex-1 min-w-0">
           <div class="truncate">${esc(group.name)}</div>
           ${group.subtitle && html`
             <div class="text-[10px] text-txt-muted truncate leading-tight">${esc(group.subtitle)}</div>
           `}
-          ${isMultiAgent && !expanded && html`
-            <div class="text-[10px] text-txt-muted leading-tight">${agents.length} agents</div>
-          `}
         </div>
-        ${isMultiAgent && html`
-          <span class="w-2 h-2 rounded-full flex-shrink-0 ${dotClass}" />
-        `}
         ${group.isSystem && html`
           <span class="text-[10px] px-1.5 py-0.5 rounded bg-bg-3 text-txt-muted font-medium shrink-0">system</span>
         `}
@@ -96,6 +89,17 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
           </span>
         `}
         <div class="flex items-center gap-0.5 opacity-0 group-hover/item:opacity-100 transition-all shrink-0">
+          ${isMultiAgent && html`
+            <button
+              class="w-5 h-5 flex items-center justify-center rounded text-txt-muted hover:text-txt hover:bg-bg-hover text-xs"
+              title="${expanded ? 'Collapse' : 'Expand'} agents"
+              onClick=${handleExpand}
+            >
+              <svg class="w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+              </svg>
+            </button>
+          `}
           ${onSettings && html`
             <button
               class="w-5 h-5 flex items-center justify-center rounded text-txt-muted hover:text-txt hover:bg-bg-hover text-xs"
@@ -117,8 +121,8 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
         </div>
       </div>
       ${isMultiAgent && expanded && html`
-        <div class="bg-bg-2">
-          ${agents.map(a => html`<${AgentRow} key=${a.id} agent=${a} />`)}
+        <div class="pb-1">
+          ${specialists.map(a => html`<${AgentRow} key=${a.id} agent=${a} />`)}
         </div>
       `}
     </div>

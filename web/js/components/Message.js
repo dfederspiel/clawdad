@@ -3,6 +3,20 @@ import { useState } from 'preact/hooks';
 import { parseBlocks } from '../block-parser.js';
 import { BlockRenderer } from './blocks/BlockRenderer.js';
 import { md } from '../markdown.js';
+import { selectedGroup } from '../app.js';
+
+// Consistent color for each agent name (hash → HSL hue)
+const AGENT_COLORS = {};
+function agentColor(name) {
+  if (AGENT_COLORS[name]) return AGENT_COLORS[name];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const hue = ((hash % 360) + 360) % 360;
+  AGENT_COLORS[name] = `hsl(${hue}, 60%, 65%)`;
+  return AGENT_COLORS[name];
+}
 
 function formatTokens(n) {
   if (!n) return '0';
@@ -74,6 +88,11 @@ export function Message({ role, content, timestamp, senderName, isError, compact
     : new Date().toLocaleTimeString();
   const [expanded, setExpanded] = useState(false);
 
+  const group = selectedGroup.value;
+  const isMultiAgent = group && group.agents && group.agents.length > 1;
+  const showAgentBadge = isAssistant && isMultiAgent && senderName;
+  const nameColor = showAgentBadge ? agentColor(senderName) : null;
+
   const sizeClass = compact ? 'px-3 py-2 text-xs' : 'px-4 py-3 text-sm';
 
   const bubbleClass = isAssistant
@@ -85,14 +104,18 @@ export function Message({ role, content, timestamp, senderName, isError, compact
   const blocks = isAssistant ? parseBlocks(content) : null;
 
   return html`
-    <div class="${sizeClass} leading-relaxed ${bubbleClass} ${errorClass} overflow-hidden break-words">
+    <div class="${sizeClass} leading-relaxed ${bubbleClass} ${errorClass} overflow-hidden break-words"
+      ${showAgentBadge ? { style: `border-left: 3px solid ${nameColor}` } : {}}>
+      ${showAgentBadge && html`
+        <div class="text-[11px] font-semibold mb-1" style="color: ${nameColor}">${senderName}</div>
+      `}
       ${blocks
         ? html`<div class="block-container">
             ${blocks.map((block, i) => html`<${BlockRenderer} key=${i} block=${block} />`)}
           </div>`
         : html`<div class="prose" dangerouslySetInnerHTML=${{ __html: md(content) }} />`}
       <div class="text-[11px] text-txt-muted mt-1.5">
-        ${senderName ? `${senderName} \u00B7 ${time}` : time}
+        ${senderName && !showAgentBadge ? `${senderName} \u00B7 ${time}` : time}
       </div>
       ${isAssistant && usage && html`
         <${UsageFooter}

@@ -618,29 +618,105 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   }
 
-  // When multiple agents are triggered from the same user message, only run
-  // the first-mentioned agent. The cross-agent mechanism handles handoffs —
-  // if the first agent tags another in its output, that agent runs next with
-  // proper context. Running all simultaneously causes confusion (each agent
-  // sees instructions meant for the others).
-  if (triggeredAgents.length > 1) {
-    const combinedText = missedMessages.map((m) => m.content).join('\n');
-    triggeredAgents.sort((a, b) => {
-      const posA = a.trigger ? combinedText.indexOf(a.trigger) : Infinity;
-      const posB = b.trigger ? combinedText.indexOf(b.trigger) : Infinity;
-      return (posA === -1 ? Infinity : posA) - (posB === -1 ? Infinity : posB);
-    });
-    // Only keep the first-mentioned agent; others will be triggered via cross-agent routing
-    const first = triggeredAgents[0];
-    triggeredAgents.length = 1;
-    logger.info(
-      {
-        group: group.name,
-        primary: first.name,
-        deferred: agents.filter((a) => a.id !== first.id).map((a) => a.name),
-      },
-      'Multi-agent: running first-mentioned agent, others deferred to cross-agent routing',
-    );
+  const responseJid = originJid || chatJid;
+  const responseChannel = originJid
+    ? findChannel(channels, originJid) || channel
+    : channel;
+
+  // When multiple specialist agents are @-mentioned, run them in parallel
+  // via the delegation queue. The coordinator (if any) is excluded from
+  // parallel fan-out — only explicitly triggered specialists run concurrently.
+  if (triggeredAgents.length > 1 && isMultiAgent) {
+    const specialists = triggeredAgents.filter((a) => a.trigger);
+    const coordinator = triggeredAgents.find((a) => !a.trigger);
+
+    if (specialists.length > 1) {
+      const MENTION_TIMEOUT = 120_000; // 2 minutes, same as coordinator delegations
+
+      logger.info(
+        {
+          group: group.name,
+          agents: specialists.map((a) => a.name),
+          hasCoordinator: !!coordinator,
+        },
+        'Multi-agent: running @-mentioned specialists in parallel',
+      );
+
+      for (const agent of specialists) {
+        const savedConfig = group.containerConfig;
+        const taskId = `mention-${agent.name}-${Date.now()}`;
+        queue.enqueueDelegation(chatJid, taskId, async () => {
+          group.containerConfig = {
+            ...savedConfig,
+            timeout: Math.min(
+              savedConfig?.timeout || Infinity,
+              MENTION_TIMEOUT,
+            ),
+          };
+          const multiAgentCtx = buildMultiAgentContext(agent, agents);
+          const agentPrompt = multiAgentCtx ? multiAgentCtx + prompt : prompt;
+
+          setActiveAgentName(responseJid, agent.displayName);
+          await responseChannel.setTyping?.(responseJid, true, threadId);
+
+          const status = await runAgent(
+            group,
+            agentPrompt,
+            chatJid,
+            async (result) => {
+              if (result.result) {
+                const raw =
+                  typeof result.result === 'string'
+                    ? result.result
+                    : JSON.stringify(result.result);
+                const text = raw
+                  .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                  .trim();
+                if (text) {
+                  setActiveAgentName(responseJid, agent.displayName);
+                  await responseChannel.sendMessage(
+                    responseJid,
+                    text,
+                    threadId,
+                  );
+                }
+              }
+              if (result.status === 'success' || result.status === 'error') {
+                await responseChannel.setTyping?.(responseJid, false, threadId);
+              }
+            },
+            (event) => broadcastProgress(responseJid, event),
+            agent,
+            true, // isDelegation
+          );
+
+          group.containerConfig = savedConfig;
+          clearActiveAgentName(responseJid);
+          await responseChannel.setTyping?.(responseJid, false, threadId);
+
+          const resultNote =
+            status === 'error'
+              ? `[${agent.displayName} was unable to respond.]`
+              : `[${agent.displayName} has responded above.]`;
+          storeMessage({
+            id: `mention-result-${agent.name}-${Date.now()}`,
+            chat_jid: chatJid,
+            sender: 'system',
+            sender_name: 'System',
+            content: resultNote,
+            timestamp: new Date().toISOString(),
+            is_from_me: false,
+            is_bot_message: false,
+          });
+        });
+      }
+
+      // All specialists are enqueued. Return immediately — when all delegations
+      // complete, the queue automatically re-triggers processGroupMessages.
+      // If a coordinator exists, it will run THEN (seeing specialist output).
+      // If no coordinator, specialists' responses stand on their own.
+      return true;
+    }
   }
 
   logger.info(
@@ -652,15 +728,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     'Processing messages',
   );
 
-  const responseJid = originJid || chatJid;
-  const responseChannel = originJid
-    ? findChannel(channels, originJid) || channel
-    : channel;
-
   let anyError = false;
   let anyOutputSent = false;
 
-  // Run each triggered agent sequentially (concurrent execution in Phase 2)
+  // Run triggered agent(s) — typically one (coordinator or single specialist).
+  // Multiple specialists are handled above via parallel delegation.
   for (const agent of triggeredAgents) {
     // Build agent-specific prompt with multi-agent context
     const multiAgentCtx = buildMultiAgentContext(agent, agents);

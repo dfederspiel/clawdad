@@ -38,6 +38,7 @@ export const pendingInput = signal(''); // set externally to inject text into Ch
 export const usage = signal(null); // latest usage stats
 export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group latest run
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
+export const typingAgentName = signal({}); // { [jid]: string } — which agent is typing
 export const agentProgress = signal({}); // { [jid]: { tool, summary, history[] } }
 
 // --- SSE ---
@@ -104,11 +105,17 @@ api.onSSE('typing', (data) => {
     if (!typingStartTime.value[data.jid]) {
       typingStartTime.value = { ...typingStartTime.value, [data.jid]: Date.now() };
     }
+    if (data.agent_name) {
+      typingAgentName.value = { ...typingAgentName.value, [data.jid]: data.agent_name };
+    }
   } else {
     const next = { ...typingStartTime.value };
     delete next[data.jid];
     typingStartTime.value = next;
-    // Clear progress when agent stops typing
+    // Clear agent name and progress when agent stops typing
+    const names = { ...typingAgentName.value };
+    delete names[data.jid];
+    typingAgentName.value = names;
     const prog = { ...agentProgress.value };
     delete prog[data.jid];
     agentProgress.value = prog;
@@ -132,6 +139,9 @@ api.onSSE('agent_progress', (data) => {
     ...agentProgress.value,
     [data.jid]: { tool: data.tool, summary: data.summary, history: updated },
   };
+  if (data.agent_name) {
+    typingAgentName.value = { ...typingAgentName.value, [data.jid]: data.agent_name };
+  }
 });
 
 api.onSSE('usage_update', (data) => {
@@ -220,18 +230,22 @@ export async function loadGroups() {
   const data = await api.getGroups();
   groups.value = data.groups;
 
-  // Auto-select main group (or first) if nothing is selected.
+  // Auto-select: restore persisted selection, else main group, else first non-system.
   // Don't auto-select if only system groups exist — show onboarding instead.
   const hasTemplateGroups = data.groups.some((g) => !g.isSystem);
   if (!selectedJid.value && data.groups.length > 0 && hasTemplateGroups) {
+    const savedJid = localStorage.getItem('clawdad-selected-jid');
+    const saved = savedJid && data.groups.find((g) => g.jid === savedJid);
     const main = data.groups.find((g) => g.isMain && !g.isSystem)
       || data.groups.find((g) => !g.isSystem);
-    if (main) selectGroup(main.jid);
+    if (saved) selectGroup(saved.jid);
+    else if (main) selectGroup(main.jid);
   }
 }
 
 export async function selectGroup(jid) {
   selectedJid.value = jid;
+  localStorage.setItem('clawdad-selected-jid', jid);
 
   // Clear unread for this group
   const cur = { ...unread.value };
@@ -383,6 +397,7 @@ export async function deleteGroup(folder, jid) {
   if (selectedJid.value === jid) {
     selectedJid.value = null;
     messages.value = [];
+    localStorage.removeItem('clawdad-selected-jid');
   }
 
   await loadGroups();

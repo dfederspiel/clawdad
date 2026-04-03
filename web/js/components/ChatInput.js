@@ -12,6 +12,13 @@ export function ChatInput() {
   const ref = useRef(null);
   const menuRef = useRef(null);
 
+  // Refs so onKeyDown always sees current values (avoids stale closures)
+  const showMentionsRef = useRef(false);
+  const filteredRef = useRef([]);
+  const mentionIndexRef = useRef(0);
+  showMentionsRef.current = showMentions;
+  mentionIndexRef.current = mentionIndex;
+
   // Watch for external input injection (e.g. clicking an @mention in a message)
   useEffect(() => {
     if (pendingInput.value) {
@@ -47,6 +54,7 @@ export function ChatInput() {
     !mentionQuery || t.name.toLowerCase().includes(mentionQuery.toLowerCase())
       || t.trigger.toLowerCase().includes(mentionQuery.toLowerCase()),
   );
+  filteredRef.current = filtered;
 
   // Close menu on outside click
   useEffect(() => {
@@ -91,20 +99,27 @@ export function ChatInput() {
   }
 
   function onKeyDown(e) {
-    if (showMentions && filtered.length > 0) {
+    const menuOpen = showMentionsRef.current;
+    const items = filteredRef.current;
+    const idx = mentionIndexRef.current;
+    if (menuOpen && items.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setMentionIndex((i) => (i + 1) % filtered.length);
+        const next = (idx + 1) % items.length;
+        setMentionIndex(next);
+        mentionIndexRef.current = next;
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setMentionIndex((i) => (i - 1 + filtered.length) % filtered.length);
+        const next = (idx - 1 + items.length) % items.length;
+        setMentionIndex(next);
+        mentionIndexRef.current = next;
         return;
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
-        insertMention(filtered[mentionIndex]);
+        insertMention(items[idx]);
         return;
       }
       if (e.key === 'Escape') {
@@ -158,7 +173,7 @@ export function ChatInput() {
               type="button"
               key=${t.jid}
               class="w-full text-left px-3 py-2 flex flex-col gap-0.5 transition-colors ${
-                i === mentionIndex ? 'bg-accent/20' : 'hover:bg-bg-hover/50'
+                i === mentionIndex ? 'bg-bg-hover border-l-2 border-accent' : 'hover:bg-bg-hover/50 border-l-2 border-transparent'
               }"
               onMouseEnter=${() => setMentionIndex(i)}
               onClick=${() => insertMention(t)}

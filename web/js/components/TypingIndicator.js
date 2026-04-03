@@ -1,12 +1,13 @@
 import { html } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
-import { selectedJid, typingStartTime, agentProgress } from '../app.js';
+import { selectedJid, typingStartTime, typingAgentName, agentProgress } from '../app.js';
 
 export function TypingIndicator() {
   const [elapsed, setElapsed] = useState(0);
   const jid = selectedJid.value;
   const startTime = typingStartTime.value[jid];
   const progress = agentProgress.value[jid];
+  const agentName = typingAgentName.value[jid];
 
   useEffect(() => {
     if (!startTime) { setElapsed(0); return; }
@@ -29,7 +30,7 @@ export function TypingIndicator() {
   return html`
     <div class="self-start bg-asstbg border border-border rounded-2xl rounded-bl-sm px-4 py-3 max-w-[90%]">
       <div class="flex items-center gap-2">
-        <span class="text-xs text-txt-muted mr-1">Thinking${timeStr ? html`<span class="font-mono ml-1.5 text-txt-2">${timeStr}</span>` : ''}</span>
+        <span class="text-xs text-txt-muted mr-1">${agentName ? html`<span class="font-medium text-txt-2">${agentName}</span> is thinking` : 'Thinking'}${timeStr ? html`<span class="font-mono ml-1.5 text-txt-2">${timeStr}</span>` : ''}</span>
         <span class="typing-dot" />
         <span class="typing-dot" />
         <span class="typing-dot" />
