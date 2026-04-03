@@ -474,6 +474,21 @@ export function getAvailableGroups(): import('./container-runner.js').AvailableG
 }
 
 /** @internal - exported for testing */
+/**
+ * Determines whether a group requires a trigger pattern match before processing.
+ * Multi-agent groups always bypass — the coordinator handles untriggered messages.
+ * Exported for testing.
+ */
+export function needsTriggerForGroup(
+  isMainGroup: boolean,
+  isMultiAgent: boolean,
+  requiresTrigger: boolean | undefined,
+): boolean {
+  if (isMainGroup) return false;
+  if (isMultiAgent) return false;
+  return requiresTrigger !== false;
+}
+
 export function _setRegisteredGroups(
   groups: Record<string, RegisteredGroup>,
 ): void {
@@ -575,8 +590,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // --- End session command interception ---
 
   // For non-main single-agent groups, check if trigger is required and present.
-  // Multi-agent groups bypass: the coordinator handles untriggered messages.
-  if (!isMainGroup && !isMultiAgent && group.requiresTrigger !== false) {
+  if (needsTriggerForGroup(isMainGroup, isMultiAgent, group.requiresTrigger)) {
     const triggerPattern = getTriggerPattern(group.trigger);
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
@@ -1404,11 +1418,11 @@ async function startMessageLoop(): Promise<void> {
 
           const agents = groupAgents[chatJid] || [];
           const isMultiAgent = agents.length > 1;
-          // Multi-agent groups bypass the trigger gate: the coordinator
-          // handles untriggered messages, specialist routing happens
-          // inside processGroupMessages via trigger matching.
-          const needsTrigger =
-            !isMainGroup && !isMultiAgent && group.requiresTrigger !== false;
+          const needsTrigger = needsTriggerForGroup(
+            isMainGroup,
+            isMultiAgent,
+            group.requiresTrigger,
+          );
 
           // For non-main single-agent groups, only act on trigger messages.
           // Non-trigger messages accumulate in DB and get pulled as

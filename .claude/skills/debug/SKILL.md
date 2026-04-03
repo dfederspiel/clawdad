@@ -1,6 +1,6 @@
 ---
 name: debug
-description: Debug container agent issues. Use when things aren't working, container fails, authentication problems, multi-agent delegation chains stall, or to understand how the container system works. Covers logs, environment variables, mounts, multi-agent orchestration tracing, and common issues.
+description: Debug container agent issues. Use when things aren't working, container fails, authentication problems, multi-agent delegation chains stall, messages not being processed, message routing issues, or to understand how the container system works. Covers logs, environment variables, mounts, multi-agent orchestration tracing, warm pool diagnostics, and common issues.
 ---
 
 # NanoClaw Container Debugging
