@@ -442,7 +442,8 @@ Before optimizing the lifecycle, make it visible.
 1. Add `work_state` SSE event type and `broadcastWorkState` helper
 2. Emit from existing queue transition points (queued, working, delegating, idle)
 3. Frontend: store `workStateByJid` signal, add chat-level status banner
-4. This gives us baseline visibility for everything that follows
+4. Add tool-level cost visibility — persist per-tool token usage from agent runs and surface in the telemetry panel and per-message usage footer. This creates a natural feedback loop: users see which tools are expensive, agents/orchestrators can use the data to adapt behavior over time. Visibility, not control — no truncation or gates.
+5. This gives us baseline visibility for everything that follows
 
 ### Phase B: Warm Coordinator Pool (3-5 days)
 

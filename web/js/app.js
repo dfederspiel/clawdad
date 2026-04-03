@@ -281,6 +281,7 @@ export async function selectGroup(jid) {
       timestamp: m.timestamp,
       senderName: m.sender_name,
       usage: parsedUsage,
+      toolHistory: parsedUsage?.toolHistory || [],
     };
   });
   const dbIds = new Set(dbMessages.map((m) => m.id));

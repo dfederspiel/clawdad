@@ -1003,6 +1003,25 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
+  // Accumulate tool history from progress events for persistence
+  const toolHistory: Array<{
+    tool: string;
+    summary: string;
+    timestamp: string;
+  }> = [];
+  const wrappedOnProgress = onProgress
+    ? (event: ProgressEvent) => {
+        if (event.tool) {
+          toolHistory.push({
+            tool: event.tool,
+            summary: event.summary,
+            timestamp: event.timestamp,
+          });
+        }
+        onProgress(event);
+      }
+    : undefined;
+
   // Wrap onOutput to track session ID and usage from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
@@ -1035,8 +1054,16 @@ async function runAgent(
             duration_ms: u.durationMs,
             num_turns: u.numTurns,
             is_error: output.status === 'error',
+            tool_history:
+              toolHistory.length > 0 ? JSON.stringify(toolHistory) : null,
           });
-          attachUsageToLastBotMessage(chatJid, JSON.stringify(u));
+          attachUsageToLastBotMessage(
+            chatJid,
+            JSON.stringify({
+              ...u,
+              toolHistory: toolHistory.length > 0 ? toolHistory : undefined,
+            }),
+          );
           broadcastUsage(chatJid, u);
           logger.info(
             {
@@ -1070,7 +1097,7 @@ async function runAgent(
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
-      onProgress,
+      wrappedOnProgress,
     );
 
     if (output.status === 'error') {

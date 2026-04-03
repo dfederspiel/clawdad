@@ -48,6 +48,14 @@ const PLACEHOLDER_RE = /__CRED_([A-Z0-9_]+)__/g;
 const CREDENTIAL_PATTERN =
   /^(?!ANTHROPIC_|CLAUDE_CODE_).+_(TOKEN|KEY|SECRET|PASSWORD)$/;
 
+const DEFAULT_ALLOWED_HOSTS: Record<string, string[]> = {
+  GITHUB: ['github.com', '.github.com'],
+  GITLAB: ['gitlab.com', '.gitlab.com'],
+  ATLASSIAN: ['api.atlassian.com', '.atlassian.net'],
+  LAUNCHDARKLY: ['app.launchdarkly.com'],
+  FIGMA: ['api.figma.com', '.figma.com'],
+};
+
 /** Build a map from placeholder string → real value using current .env. */
 export function buildCredMap(
   env?: Record<string, string>,
@@ -71,6 +79,156 @@ export function substituteCredentials(
   // Reset lastIndex after the test above
   PLACEHOLDER_RE.lastIndex = 0;
   return input.replace(PLACEHOLDER_RE, (match) => credMap[match] ?? match);
+}
+
+function extractPlaceholders(input: string): string[] {
+  const matches = input.match(PLACEHOLDER_RE);
+  PLACEHOLDER_RE.lastIndex = 0;
+  return matches ? [...new Set(matches)] : [];
+}
+
+function extractPlaceholdersFromHeader(key: string, value: string): string[] {
+  if (key === 'authorization') {
+    const basicMatch = value.match(/^Basic\s+(.+)$/i);
+    if (basicMatch) {
+      try {
+        const decoded = Buffer.from(basicMatch[1], 'base64').toString('utf-8');
+        return extractPlaceholders(decoded);
+      } catch {
+        return [];
+      }
+    }
+  }
+  return extractPlaceholders(value);
+}
+
+function hostnameMatchesPattern(hostname: string, pattern: string): boolean {
+  const host = hostname.toLowerCase();
+  const normalized = pattern.toLowerCase();
+  if (normalized.startsWith('.')) {
+    const suffix = normalized.slice(1);
+    return host === suffix || host.endsWith(`.${suffix}`);
+  }
+  return host === normalized;
+}
+
+function getCredentialPrefix(placeholder: string): string | null {
+  const match = placeholder.match(/^__CRED_([A-Z0-9]+)(?:_|$)/);
+  return match ? match[1] : null;
+}
+
+function getEnvDeclaredHostsForPrefix(
+  prefix: string,
+  env: Record<string, string>,
+): string[] {
+  const hosts = new Set<string>();
+  for (const [key, value] of Object.entries(env)) {
+    if (!value || !key.startsWith(`${prefix}_`)) continue;
+    if (
+      !(
+        key.endsWith('_URL') ||
+        key.endsWith('_BASE_URL') ||
+        key.endsWith('_API_URL')
+      )
+    ) {
+      continue;
+    }
+    try {
+      const parsed = new URL(value);
+      hosts.add(parsed.hostname.toLowerCase());
+    } catch {
+      // Ignore non-URL values
+    }
+  }
+  return [...hosts];
+}
+
+export function isAllowedCredentialTarget(
+  placeholder: string,
+  targetUrl: string,
+  env?: Record<string, string>,
+): boolean {
+  const vars = env ?? readEnvFile();
+  const realKey = placeholder.replace(/^__CRED_/, '').replace(/__$/, '');
+  if (!vars[realKey]) {
+    // Unknown or unset placeholders are not sensitive.
+    return true;
+  }
+
+  let hostname: string;
+  try {
+    hostname = new URL(targetUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+
+  const prefix = getCredentialPrefix(placeholder);
+  if (!prefix) return false;
+
+  const allowed = new Set<string>(DEFAULT_ALLOWED_HOSTS[prefix] || []);
+  for (const host of getEnvDeclaredHostsForPrefix(prefix, vars)) {
+    allowed.add(host);
+  }
+
+  if (allowed.size === 0) {
+    // No allowlist configured for this prefix — allow but warn.
+    // Known services (GITHUB, GITLAB, etc.) always have an allowlist via
+    // DEFAULT_ALLOWED_HOSTS. Unknown/custom prefixes without a *_URL env
+    // var get through with a warning so existing integrations don't break.
+    // Users can lock them down by adding <PREFIX>_BASE_URL to .env.
+    logger.warn(
+      { placeholder, target: targetUrl, prefix },
+      'Credential forwarded without host allowlist — add a *_URL env var for this prefix to restrict targets',
+    );
+    return true;
+  }
+
+  return [...allowed].some((pattern) =>
+    hostnameMatchesPattern(hostname, pattern),
+  );
+}
+
+function validateForwardTarget(
+  req: import('http').IncomingMessage,
+  rawBody: Buffer,
+  targetUrl: string,
+  credMap: Record<string, string>,
+  env?: Record<string, string>,
+): { ok: true } | { ok: false; reason: string } {
+  const placeholders = new Set<string>();
+
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (typeof value === 'string') {
+      for (const match of extractPlaceholdersFromHeader(key, value)) {
+        placeholders.add(match);
+      }
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        for (const match of extractPlaceholdersFromHeader(key, item)) {
+          placeholders.add(match);
+        }
+      }
+    }
+  }
+
+  if (rawBody.length > 0 && rawBody.length <= MAX_SUB_BODY) {
+    const bodyStr = rawBody.toString('utf-8');
+    for (const match of extractPlaceholders(bodyStr)) {
+      placeholders.add(match);
+    }
+  }
+
+  for (const placeholder of placeholders) {
+    if (!(placeholder in credMap)) continue;
+    if (!isAllowedCredentialTarget(placeholder, targetUrl, env)) {
+      return {
+        ok: false,
+        reason: `Credential placeholder ${placeholder} is not allowed for target host`,
+      };
+    }
+  }
+
+  return { ok: true };
 }
 
 // ── Max body size for substitution (10 MB) ──────────────────────────
@@ -299,13 +457,30 @@ function handleForward(
 
   // Re-read .env on every request so newly-registered credentials work
   // without restarting anything.  The file is <1 KB — cost is negligible.
-  const credMap = buildCredMap();
+  // Single read: env snapshot is threaded through validation helpers.
+  const env = readEnvFile();
+  const credMap = buildCredMap(env);
+  const validation = validateForwardTarget(
+    req,
+    rawBody,
+    targetUrl,
+    credMap,
+    env,
+  );
+  if (!validation.ok) {
+    logger.warn(
+      { target: targetUrl, reason: validation.reason },
+      'Credential proxy /forward blocked request',
+    );
+    res.writeHead(403);
+    res.end('Credential forwarding blocked for target host');
+    return;
+  }
 
   logger.debug(
     {
       target: targetUrl,
-      credMapKeys: Object.keys(credMap),
-      hasGithubToken: '__CRED_GITHUB_TOKEN__' in credMap,
+      placeholderCount: Object.keys(credMap).length,
     },
     'Credential proxy /forward request',
   );

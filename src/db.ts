@@ -206,6 +206,13 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
   `);
 
+  // Add tool_history column to agent_runs (per-run tool call chain for visibility)
+  try {
+    database.exec(`ALTER TABLE agent_runs ADD COLUMN tool_history TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
@@ -1146,6 +1153,7 @@ export interface AgentRunRecord {
   duration_ms: number;
   num_turns: number;
   is_error: boolean;
+  tool_history?: string | null;
 }
 
 /**
@@ -1168,8 +1176,8 @@ export function attachUsageToLastBotMessage(
 
 export function storeAgentRun(run: AgentRunRecord): void {
   db.prepare(
-    `INSERT INTO agent_runs (chat_jid, group_folder, session_id, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms, num_turns, is_error)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO agent_runs (chat_jid, group_folder, session_id, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms, num_turns, is_error, tool_history)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     run.chat_jid,
     run.group_folder,
@@ -1183,6 +1191,7 @@ export function storeAgentRun(run: AgentRunRecord): void {
     run.duration_ms,
     run.num_turns,
     run.is_error ? 1 : 0,
+    run.tool_history || null,
   );
 }
 
@@ -1202,6 +1211,7 @@ export function getUsageStats(periodHours: number = 24): {
     output_tokens: number;
     cost_usd: number;
   }>;
+  topTools: Array<{ tool: string; count: number }>;
 } {
   const since = new Date(
     Date.now() - periodHours * 60 * 60 * 1000,
@@ -1249,6 +1259,30 @@ export function getUsageStats(periodHours: number = 24): {
     cost_usd: number;
   }>;
 
+  // Aggregate tool call counts from stored tool_history JSON
+  const toolRows = db
+    .prepare(
+      `SELECT tool_history FROM agent_runs WHERE timestamp > ? AND tool_history IS NOT NULL`,
+    )
+    .all(since) as Array<{ tool_history: string }>;
+
+  const toolCounts: Record<string, number> = {};
+  for (const row of toolRows) {
+    try {
+      const tools = JSON.parse(row.tool_history) as Array<{ tool: string }>;
+      for (const t of tools) {
+        toolCounts[t.tool] = (toolCounts[t.tool] || 0) + 1;
+      }
+    } catch {
+      /* ignore malformed */
+    }
+  }
+
+  const topTools = Object.entries(toolCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 15)
+    .map(([tool, count]) => ({ tool, count }));
+
   return {
     totalInputTokens: totals.input_tokens,
     totalOutputTokens: totals.output_tokens,
@@ -1259,6 +1293,7 @@ export function getUsageStats(periodHours: number = 24): {
     totalDurationMs: totals.duration_ms,
     avgTurns: totals.avg_turns,
     byGroup,
+    topTools,
   };
 }
 

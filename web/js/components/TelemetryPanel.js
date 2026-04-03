@@ -106,6 +106,22 @@ export function TelemetryPanel() {
             </div>
           </div>
         `}
+
+        ${usg.topTools && usg.topTools.length > 0 && html`
+          <div class="col-span-2">
+            <span class="text-[10px] text-txt-muted uppercase tracking-wider">Top Tools (24h) <span class="normal-case">by call count</span></span>
+            <div class="mt-1 flex flex-col gap-0.5">
+              ${usg.topTools.slice(0, 8).map(
+                (t) => html`
+                  <div class="flex items-center justify-between text-[11px]">
+                    <span class="text-txt-2 font-mono truncate">${t.tool}</span>
+                    <span class="text-txt-muted font-mono ml-2">${t.count}x</span>
+                  </div>
+                `,
+              )}
+            </div>
+          </div>
+        `}
       `}
 
       ${tel.messagesPerGroup.length > 0 && html`
