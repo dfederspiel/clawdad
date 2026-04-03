@@ -77,6 +77,49 @@ groups/web_my-team/
 
 **Key files:** `src/agent-discovery.ts`, `src/agent-state.ts`, `src/group-queue.ts` (enqueueDelegation, runDelegation), `src/index.ts` (processGroupMessages, onDelegateToAgent), `container/agent-runner/src/ipc-mcp-stdio.ts` (delegate_to_agent tool), `src/channels/web.ts` (POST /api/teams)
 
+## Automation Rules (Phase 1: Logging Only)
+
+Deterministic orchestrator-level rules that evaluate on events and log what *would* fire, without executing actions. This avoids burning an LLM turn for obvious routing decisions.
+
+**How it works:**
+- Rules are defined in `group-config.json` under an `automation` array
+- The orchestrator evaluates rules on three event types: inbound messages, agent results, and task completions
+- Matched rules emit structured `[automation] rule matched (dry-run)` log entries
+- No actions execute in Phase 1 — this validates the rule schema and hook points
+
+**Rule format in `group-config.json`:**
+```json
+{
+  "automation": [
+    {
+      "id": "auto-review",
+      "enabled": true,
+      "when": { "event": "message", "pattern": "@review" },
+      "then": [{ "type": "delegate_to_agent", "agent": "reviewer", "silent": true }]
+    }
+  ]
+}
+```
+
+**Trigger types:**
+- `message` — fires on inbound messages. Optional filters: `pattern` (regex), `sender` (`"user"` or `"assistant"`)
+- `agent_result` — fires when an agent completes. Optional filters: `agent` (name), `contains` (substring)
+- `task_completed` — fires when a scheduled task succeeds. Optional filters: `taskId`, `groupFolder`
+
+**Action types (logged but not executed in Phase 1):**
+- `delegate_to_agent` — route to a specific agent (`agent`, `silent`, `messageTemplate`)
+- `fan_out` — route to multiple agents (`agents[]`, `silent`)
+- `post_system_note` — emit a system message (`text`, `visible`)
+- `set_subtitle` — update group subtitle (`text`)
+
+**Hook points:**
+- `src/index.ts` `processGroupMessages` — evaluates on messages (after trigger checks) and agent results (on success)
+- `src/task-scheduler.ts` `runTask` — evaluates on task completion
+
+**Key files:** `src/automation-rules.ts` (types, loader, evaluator, trace emitter), `src/automation-rules.test.ts`
+
+**Design doc:** `docs/design-orchestrator-automation-rules.md` — full design with Phase 2-4 roadmap (live delegation, group UI, trace viewer)
+
 ## Usage Tracking & Cost Observability
 
 Every agent run records token usage, cost, duration, and turn count. This data is critical for optimization — expensive or slow operations should be flagged and investigated.

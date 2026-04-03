@@ -18,6 +18,7 @@ import {
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
+import { evaluateAutomationRules } from './automation-rules.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
@@ -228,6 +229,16 @@ async function runTask(
       { taskId: task.id, durationMs: Date.now() - startTime },
       'Task completed',
     );
+
+    // Evaluate automation rules on task completion (Phase 1: logging only)
+    if (!error) {
+      evaluateAutomationRules(task.group_folder, {
+        type: 'task_completed',
+        groupJid: task.chat_jid,
+        groupFolder: task.group_folder,
+        taskId: task.id,
+      });
+    }
   } catch (err) {
     if (closeTimer) clearTimeout(closeTimer);
     await deps.setTyping?.(task.chat_jid, false);

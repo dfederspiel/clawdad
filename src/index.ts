@@ -98,6 +98,7 @@ import {
   loadPackAchievements,
   getAchievementsForContainer,
 } from './achievements.js';
+import { evaluateAutomationRules } from './automation-rules.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -569,6 +570,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       return true;
     }
   }
+  // Evaluate automation rules on inbound messages (Phase 1: logging only)
+  for (const msg of missedMessages) {
+    evaluateAutomationRules(group.folder, {
+      type: 'message',
+      groupJid: chatJid,
+      groupFolder: group.folder,
+      messageContent: msg.content,
+      senderType: msg.is_bot_message ? 'assistant' : 'user',
+    });
+  }
+
   const originJid = pendingOrigin?.originJid;
   const threadId = pendingOrigin?.threadId;
 
@@ -726,6 +738,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           clearActiveAgentName(responseJid);
           await responseChannel.setTyping?.(responseJid, false, threadId);
 
+          // Evaluate automation rules on agent result (Phase 1: logging only)
+          if (status === 'success') {
+            evaluateAutomationRules(group.folder, {
+              type: 'agent_result',
+              groupJid: chatJid,
+              groupFolder: group.folder,
+              agentName: agent.name,
+            });
+          }
+
           const resultNote =
             status === 'error'
               ? `[${agent.displayName} was unable to respond.]`
@@ -794,6 +816,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     let hadError = false;
     let outputSentForCurrentQuery = false;
     let outputSentToUser = false;
+    let automationFiredForAgent = false;
 
     const output = await runAgent(
       group,
@@ -828,6 +851,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         }
 
         if (result.status === 'success') {
+          // Evaluate automation rules on first success (Phase 1: logging only).
+          // Must fire here (not after runAgent returns) because non-delegation
+          // containers stay open in the piping loop — runAgent won't resolve
+          // until the container eventually exits.
+          if (!automationFiredForAgent) {
+            automationFiredForAgent = true;
+            evaluateAutomationRules(group.folder, {
+              type: 'agent_result',
+              groupJid: chatJid,
+              groupFolder: group.folder,
+              agentName: agent.name,
+            });
+          }
+
           queue.notifyIdle(chatJid);
           if (!outputSentForCurrentQuery && !result.result) {
             logger.warn(
@@ -1769,6 +1806,16 @@ async function main(): Promise<void> {
         group.containerConfig = savedConfig; // restore original config
         clearActiveAgentName(chatJid);
         await channel.setTyping?.(chatJid, false);
+
+        // Evaluate automation rules on delegation result (Phase 1: logging only)
+        if (status === 'success') {
+          evaluateAutomationRules(group.folder, {
+            type: 'agent_result',
+            groupJid: chatJid,
+            groupFolder: group.folder,
+            agentName: agent.name,
+          });
+        }
 
         // Store a system message so the coordinator sees the result attribution.
         // The queue re-triggers the coordinator when all delegations complete.
