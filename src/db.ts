@@ -213,6 +213,15 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add container_reuse column to agent_runs (warm pool telemetry)
+  try {
+    database.exec(
+      `ALTER TABLE agent_runs ADD COLUMN container_reuse TEXT DEFAULT 'cold_start'`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
@@ -1154,6 +1163,7 @@ export interface AgentRunRecord {
   num_turns: number;
   is_error: boolean;
   tool_history?: string | null;
+  container_reuse?: 'cold_start' | 'warm_reuse';
 }
 
 /**
@@ -1176,8 +1186,8 @@ export function attachUsageToLastBotMessage(
 
 export function storeAgentRun(run: AgentRunRecord): void {
   db.prepare(
-    `INSERT INTO agent_runs (chat_jid, group_folder, session_id, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms, num_turns, is_error, tool_history)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO agent_runs (chat_jid, group_folder, session_id, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms, num_turns, is_error, tool_history, container_reuse)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     run.chat_jid,
     run.group_folder,
@@ -1192,6 +1202,7 @@ export function storeAgentRun(run: AgentRunRecord): void {
     run.num_turns,
     run.is_error ? 1 : 0,
     run.tool_history || null,
+    run.container_reuse || 'cold_start',
   );
 }
 

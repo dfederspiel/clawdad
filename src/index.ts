@@ -1003,6 +1003,13 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
+  // Container lifecycle telemetry
+  const containerReuse: 'cold_start' | 'warm_reuse' = 'cold_start'; // will change with warm pool
+  logger.info(
+    { agent: agentId, chatJid, containerReuse, hasSession: !!sessionId },
+    'Container lifecycle decision',
+  );
+
   // Accumulate tool history from progress events for persistence
   const toolHistory: Array<{
     tool: string;
@@ -1056,6 +1063,7 @@ async function runAgent(
             is_error: output.status === 'error',
             tool_history:
               toolHistory.length > 0 ? JSON.stringify(toolHistory) : null,
+            container_reuse: containerReuse,
           });
           attachUsageToLastBotMessage(
             chatJid,
@@ -1065,12 +1073,17 @@ async function runAgent(
             }),
           );
           broadcastUsage(chatJid, u);
+          const cacheHitRatio =
+            u.cacheReadTokens /
+            Math.max(1, u.cacheReadTokens + u.cacheWriteTokens);
           logger.info(
             {
               agent: agentId,
               cost: u.costUsd,
               turns: u.numTurns,
               tokens: u.inputTokens + u.outputTokens,
+              cacheHitRatio: Math.round(cacheHitRatio * 100),
+              containerReuse,
             },
             'Agent run usage stored',
           );
