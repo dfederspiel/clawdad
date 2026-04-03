@@ -60,10 +60,46 @@ export interface AutomationTraceEntry {
   eventSummary: string;
 }
 
+// ── Safety controls ────────────────────────────────────────────────
+
+const MAX_CHAIN_DEPTH = 3;
+const DEFAULT_COOLDOWN_MS = 5_000;
+
+// Track recent rule fires for cooldown: ruleId → last fire timestamp
+const ruleCooldowns = new Map<string, number>();
+
+// Track chain depth per evaluation pass: groupFolder → depth
+const chainDepths = new Map<string, number>();
+
+export function resetChainDepth(groupFolder: string): void {
+  chainDepths.delete(groupFolder);
+}
+
+export function resetCooldowns(): void {
+  ruleCooldowns.clear();
+}
+
+function incrementChainDepth(groupFolder: string): number {
+  const depth = (chainDepths.get(groupFolder) || 0) + 1;
+  chainDepths.set(groupFolder, depth);
+  return depth;
+}
+
+function isOnCooldown(ruleId: string, cooldownMs?: number): boolean {
+  const last = ruleCooldowns.get(ruleId);
+  if (!last) return false;
+  return Date.now() - last < (cooldownMs ?? DEFAULT_COOLDOWN_MS);
+}
+
+function recordFire(ruleId: string): void {
+  ruleCooldowns.set(ruleId, Date.now());
+}
+
 // ── Rule loading ───────────────────────────────────────────────────
 
 export function loadGroupAutomationRules(
   groupFolder: string,
+  knownAgents?: string[],
 ): AutomationRule[] {
   let groupDir: string;
   try {
@@ -97,6 +133,37 @@ export function loadGroupAutomationRules(
         continue;
       }
       if (r.enabled === false) continue;
+
+      // Validate target agents exist in the group
+      if (knownAgents && knownAgents.length > 0) {
+        const actions = r.then as AutomationRuleAction[];
+        let hasInvalidTarget = false;
+        for (const action of actions) {
+          if (action.agent && !knownAgents.includes(action.agent)) {
+            logger.warn(
+              { groupFolder, ruleId: r.id, agent: action.agent, knownAgents },
+              '[automation] rule targets unknown agent, skipping',
+            );
+            hasInvalidTarget = true;
+            break;
+          }
+          if (action.agents) {
+            const unknown = action.agents.filter(
+              (a) => !knownAgents.includes(a),
+            );
+            if (unknown.length > 0) {
+              logger.warn(
+                { groupFolder, ruleId: r.id, unknownAgents: unknown },
+                '[automation] rule targets unknown agents, skipping',
+              );
+              hasInvalidTarget = true;
+              break;
+            }
+          }
+        }
+        if (hasInvalidTarget) continue;
+      }
+
       valid.push(r as unknown as AutomationRule);
     }
 
@@ -182,9 +249,29 @@ export function evaluateRules(
   rules: AutomationRule[],
   event: AutomationEvent,
 ): AutomationTraceEntry[] {
+  // Chain depth check — prevent cascading rule chains
+  const depth = incrementChainDepth(event.groupFolder);
+  if (depth > MAX_CHAIN_DEPTH) {
+    logger.warn(
+      { groupFolder: event.groupFolder, depth, maxDepth: MAX_CHAIN_DEPTH },
+      '[automation] chain depth exceeded, suppressing rules',
+    );
+    return [];
+  }
+
   const traces: AutomationTraceEntry[] = [];
   for (const rule of rules) {
+    // Per-rule cooldown
+    if (isOnCooldown(rule.id)) {
+      logger.debug(
+        { ruleId: rule.id, groupFolder: event.groupFolder },
+        '[automation] rule on cooldown, skipping',
+      );
+      continue;
+    }
+
     if (matchesTrigger(rule.when, event)) {
+      recordFire(rule.id);
       traces.push({
         timestamp: new Date().toISOString(),
         groupJid: event.groupJid,
@@ -223,8 +310,14 @@ export function emitTraces(traces: AutomationTraceEntry[]): void {
 export function evaluateAutomationRules(
   groupFolder: string,
   event: AutomationEvent,
+  knownAgents?: string[],
 ): void {
-  const rules = loadGroupAutomationRules(groupFolder);
+  // Reset chain depth on user-initiated events (messages start a new chain)
+  if (event.type === 'message') {
+    resetChainDepth(groupFolder);
+  }
+
+  const rules = loadGroupAutomationRules(groupFolder, knownAgents);
   if (rules.length === 0) return;
   const traces = evaluateRules(rules, event);
   if (traces.length > 0) {

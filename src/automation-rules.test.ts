@@ -9,6 +9,8 @@ import {
   emitTraces,
   evaluateRules,
   loadGroupAutomationRules,
+  resetChainDepth,
+  resetCooldowns,
 } from './automation-rules.js';
 
 // Mock fs and group-folder so we don't touch disk
@@ -18,6 +20,12 @@ vi.mock('./group-folder.js', () => ({
 }));
 
 const mockFs = vi.mocked(fs);
+
+// Reset safety control state before each test
+beforeEach(() => {
+  resetChainDepth('web_test-team');
+  resetCooldowns();
+});
 
 function makeRule(overrides: Partial<AutomationRule> = {}): AutomationRule {
   return {
@@ -341,6 +349,144 @@ describe('trace structure', () => {
       { type: 'delegate_to_agent', targetAgent: 'reviewer', silent: true },
       { type: 'fan_out', targetAgent: 'a, b', silent: false },
     ]);
+  });
+});
+
+describe('safety controls', () => {
+  beforeEach(() => {
+    resetChainDepth('web_test-team');
+  });
+
+  it('enforces chain depth limit', () => {
+    const event = makeEvent({ type: 'agent_result', agentName: 'a' });
+
+    // Use unique rule IDs to avoid cooldown interference
+    const rule1 = makeRule({ id: 'chain-1', when: { event: 'agent_result' } });
+    const rule2 = makeRule({ id: 'chain-2', when: { event: 'agent_result' } });
+    const rule3 = makeRule({ id: 'chain-3', when: { event: 'agent_result' } });
+    const rule4 = makeRule({ id: 'chain-4', when: { event: 'agent_result' } });
+
+    // First 3 evaluations should work (depth 1, 2, 3)
+    expect(evaluateRules([rule1], event)).toHaveLength(1);
+    expect(evaluateRules([rule2], event)).toHaveLength(1);
+    expect(evaluateRules([rule3], event)).toHaveLength(1);
+
+    // 4th should be suppressed (depth > 3)
+    expect(evaluateRules([rule4], event)).toHaveLength(0);
+  });
+
+  it('resets chain depth on message events via evaluateAutomationRules', () => {
+    const event = makeEvent({ type: 'agent_result', agentName: 'a' });
+
+    // Exhaust chain depth with unique rule IDs
+    evaluateRules(
+      [makeRule({ id: 'r-1', when: { event: 'agent_result' } })],
+      event,
+    );
+    evaluateRules(
+      [makeRule({ id: 'r-2', when: { event: 'agent_result' } })],
+      event,
+    );
+    evaluateRules(
+      [makeRule({ id: 'r-3', when: { event: 'agent_result' } })],
+      event,
+    );
+    expect(
+      evaluateRules(
+        [makeRule({ id: 'r-4', when: { event: 'agent_result' } })],
+        event,
+      ),
+    ).toHaveLength(0);
+
+    // Reset and verify
+    resetChainDepth('web_test-team');
+    resetCooldowns();
+    expect(
+      evaluateRules(
+        [makeRule({ id: 'r-5', when: { event: 'agent_result' } })],
+        event,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('enforces per-rule cooldown', () => {
+    const rule = makeRule({ id: 'cooldown-test' });
+    const event = makeEvent();
+
+    resetChainDepth('web_test-team');
+    // First fire should work
+    expect(evaluateRules([rule], event)).toHaveLength(1);
+
+    resetChainDepth('web_test-team');
+    // Second fire within cooldown should be skipped
+    expect(evaluateRules([rule], event)).toHaveLength(0);
+  });
+
+  it('validates target agents at load time', () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readFileSync.mockReturnValue(
+      JSON.stringify({
+        automation: [
+          {
+            id: 'valid',
+            enabled: true,
+            when: { event: 'message' },
+            then: [{ type: 'delegate_to_agent', agent: 'analyst' }],
+          },
+          {
+            id: 'invalid-target',
+            enabled: true,
+            when: { event: 'message' },
+            then: [{ type: 'delegate_to_agent', agent: 'nonexistent' }],
+          },
+        ],
+      }),
+    );
+    const rules = loadGroupAutomationRules('web_test-team', [
+      'analyst',
+      'writer',
+    ]);
+    expect(rules).toHaveLength(1);
+    expect(rules[0].id).toBe('valid');
+  });
+
+  it('validates fan_out target agents', () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readFileSync.mockReturnValue(
+      JSON.stringify({
+        automation: [
+          {
+            id: 'bad-fanout',
+            enabled: true,
+            when: { event: 'message' },
+            then: [{ type: 'fan_out', agents: ['analyst', 'ghost'] }],
+          },
+        ],
+      }),
+    );
+    const rules = loadGroupAutomationRules('web_test-team', [
+      'analyst',
+      'writer',
+    ]);
+    expect(rules).toHaveLength(0);
+  });
+
+  it('skips target validation when knownAgents not provided', () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readFileSync.mockReturnValue(
+      JSON.stringify({
+        automation: [
+          {
+            id: 'any-target',
+            enabled: true,
+            when: { event: 'message' },
+            then: [{ type: 'delegate_to_agent', agent: 'whatever' }],
+          },
+        ],
+      }),
+    );
+    const rules = loadGroupAutomationRules('web_test-team');
+    expect(rules).toHaveLength(1);
   });
 });
 
