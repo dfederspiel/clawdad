@@ -4,6 +4,7 @@ import { selectedGroup, selectedJid, clearChat, messages } from '../app.js';
 import { MessageList } from './MessageList.js';
 import { ChatInput } from './ChatInput.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
+import { WorkStatusBanner } from './WorkStatusBanner.js';
 
 export function ChatView({ onOpenSidebar }) {
   const group = selectedGroup.value;
@@ -37,6 +38,7 @@ export function ChatView({ onOpenSidebar }) {
           >Clear chat</button>
         `}
       </div>
+      <${WorkStatusBanner} />
       <${MessageList} />
       <${ChatInput} />
     </div>

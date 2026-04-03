@@ -274,6 +274,10 @@ export class WebChannel implements Channel {
     });
   }
 
+  broadcastWorkState(event: import('../types.js').WorkStateEvent): void {
+    this.broadcast('work_state', event as unknown as Record<string, unknown>);
+  }
+
   broadcastUsageUpdate(
     chatJid: string,
     usage: {

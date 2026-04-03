@@ -40,6 +40,8 @@ export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group la
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
 export const typingAgentName = signal({}); // { [jid]: string } — which agent is typing
 export const agentProgress = signal({}); // { [jid]: { tool, summary, history[] } }
+export const workState = signal({}); // { [jid]: WorkStateEvent }
+export const currentWorkState = computed(() => workState.value[selectedJid.value] || null);
 
 // --- SSE ---
 
@@ -162,6 +164,10 @@ api.onSSE('usage_update', (data) => {
       }
     }
   }
+});
+
+api.onSSE('work_state', (data) => {
+  workState.value = { ...workState.value, [data.jid]: data };
 });
 
 api.onSSE('thread_created', async (data) => {

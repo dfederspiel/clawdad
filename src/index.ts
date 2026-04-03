@@ -128,6 +128,16 @@ function broadcastUsage(chatJid: string, usage: UsageData): void {
   }
 }
 
+/** Broadcast work-state lifecycle transitions to web UI clients */
+function broadcastWorkState(event: import('./types.js').WorkStateEvent): void {
+  for (const ch of channels) {
+    if (ch.name === 'web' && 'broadcastWorkState' in ch) {
+      (ch as any).broadcastWorkState(event);
+      break;
+    }
+  }
+}
+
 /** Broadcast agent progress (tool activity) to web UI clients */
 function broadcastProgress(chatJid: string, event: ProgressEvent): void {
   for (const ch of channels) {
@@ -813,6 +823,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     };
 
     await responseChannel.setTyping?.(responseJid, true, threadId);
+    broadcastWorkState({
+      jid: responseJid,
+      phase: 'thinking',
+      agent_name: agent.displayName,
+      agent_id: agent.id,
+      thread_id: threadId,
+      summary: `${agent.displayName} is thinking`,
+      updated_at: new Date().toISOString(),
+    });
     let hadError = false;
     let outputSentForCurrentQuery = false;
     let outputSentToUser = false;
@@ -895,6 +914,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     );
 
     await responseChannel.setTyping?.(responseJid, false, threadId);
+    broadcastWorkState({
+      jid: responseJid,
+      phase: hadError ? 'error' : 'completed',
+      agent_name: agent.displayName,
+      agent_id: agent.id,
+      summary: hadError
+        ? `${agent.displayName} encountered an error`
+        : `${agent.displayName} finished`,
+      updated_at: new Date().toISOString(),
+    });
     if (idleTimer) clearTimeout(idleTimer);
     clearActiveAgentName(responseJid);
 
@@ -1856,6 +1885,7 @@ async function main(): Promise<void> {
     },
   });
   queue.setProcessMessagesFn(processGroupMessages);
+  queue.setOnWorkState(broadcastWorkState);
   recoverPendingMessages();
 
   startMessageLoop().catch((err) => {

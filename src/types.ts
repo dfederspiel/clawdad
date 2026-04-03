@@ -77,6 +77,33 @@ export interface Agent {
   containerConfig?: ContainerConfig; // Agent-specific overrides
 }
 
+export type WorkPhase =
+  | 'queued'
+  | 'thinking'
+  | 'working'
+  | 'waiting'
+  | 'delegating'
+  | 'task_running'
+  | 'completed'
+  | 'error'
+  | 'idle';
+
+export interface WorkStateEvent {
+  jid: string;
+  phase: WorkPhase;
+  agent_name?: string;
+  agent_id?: string;
+  summary?: string;
+  thread_id?: string;
+  is_task?: boolean;
+  task_id?: string;
+  active_delegations?: number;
+  pending_delegations?: number;
+  pending_messages?: boolean;
+  idle_waiting?: boolean;
+  updated_at: string;
+}
+
 export interface ScheduledTask {
   id: string;
   group_folder: string;

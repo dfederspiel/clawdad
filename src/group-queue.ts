@@ -4,6 +4,7 @@ import path from 'path';
 
 import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
 import { logger } from './logger.js';
+import { WorkPhase, WorkStateEvent } from './types.js';
 
 interface QueuedTask {
   id: string;
@@ -36,6 +37,7 @@ export class GroupQueue {
   private waitingGroups: string[] = [];
   private processMessagesFn: ((groupJid: string) => Promise<boolean>) | null =
     null;
+  private onWorkStateFn: ((event: WorkStateEvent) => void) | null = null;
   private shuttingDown = false;
 
   private getGroup(groupJid: string): GroupState {
@@ -64,6 +66,29 @@ export class GroupQueue {
     this.processMessagesFn = fn;
   }
 
+  setOnWorkState(fn: (event: WorkStateEvent) => void): void {
+    this.onWorkStateFn = fn;
+  }
+
+  private emitWorkState(
+    groupJid: string,
+    phase: WorkPhase,
+    extra?: Partial<WorkStateEvent>,
+  ): void {
+    if (!this.onWorkStateFn) return;
+    const state = this.groups.get(groupJid);
+    this.onWorkStateFn({
+      jid: groupJid,
+      phase,
+      active_delegations: state?.activeDelegations ?? 0,
+      pending_delegations: state?.pendingDelegations.length ?? 0,
+      pending_messages: state?.pendingMessages ?? false,
+      idle_waiting: state?.idleWaiting ?? false,
+      updated_at: new Date().toISOString(),
+      ...extra,
+    });
+  }
+
   /**
    * Remove all queue state for a deleted group.
    * Must be called after stopping any active container.
@@ -84,6 +109,9 @@ export class GroupQueue {
       if (state.idleWaiting) {
         this.closeStdin(groupJid);
       }
+      this.emitWorkState(groupJid, 'queued', {
+        summary: 'Message queued behind active work',
+      });
       logger.debug({ groupJid }, 'Container active, message queued');
       return;
     }
@@ -93,6 +121,9 @@ export class GroupQueue {
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
       }
+      this.emitWorkState(groupJid, 'queued', {
+        summary: 'Waiting for container slot',
+      });
       logger.debug(
         { groupJid, activeCount: this.activeCount },
         'At concurrency limit, message queued',
@@ -168,6 +199,10 @@ export class GroupQueue {
     state.idleWaiting = true;
     if (state.pendingTasks.length > 0 || state.pendingMessages) {
       this.closeStdin(groupJid);
+    } else {
+      this.emitWorkState(groupJid, 'waiting', {
+        summary: 'Waiting for follow-up',
+      });
     }
   }
 
@@ -275,6 +310,9 @@ export class GroupQueue {
       },
       'Running delegation',
     );
+    this.emitWorkState(groupJid, 'delegating', {
+      summary: `Running delegation (${state.activeDelegations} active)`,
+    });
 
     try {
       await task.fn();
@@ -286,6 +324,11 @@ export class GroupQueue {
     } finally {
       state.activeDelegations--;
       this.activeCount--;
+      if (state.activeDelegations > 0) {
+        this.emitWorkState(groupJid, 'delegating', {
+          summary: `${state.activeDelegations} delegation(s) still active`,
+        });
+      }
 
       if (
         state.activeDelegations === 0 &&
@@ -339,6 +382,7 @@ export class GroupQueue {
       { groupJid, reason, activeCount: this.activeCount },
       'Starting container for group',
     );
+    this.emitWorkState(groupJid, 'working', { summary: 'Processing messages' });
 
     try {
       if (this.processMessagesFn) {
@@ -351,6 +395,9 @@ export class GroupQueue {
       }
     } catch (err) {
       logger.error({ groupJid, err }, 'Error processing messages for group');
+      this.emitWorkState(groupJid, 'error', {
+        summary: 'Error processing messages',
+      });
       this.scheduleRetry(groupJid, state);
     } finally {
       state.active = false;
@@ -358,6 +405,7 @@ export class GroupQueue {
       state.containerName = null;
       state.groupFolder = null;
       this.activeCount--;
+      this.emitWorkState(groupJid, 'idle');
       this.drainGroup(groupJid);
     }
   }
@@ -374,6 +422,11 @@ export class GroupQueue {
       { groupJid, taskId: task.id, activeCount: this.activeCount },
       'Running queued task',
     );
+    this.emitWorkState(groupJid, 'task_running', {
+      is_task: true,
+      task_id: task.id,
+      summary: 'Running scheduled task',
+    });
 
     try {
       await task.fn();
@@ -387,6 +440,7 @@ export class GroupQueue {
       state.containerName = null;
       state.groupFolder = null;
       this.activeCount--;
+      this.emitWorkState(groupJid, 'idle');
       this.drainGroup(groupJid);
     }
   }
