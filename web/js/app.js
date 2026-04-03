@@ -200,7 +200,25 @@ api.onSSE('thread_created', async (data) => {
 api.onSSE('user_message', (data) => {
   // Skip thread reply echo — optimistic update already added it
   if (data.message?.thread_id) return;
-  // Ignore echo for normal messages — optimistic update already shows them
+  // Add to message list if not already present.
+  // Dedup: match by ID (API/external messages) or by content + role
+  // (optimistic updates from this browser have no ID).
+  if (data.jid === selectedJid.value) {
+    const existing = messages.value;
+    const isDupe = existing.some((m) =>
+      (m.id && m.id === data.message.id) ||
+      (!m.id && m.role === 'user' && m.content === data.message.content)
+    );
+    if (!isDupe) {
+      messages.value = [...existing, {
+        id: data.message.id,
+        role: 'user',
+        content: data.message.content,
+        timestamp: data.message.timestamp,
+        senderName: data.message.sender_name,
+      }];
+    }
+  }
 });
 
 api.onSSE('achievement', (data) => {
