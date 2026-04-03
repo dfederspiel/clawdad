@@ -1211,6 +1211,7 @@ async function runAgent(
         const result = await warmHandle.queryOnce(
           wrappedOnOutput,
           wrappedOnProgress,
+          onText,
           timeoutMs,
         );
 
@@ -1271,6 +1272,7 @@ async function runAgent(
       const result = await handle.queryOnce(
         wrappedOnOutput,
         wrappedOnProgress,
+        onText,
         timeoutMs,
       );
 
@@ -1310,6 +1312,7 @@ async function runAgent(
         queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
       wrappedOnProgress,
+      onText,
     );
 
     if (output.status === 'error') {
