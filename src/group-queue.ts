@@ -25,6 +25,9 @@ interface GroupState {
   containerName: string | null;
   groupFolder: string | null;
   retryCount: number;
+  // Parallel delegation tracking — delegations bypass per-group serialization
+  activeDelegations: number;
+  pendingDelegations: QueuedTask[];
 }
 
 export class GroupQueue {
@@ -49,6 +52,8 @@ export class GroupQueue {
         containerName: null,
         groupFolder: null,
         retryCount: 0,
+        activeDelegations: 0,
+        pendingDelegations: [],
       };
       this.groups.set(groupJid, state);
     }
@@ -73,7 +78,8 @@ export class GroupQueue {
 
     const state = this.getGroup(groupJid);
 
-    if (state.active) {
+    // Group is busy if coordinator is active OR delegations are running
+    if (state.active || state.activeDelegations > 0) {
       state.pendingMessages = true;
       if (state.idleWaiting) {
         this.closeStdin(groupJid);
@@ -205,6 +211,119 @@ export class GroupQueue {
     }
   }
 
+  /**
+   * Check if a group has active or pending delegations.
+   */
+  hasDelegations(groupJid: string): boolean {
+    const state = this.groups.get(groupJid);
+    if (!state) return false;
+    return state.activeDelegations > 0 || state.pendingDelegations.length > 0;
+  }
+
+  /**
+   * Enqueue a delegation task. Delegations bypass per-group serialization
+   * (they can run alongside the coordinator and other delegations) but
+   * still count against the global MAX_CONCURRENT_CONTAINERS limit.
+   * When all delegations for a group complete, the coordinator is re-triggered.
+   */
+  enqueueDelegation(
+    groupJid: string,
+    taskId: string,
+    fn: () => Promise<void>,
+  ): void {
+    if (this.shuttingDown) return;
+
+    const state = this.getGroup(groupJid);
+
+    // Dedup
+    if (state.pendingDelegations.some((t) => t.id === taskId)) {
+      logger.debug({ groupJid, taskId }, 'Delegation already queued, skipping');
+      return;
+    }
+
+    if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
+      state.pendingDelegations.push({ id: taskId, groupJid, fn });
+      logger.debug(
+        { groupJid, taskId, activeCount: this.activeCount },
+        'At concurrency limit, delegation queued',
+      );
+      return;
+    }
+
+    this.runDelegation(groupJid, { id: taskId, groupJid, fn }).catch((err) =>
+      logger.error(
+        { groupJid, taskId, err },
+        'Unhandled error in runDelegation',
+      ),
+    );
+  }
+
+  private async runDelegation(
+    groupJid: string,
+    task: QueuedTask,
+  ): Promise<void> {
+    const state = this.getGroup(groupJid);
+    state.activeDelegations++;
+    this.activeCount++;
+
+    logger.debug(
+      {
+        groupJid,
+        taskId: task.id,
+        activeDelegations: state.activeDelegations,
+        activeCount: this.activeCount,
+      },
+      'Running delegation',
+    );
+
+    try {
+      await task.fn();
+    } catch (err) {
+      logger.error(
+        { groupJid, taskId: task.id, err },
+        'Error running delegation',
+      );
+    } finally {
+      state.activeDelegations--;
+      this.activeCount--;
+
+      if (
+        state.activeDelegations === 0 &&
+        state.pendingDelegations.length === 0
+      ) {
+        // All delegations complete — re-trigger coordinator
+        logger.info(
+          { groupJid },
+          'All delegations complete, re-triggering coordinator',
+        );
+        this.enqueueMessageCheck(groupJid);
+      } else {
+        // More delegations pending — drain them
+        this.drainDelegations(groupJid);
+      }
+      this.drainWaiting();
+    }
+  }
+
+  /**
+   * Launch pending delegations up to the global concurrency limit.
+   */
+  private drainDelegations(groupJid: string): void {
+    const state = this.getGroup(groupJid);
+    while (
+      state.pendingDelegations.length > 0 &&
+      this.activeCount < MAX_CONCURRENT_CONTAINERS
+    ) {
+      const task = state.pendingDelegations.shift()!;
+      this.runDelegation(groupJid, task).catch((err) =>
+        logger.error(
+          { groupJid, taskId: task.id, err },
+          'Unhandled error in runDelegation (drain)',
+        ),
+      );
+    }
+  }
+
   private async runForGroup(
     groupJid: string,
     reason: 'messages' | 'drain',
@@ -323,6 +442,9 @@ export class GroupQueue {
       return;
     }
 
+    // Drain any pending delegations
+    this.drainDelegations(groupJid);
+
     // Nothing pending for this group; check if other groups are waiting for a slot
     this.drainWaiting();
   }
@@ -367,6 +489,8 @@ export class GroupQueue {
       taskId: string | null;
       pendingMessages: boolean;
       pendingTaskCount: number;
+      activeDelegations: number;
+      pendingDelegationCount: number;
       containerName: string | null;
       groupFolder: string | null;
     }>;
@@ -377,7 +501,9 @@ export class GroupQueue {
       if (
         state.active ||
         state.pendingMessages ||
-        state.pendingTasks.length > 0
+        state.pendingTasks.length > 0 ||
+        state.activeDelegations > 0 ||
+        state.pendingDelegations.length > 0
       ) {
         groups.push({
           jid,
@@ -387,6 +513,8 @@ export class GroupQueue {
           taskId: state.runningTaskId,
           pendingMessages: state.pendingMessages,
           pendingTaskCount: state.pendingTasks.length,
+          activeDelegations: state.activeDelegations,
+          pendingDelegationCount: state.pendingDelegations.length,
           containerName: state.containerName,
           groupFolder: state.groupFolder,
         });

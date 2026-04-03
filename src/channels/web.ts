@@ -546,6 +546,137 @@ export class WebChannel implements Channel {
       return this.json(res, 201, { jid, group });
     }
 
+    // POST /api/teams — create a multi-agent team (coordinator + specialists)
+    if (method === 'POST' && url.pathname === '/api/teams') {
+      const body = await this.readBody(req);
+      const { name, folder, coordinator, specialists } = body as unknown as {
+        name: string;
+        folder: string;
+        coordinator: {
+          name?: string;
+          displayName?: string;
+          instructions?: string;
+        };
+        specialists: Array<{
+          name: string;
+          displayName?: string;
+          trigger: string;
+          instructions?: string;
+        }>;
+      };
+      if (
+        !name ||
+        !folder ||
+        !coordinator ||
+        !Array.isArray(specialists) ||
+        specialists.length === 0
+      ) {
+        return this.json(res, 400, {
+          error:
+            'name, folder, coordinator, and at least one specialist required',
+        });
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(folder)) {
+        return this.json(res, 400, {
+          error:
+            'folder must be alphanumeric with underscores/dashes, max 64 chars',
+        });
+      }
+      const jid = `web:${folder}`;
+      const existing = this.opts.registeredGroups();
+      if (existing[jid]) {
+        return this.json(res, 409, { error: 'Group already exists', jid });
+      }
+
+      // Validate specialist names are unique and valid
+      const names = new Set<string>();
+      const coordName = coordinator.name || 'coordinator';
+      names.add(coordName);
+      for (const spec of specialists) {
+        if (!spec.name || !spec.trigger) {
+          return this.json(res, 400, {
+            error: 'Each specialist needs a name and trigger',
+          });
+        }
+        const specName = spec.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+        if (names.has(specName)) {
+          return this.json(res, 400, {
+            error: `Duplicate agent name: ${specName}`,
+          });
+        }
+        names.add(specName);
+      }
+
+      const groupFolder = `web_${folder}`;
+      const groupDir = path.resolve(process.cwd(), 'groups', groupFolder);
+
+      // Group-level CLAUDE.md
+      fs.mkdirSync(groupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(groupDir, 'CLAUDE.md'),
+        `# ${name}\n\nMulti-agent team. See agents/ for individual agent instructions.\n`,
+      );
+
+      // Coordinator agent
+      const coordDir = path.join(groupDir, 'agents', coordName);
+      fs.mkdirSync(coordDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(coordDir, 'CLAUDE.md'),
+        coordinator.instructions ||
+          `# ${coordinator.displayName || 'Coordinator'}\n\nYou are the coordinator for the ${name} team.\n`,
+      );
+      fs.writeFileSync(
+        path.join(coordDir, 'agent.json'),
+        JSON.stringify(
+          { displayName: coordinator.displayName || 'Coordinator' },
+          null,
+          2,
+        ) + '\n',
+      );
+
+      // Specialist agents
+      for (const spec of specialists) {
+        const specName = spec.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+        const specDir = path.join(groupDir, 'agents', specName);
+        fs.mkdirSync(specDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(specDir, 'CLAUDE.md'),
+          spec.instructions ||
+            `# ${spec.displayName || spec.name}\n\nYou are a specialist on the ${name} team.\n`,
+        );
+        fs.writeFileSync(
+          path.join(specDir, 'agent.json'),
+          JSON.stringify(
+            {
+              displayName: spec.displayName || spec.name,
+              trigger: spec.trigger,
+            },
+            null,
+            2,
+          ) + '\n',
+        );
+      }
+
+      // Register the group
+      const group: RegisteredGroup = {
+        name,
+        folder: groupFolder,
+        trigger: `@${name}`,
+        added_at: new Date().toISOString(),
+        requiresTrigger: false,
+      };
+
+      this.opts.onRegisterGroup?.(jid, group);
+      this.opts.onChatMetadata(
+        jid,
+        new Date().toISOString(),
+        name,
+        'web',
+        true,
+      );
+      return this.json(res, 201, { jid, group });
+    }
+
     // DELETE /api/groups/:folder — delete a web group
     const deleteGroupMatch = url.pathname.match(
       /^\/api\/groups\/([A-Za-z0-9_-]+)$/,

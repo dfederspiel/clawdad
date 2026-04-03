@@ -3,6 +3,8 @@ import { useState, useRef, useEffect } from 'preact/hooks';
 import { createGroup } from '../app.js';
 import * as api from '../api.js';
 
+const DEFAULT_SPECIALIST = () => ({ name: '', displayName: '', trigger: '', instructions: '' });
+
 const TIER_META = {
   beginner: { label: 'Getting Started', desc: 'Learn the basics — each template guides you step by step' },
   advanced: { label: 'Advanced', desc: 'Power features — triggers, monitoring, and orchestration' },
@@ -34,7 +36,7 @@ function TemplateCard({ template, onSelect, creating }) {
 export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
   const dialogRef = useRef(null);
   const [templates, setTemplates] = useState([]);
-  const [view, setView] = useState('pick'); // 'pick' | 'name' | 'custom'
+  const [view, setView] = useState('pick'); // 'pick' | 'name' | 'custom' | 'team'
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [agentType, setAgentType] = useState('standalone');
   const [name, setName] = useState('');
@@ -44,6 +46,10 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
   const [manual, setManual] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  // Team creation state
+  const [teamCoordinator, setTeamCoordinator] = useState({ displayName: 'Coordinator', instructions: '' });
+  const [teamSpecialists, setTeamSpecialists] = useState([DEFAULT_SPECIALIST()]);
 
   useEffect(() => {
     if (open) {
@@ -141,6 +147,8 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
     setAgentType('standalone');
     setManual(false);
     setView('pick');
+    setTeamCoordinator({ displayName: 'Coordinator', instructions: '' });
+    setTeamSpecialists([DEFAULT_SPECIALIST()]);
   }
 
   async function onSubmit(e) {
@@ -173,6 +181,54 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
     }
   }
 
+  function updateSpecialist(index, field, value) {
+    setTeamSpecialists((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      if (field === 'name') {
+        next[index].trigger = `@${value}`;
+        if (!next[index].displayName) next[index].displayName = value;
+      }
+      return next;
+    });
+  }
+
+  function addSpecialist() {
+    setTeamSpecialists((prev) => [...prev, DEFAULT_SPECIALIST()]);
+  }
+
+  function removeSpecialist(index) {
+    setTeamSpecialists((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function onTeamSubmit(e) {
+    e.preventDefault();
+    if (!name.trim() || !folder.trim() || submitting) return;
+    const validSpecs = teamSpecialists.filter((s) => s.name.trim() && s.trigger.trim());
+    if (validSpecs.length === 0) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      await api.createTeam({
+        name: name.trim(),
+        folder: folder.trim(),
+        coordinator: teamCoordinator,
+        specialists: validSpecs.map((s) => ({
+          name: s.name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-'),
+          displayName: s.displayName.trim() || s.name.trim(),
+          trigger: s.trigger.trim(),
+          instructions: s.instructions.trim(),
+        })),
+      });
+      resetForm();
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   const isTriggered = agentType === 'triggered';
   const pillClass = (active) => active
     ? 'bg-accent text-bg border-accent font-semibold'
@@ -181,7 +237,7 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
   return html`
     <dialog
       ref=${dialogRef}
-      class="bg-bg-2 text-txt border border-border rounded-xl p-0 backdrop:bg-black/60 ${view === 'pick' ? 'max-w-2xl' : 'max-w-md'} w-full max-h-[85vh] flex flex-col overflow-hidden"
+      class="bg-bg-2 text-txt border border-border rounded-xl p-0 backdrop:bg-black/60 ${view === 'pick' || view === 'team' ? 'max-w-2xl' : 'max-w-md'} w-full max-h-[85vh] flex flex-col overflow-hidden"
       style=${{ display: open ? undefined : 'none' }}
       onClose=${() => { resetForm(); onClose(); }}
       onClick=${(e) => { if (e.target === dialogRef.current) { resetForm(); onClose(); } }}
@@ -230,12 +286,20 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
           </div>
 
           <div class="border-t border-border px-6 py-4 flex items-center justify-between">
-            <button
-              class="text-sm text-txt-muted hover:text-txt transition-colors"
-              onClick=${() => setView('custom')}
-            >
-              Create blank agent
-            </button>
+            <div class="flex gap-4">
+              <button
+                class="text-sm text-txt-muted hover:text-txt transition-colors"
+                onClick=${() => setView('custom')}
+              >
+                Create blank agent
+              </button>
+              <button
+                class="text-sm text-txt-muted hover:text-txt transition-colors"
+                onClick=${() => setView('team')}
+              >
+                Create team
+              </button>
+            </div>
             <button
               class="text-sm text-txt-muted hover:text-txt transition-colors"
               onClick=${() => { resetForm(); onClose(); }}
@@ -298,7 +362,7 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
             </button>
           </div>
         </form>
-      ` : html`
+      ` : view === 'custom' ? html`
         <form onSubmit=${onSubmit} class="p-6 flex flex-col gap-4">
           <div class="flex items-center justify-between">
             <h2 class="text-lg font-semibold">Custom Agent</h2>
@@ -418,6 +482,139 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
               disabled=${!name.trim() || !folder.trim() || (isTriggered && !description.trim()) || submitting}
             >
               ${submitting ? 'Creating...' : 'Create'}
+            </button>
+          </div>
+        </form>
+      ` : html`
+        <form onSubmit=${onTeamSubmit} class="p-6 flex flex-col gap-4 overflow-y-auto" style="max-height: 80vh">
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold">Create Agent Team</h2>
+            <button
+              type="button"
+              class="text-sm text-txt-muted hover:text-txt transition-colors"
+              onClick=${() => setView('pick')}
+            >
+              Back to templates
+            </button>
+          </div>
+
+          <p class="text-xs text-txt-muted">
+            A team has one coordinator that handles messages and delegates to specialists.
+          </p>
+
+          <label class="flex flex-col gap-1.5">
+            <span class="text-sm text-txt-2">Team name</span>
+            <input
+              type="text"
+              class="bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent"
+              placeholder="e.g. Research Team"
+              value=${name}
+              onInput=${onNameInput}
+              required
+            />
+          </label>
+
+          <label class="flex flex-col gap-1.5">
+            <span class="text-sm text-txt-2">Folder ID</span>
+            <input
+              type="text"
+              class="bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent font-mono"
+              placeholder="e.g. research-team"
+              pattern="[A-Za-z0-9][A-Za-z0-9_-]*"
+              value=${folder}
+              onInput=${onFolderInput}
+              required
+            />
+          </label>
+
+          <div class="border-t border-border pt-3 flex flex-col gap-2">
+            <h3 class="text-sm font-semibold text-txt">Coordinator</h3>
+            <p class="text-xs text-txt-muted">Handles all messages and delegates work to specialists.</p>
+            <input
+              type="text"
+              class="bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent"
+              placeholder="Display name"
+              value=${teamCoordinator.displayName}
+              onInput=${(e) => setTeamCoordinator((prev) => ({ ...prev, displayName: e.target.value }))}
+            />
+            <textarea
+              class="bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent resize-none"
+              rows="2"
+              placeholder="Instructions (optional) — what should the coordinator know?"
+              value=${teamCoordinator.instructions}
+              onInput=${(e) => setTeamCoordinator((prev) => ({ ...prev, instructions: e.target.value }))}
+            />
+          </div>
+
+          <div class="border-t border-border pt-3 flex flex-col gap-3">
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-semibold text-txt">Specialists</h3>
+              <button
+                type="button"
+                class="text-xs text-accent hover:brightness-110 transition-colors"
+                onClick=${addSpecialist}
+              >
+                + Add specialist
+              </button>
+            </div>
+
+            ${teamSpecialists.map((spec, i) => html`
+              <div key=${i} class="bg-bg-3 border border-border rounded-lg p-3 flex flex-col gap-2">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs text-txt-muted">Specialist ${i + 1}</span>
+                  ${teamSpecialists.length > 1 && html`
+                    <button
+                      type="button"
+                      class="text-xs text-txt-muted hover:text-err transition-colors"
+                      onClick=${() => removeSpecialist(i)}
+                    >
+                      Remove
+                    </button>
+                  `}
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt focus:outline-none focus:border-accent"
+                    placeholder="Name (e.g. analyst)"
+                    value=${spec.name}
+                    onInput=${(e) => updateSpecialist(i, 'name', e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt focus:outline-none focus:border-accent font-mono"
+                    placeholder="Trigger (e.g. @analyst)"
+                    value=${spec.trigger}
+                    onInput=${(e) => updateSpecialist(i, 'trigger', e.target.value)}
+                  />
+                </div>
+                <textarea
+                  class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt focus:outline-none focus:border-accent resize-none"
+                  rows="2"
+                  placeholder="Instructions — what is this specialist's role?"
+                  value=${spec.instructions}
+                  onInput=${(e) => updateSpecialist(i, 'instructions', e.target.value)}
+                />
+              </div>
+            `)}
+          </div>
+
+          ${error && html`<p class="text-sm text-err">${error}</p>`}
+
+          <div class="flex justify-end gap-3 mt-2">
+            <button
+              type="button"
+              class="px-4 py-2 text-sm text-txt-2 hover:text-txt transition-colors"
+              onClick=${() => { resetForm(); onClose(); }}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="px-4 py-2 bg-accent text-bg font-semibold rounded-lg text-sm hover:brightness-110 disabled:opacity-40 transition-all"
+              disabled=${!name.trim() || !folder.trim() || !teamSpecialists.some((s) => s.name.trim() && s.trigger.trim()) || submitting}
+            >
+              ${submitting ? 'Creating...' : 'Create Team'}
             </button>
           </div>
         </form>

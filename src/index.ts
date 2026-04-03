@@ -450,12 +450,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const pendingOrigin = pendingOrigins[chatJid];
   const isThreadReply = !!pendingOrigin?.threadId;
 
+  // Multi-agent coordinators need to see bot messages (specialist responses)
+  // so they can synthesize results after delegations complete.
+  const groupAgentList = groupAgents[chatJid] || [];
+  const isMultiAgent = groupAgentList.length > 1;
+
   const missedMessages = getMessagesSince(
     chatJid,
     getOrRecoverCursor(chatJid),
     ASSISTANT_NAME,
     MAX_MESSAGES_PER_PROMPT,
-    false, // includeBotMessages
+    isMultiAgent, // includeBotMessages — coordinators must see specialist output
     !isThreadReply, // excludeThreaded — but include thread replies when processing a thread agent
   );
 
@@ -704,6 +709,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             `Agent output: ${raw.length} chars → ${threadId ? 'thread' : 'main'}`,
           );
           if (text) {
+            // Re-set agent name before each send — parallel delegations
+            // on the same chatJid can clobber the shared activeAgentName
+            setActiveAgentName(responseJid, agent.displayName);
             await responseChannel.sendMessage(responseJid, text, threadId);
             outputSentToUser = true;
             outputSentForCurrentQuery = true;
@@ -1077,18 +1085,11 @@ async function startMessageLoop(): Promise<void> {
           let shouldPipe = true;
 
           if (isMultiAgent) {
-            const anyAgentTriggered = groupMessages.some((m) =>
-              agents.some(
-                (a) =>
-                  a.trigger &&
-                  buildAgentTriggerPattern(a.trigger).test(m.content.trim()),
-              ),
-            );
-            if (anyAgentTriggered) {
-              // A specific agent trigger was used — don't pipe to whatever
-              // container happens to be running; enqueue for proper routing.
-              shouldPipe = false;
-            }
+            // Multi-agent groups never pipe — all messages must route through
+            // processGroupMessages for proper agent routing, delegation context,
+            // and includeBotMessages handling. Piping would advance the cursor
+            // past specialist responses before the coordinator can see them.
+            shouldPipe = false;
           }
 
           if (shouldPipe && queue.sendMessage(chatJid, formatted)) {
@@ -1568,13 +1569,14 @@ async function main(): Promise<void> {
         'Processing agent delegation',
       );
 
-      // Queue the delegation as a task — this waits for the current container
-      // to finish, then runs the delegated agent in its own container.
-      // Use a shorter timeout for delegated agents to prevent queue blocking.
+      // Run the delegation in parallel — delegations bypass per-group
+      // serialization and can run alongside the coordinator and other
+      // delegations. The queue re-triggers the coordinator automatically
+      // when all delegations for a group complete.
       const savedConfig = group.containerConfig;
       const DELEGATION_TIMEOUT = 120_000; // 2 minutes
       const taskId = `delegation-${agent.name}-${Date.now()}`;
-      queue.enqueueTask(chatJid, taskId, async () => {
+      queue.enqueueDelegation(chatJid, taskId, async () => {
         group.containerConfig = {
           ...savedConfig,
           timeout: Math.min(
@@ -1615,11 +1617,15 @@ async function main(): Promise<void> {
                 .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                 .trim();
               if (text) {
+                // Set agent name right before sending — parallel delegations
+                // share the same chatJid so we must claim the name each time
+                setActiveAgentName(chatJid, agent.displayName);
                 await channel.sendMessage(chatJid, text);
               }
             }
+            // Delegation containers exit on their own (isDelegation skips
+            // the idle loop in agent-runner) — no notifyIdle needed.
             if (result.status === 'success') {
-              queue.notifyIdle(chatJid);
               await channel.setTyping?.(chatJid, false);
             }
             if (result.status === 'error') {
@@ -1635,9 +1641,8 @@ async function main(): Promise<void> {
         clearActiveAgentName(chatJid);
         await channel.setTyping?.(chatJid, false);
 
-        // Notify the coordinator that the delegation completed.
-        // Store a system message so the coordinator sees the result attribution,
-        // then enqueue a message check to re-trigger the coordinator.
+        // Store a system message so the coordinator sees the result attribution.
+        // The queue re-triggers the coordinator when all delegations complete.
         const resultNote =
           status === 'error'
             ? `[${agent.displayName} was unable to complete the delegated task.]`
@@ -1652,11 +1657,9 @@ async function main(): Promise<void> {
           is_from_me: false,
           is_bot_message: false,
         });
-        // Re-trigger the coordinator so it can review and continue orchestrating
-        queue.enqueueMessageCheck(chatJid);
         logger.info(
           { group: group.name, target: targetAgent, status },
-          'Delegation complete, notifying coordinator',
+          'Delegation complete',
         );
       });
     },

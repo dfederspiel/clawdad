@@ -871,6 +871,13 @@ async function main(): Promise<void> {
       // Emit session update so host can track it
       writeOutput({ status: 'success', result: null, newSessionId: sessionId });
 
+      // Delegation containers exit immediately after first response —
+      // no idle wait, no follow-up messages. Frees the concurrency slot.
+      if (containerInput.isDelegation) {
+        log('Delegation complete, exiting (no idle wait)');
+        break;
+      }
+
       log('Query ended, waiting for next IPC message...');
 
       // Wait for the next message or _close sentinel
