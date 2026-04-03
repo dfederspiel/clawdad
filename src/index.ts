@@ -405,6 +405,38 @@ function unregisterGroup(jid: string, group: RegisteredGroup): void {
   logger.info({ jid, name: group.name, folder: group.folder }, 'Group deleted');
 }
 
+function refreshGroupAgents(jid: string): Agent[] {
+  const group = registeredGroups[jid];
+  if (!group) return [];
+
+  try {
+    groupAgents[jid] = discoverAgents(group);
+  } catch (err) {
+    logger.warn(
+      { jid, err },
+      'Failed to refresh agents, using implicit default',
+    );
+    groupAgents[jid] = [
+      {
+        id: `${group.folder}/${DEFAULT_AGENT_NAME}`,
+        groupFolder: group.folder,
+        name: DEFAULT_AGENT_NAME,
+        displayName: group.name,
+      },
+    ];
+  }
+
+  logger.info(
+    {
+      jid,
+      agents: groupAgents[jid].map((a) => a.name),
+    },
+    'Group agents refreshed',
+  );
+
+  return groupAgents[jid];
+}
+
 /**
  * Get available groups list for the agent.
  * Returns groups ordered by most recent activity.
@@ -1437,6 +1469,13 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
     getGroupAgents: (jid: string) =>
       (groupAgents[jid] || []).map((a) => ({
+        id: a.id,
+        name: a.name,
+        displayName: a.displayName,
+        trigger: a.trigger,
+      })),
+    refreshGroupAgents: (jid: string) =>
+      refreshGroupAgents(jid).map((a) => ({
         id: a.id,
         name: a.name,
         displayName: a.displayName,

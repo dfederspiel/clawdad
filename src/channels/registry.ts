@@ -10,9 +10,13 @@ export interface ChannelOpts {
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
   /** Get agents for a group JID */
-  getGroupAgents?: (
-    jid: string,
-  ) => Array<{
+  getGroupAgents?: (jid: string) => Array<{
+    id: string;
+    name: string;
+    displayName: string;
+    trigger?: string;
+  }>;
+  refreshGroupAgents?: (jid: string) => Array<{
     id: string;
     name: string;
     displayName: string;

@@ -169,3 +169,32 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nanoclaw.plist
 # Rebuild after code changes
 npm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 ```
+
+## WSL Service Port Conflicts
+
+If the WSL/web instance should be running from `clawdad` but the UI is stale, routes 404 unexpectedly, or the service loops on startup, check for split ownership of the web UI port (`3456`) and credential proxy port (`3457`).
+
+**Typical symptom**:
+- `com-nanoclaw-clawdad.service` points at the right checkout but crashes with `EADDRINUSE 127.0.0.1:3457`
+- a stale `node` process or older `nanoclaw` service is still holding `3456` and/or `3457`
+
+**Recovery sequence**:
+```bash
+# Identify listeners
+lsof -iTCP:3456 -sTCP:LISTEN -n -P
+lsof -iTCP:3457 -sTCP:LISTEN -n -P
+
+# Kill stale listener(s) if they belong to an old checkout/process
+kill <pid>
+
+# Rebuild and restart the clawdad systemd user service
+cd /home/david/code/clawdad
+npm run build
+systemctl --user restart com-nanoclaw-clawdad.service
+systemctl --user status com-nanoclaw-clawdad.service --no-pager
+```
+
+**Known-good state**:
+- `3456` is served by `/home/david/code/clawdad/dist/index.js`
+- `3457` is owned by the same running `clawdad` process
+- `systemctl --user status com-nanoclaw-clawdad.service` shows `active (running)`
