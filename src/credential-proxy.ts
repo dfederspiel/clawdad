@@ -311,7 +311,15 @@ function handleForward(
   );
 
   // Build outbound headers with placeholder substitution
-  const parsed = new URL(targetUrl);
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    logger.warn({ targetUrl }, 'Credential proxy /forward: invalid URL');
+    res.writeHead(400);
+    res.end(`Invalid X-Forward-To URL: ${targetUrl}`);
+    return;
+  }
   const outIsHttps = parsed.protocol === 'https:';
   const makeRequest = outIsHttps ? httpsRequest : httpRequest;
 

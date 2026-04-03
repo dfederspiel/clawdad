@@ -1104,6 +1104,11 @@ async function runAgent(
         );
         delete sessions[agentId];
         deleteSession(agentId);
+        // Also clear the legacy group-folder key — session resolution falls
+        // back to sessions[group.folder] for default agents, so the stale ID
+        // would be picked up again on retry if only the agent key is cleared.
+        delete sessions[group.folder];
+        deleteSession(group.folder);
       }
       logger.error(
         { agent: agentId, error: output.error },
