@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useState, useRef, useEffect } from 'preact/hooks';
-import { createGroup } from '../app.js';
+import { createGroup, createTeam } from '../app.js';
 import * as api from '../api.js';
 
 const DEFAULT_SPECIALIST = () => ({ name: '', displayName: '', trigger: '', instructions: '' });
@@ -184,10 +184,16 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
   function updateSpecialist(index, field, value) {
     setTeamSpecialists((prev) => {
       const next = [...prev];
+      const previousName = next[index].name;
       next[index] = { ...next[index], [field]: value };
       if (field === 'name') {
         next[index].trigger = `@${value}`;
-        if (!next[index].displayName) next[index].displayName = value;
+        if (
+          !next[index].displayName ||
+          next[index].displayName === previousName
+        ) {
+          next[index].displayName = value;
+        }
       }
       return next;
     });
@@ -209,7 +215,7 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
     setSubmitting(true);
     setError('');
     try {
-      await api.createTeam({
+      await createTeam({
         name: name.trim(),
         folder: folder.trim(),
         coordinator: teamCoordinator,
@@ -588,6 +594,13 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
                     onInput=${(e) => updateSpecialist(i, 'trigger', e.target.value)}
                   />
                 </div>
+                <input
+                  type="text"
+                  class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt focus:outline-none focus:border-accent"
+                  placeholder="Display name (e.g. Analyst)"
+                  value=${spec.displayName}
+                  onInput=${(e) => updateSpecialist(i, 'displayName', e.target.value)}
+                />
                 <textarea
                   class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt focus:outline-none focus:border-accent resize-none"
                   rows="2"

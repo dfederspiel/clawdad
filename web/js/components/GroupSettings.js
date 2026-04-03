@@ -18,6 +18,7 @@ export function GroupSettings({ group, open, onClose }) {
   const [selectedSource, setSelectedSource] = useState('');
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentError, setAgentError] = useState('');
+  const [agentDisplayNames, setAgentDisplayNames] = useState({});
 
   useEffect(() => {
     if (!group || !open) return;
@@ -33,6 +34,12 @@ export function GroupSettings({ group, open, onClose }) {
     setSelectedSource('');
     setAgentBusy(false);
     setAgentError('');
+    setAgentDisplayNames(
+      Object.fromEntries((group.agents || []).map((agent) => [
+        agent.name,
+        agent.displayName || agent.name,
+      ])),
+    );
   }, [group?.jid, open]);
 
   if (!open || !group) return null;
@@ -126,6 +133,22 @@ export function GroupSettings({ group, open, onClose }) {
       await loadGroups();
     } catch (err) {
       setAgentError(err.message || 'Failed to remove agent');
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function handleSaveAgentDisplayName(name) {
+    if (agentBusy) return;
+    setAgentBusy(true);
+    setAgentError('');
+    try {
+      await api.updateGroupAgent(folderName, name, {
+        displayName: agentDisplayNames[name] || name,
+      });
+      await loadGroups();
+    } catch (err) {
+      setAgentError(err.message || 'Failed to update agent display name');
     } finally {
       setAgentBusy(false);
     }
@@ -251,9 +274,24 @@ export function GroupSettings({ group, open, onClose }) {
             <div class="flex flex-col gap-3">
               ${(group.agents || []).map((agent) => html`
                 <div class="border border-border rounded-lg px-3 py-2 flex items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <div class="text-sm text-txt font-medium">${agent.displayName || agent.name}</div>
-                    <div class="text-xs text-txt-muted font-mono">${agent.name}${agent.trigger ? ` · ${agent.trigger}` : ' · coordinator'}</div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex gap-2 items-center">
+                      <input
+                        type="text"
+                        class="flex-1 bg-bg border border-border rounded-lg px-2 py-1 text-sm text-txt focus:outline-none focus:border-accent"
+                        value=${agentDisplayNames[agent.name] ?? agent.displayName ?? agent.name}
+                        onInput=${(e) => setAgentDisplayNames((prev) => ({
+                          ...prev,
+                          [agent.name]: e.target.value,
+                        }))}
+                      />
+                      <button
+                        class="px-2 py-1 text-xs bg-bg-3 border border-border rounded-md text-txt-2 hover:border-accent disabled:opacity-50"
+                        onClick=${() => handleSaveAgentDisplayName(agent.name)}
+                        disabled=${agentBusy || (agentDisplayNames[agent.name] ?? agent.displayName ?? agent.name) === (agent.displayName || agent.name)}
+                      >Save</button>
+                    </div>
+                    <div class="text-xs text-txt-muted font-mono mt-1">${agent.name}${agent.trigger ? ` · ${agent.trigger}` : ' · coordinator'}</div>
                   </div>
                   <button
                     class="px-2 py-1 text-xs border border-border rounded-md text-txt-2 hover:border-red-400 hover:text-red-300 disabled:opacity-50"

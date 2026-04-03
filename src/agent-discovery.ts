@@ -53,6 +53,17 @@ export function discoverAgents(group: RegisteredGroup): Agent[] {
     return [makeImplicitAgent(group)];
   }
 
+  // Backward compatibility: if a legacy single-agent group gains its first
+  // explicit specialist, keep the original group-level agent as the default
+  // responder unless an explicit triggerless coordinator/default already exists.
+  const hasExplicitDefault = agents.some(
+    (agent) => agent.name === DEFAULT_AGENT_NAME,
+  );
+  const hasTriggerlessCoordinator = agents.some((agent) => !agent.trigger);
+  if (!hasExplicitDefault && !hasTriggerlessCoordinator) {
+    agents.unshift(makeImplicitAgent(group));
+  }
+
   logger.info(
     {
       group: group.folder,

@@ -458,6 +458,61 @@ export class WebChannel implements Channel {
       return this.refreshAgentsAndRespond(res, jid);
     }
 
+    // PATCH /api/groups/:folder/agents/:agent — update agent metadata
+    const patchAgentMatch = url.pathname.match(
+      /^\/api\/groups\/([A-Za-z0-9_-]+)\/agents\/([A-Za-z0-9_-]+)$/,
+    );
+    if (method === 'PATCH' && patchAgentMatch) {
+      const folderSlug = decodeURIComponent(patchAgentMatch[1]);
+      const agentName = decodeURIComponent(patchAgentMatch[2]);
+      const jid = `web:${folderSlug}`;
+      const group = this.opts.registeredGroups()[jid];
+      if (!group) {
+        return this.json(res, 404, { error: 'Group not found' });
+      }
+
+      const agentDir = path.join(
+        this.getGroupDir(group.folder),
+        'agents',
+        agentName,
+      );
+      const body = await this.readBody(req);
+      const { displayName, trigger } = body as {
+        displayName?: string;
+        trigger?: string;
+      };
+
+      if (!fs.existsSync(agentDir)) {
+        if (agentName === DEFAULT_AGENT_NAME) {
+          return this.json(res, 400, {
+            error:
+              'Implicit default agent metadata is inherited from the group',
+          });
+        }
+        return this.json(res, 404, { error: 'Agent folder not found' });
+      }
+
+      const configPath = path.join(agentDir, 'agent.json');
+      const config = this.readJsonFile(configPath);
+
+      if (displayName !== undefined) {
+        const trimmed = displayName.trim();
+        config.displayName = trimmed || agentName;
+      }
+
+      if (trigger !== undefined) {
+        const trimmed = trigger.trim();
+        if (trimmed) {
+          config.trigger = trimmed;
+        } else {
+          delete config.trigger;
+        }
+      }
+
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+      return this.refreshAgentsAndRespond(res, jid);
+    }
+
     // DELETE /api/groups/:folder/agents/:agent — remove an agent from a group
     const deleteAgentMatch = url.pathname.match(
       /^\/api\/groups\/([A-Za-z0-9_-]+)\/agents\/([A-Za-z0-9_-]+)$/,
@@ -734,6 +789,7 @@ export class WebChannel implements Channel {
         'web',
         true,
       );
+      this.broadcastGroupsChanged();
       return this.json(res, 201, { jid, group });
     }
 
@@ -865,6 +921,7 @@ export class WebChannel implements Channel {
         'web',
         true,
       );
+      this.broadcastGroupsChanged();
       return this.json(res, 201, { jid, group });
     }
 
@@ -889,6 +946,7 @@ export class WebChannel implements Channel {
         return this.json(res, 403, { error: 'Cannot delete system groups' });
       }
       this.opts.onDeleteGroup?.(jid, group);
+      this.broadcastGroupsChanged();
       return this.json(res, 200, { ok: true });
     }
 

@@ -105,6 +105,8 @@ export const updateGroup = (folder, data) =>
   fetchJson(`/api/groups/${encodeURIComponent(folder)}`, { method: 'PATCH', body: data });
 export const addGroupAgent = (folder, data) =>
   fetchJson(`/api/groups/${encodeURIComponent(folder)}/agents`, { method: 'POST', body: data });
+export const updateGroupAgent = (folder, agentName, data) =>
+  fetchJson(`/api/groups/${encodeURIComponent(folder)}/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', body: data });
 export const deleteGroupAgent = (folder, agentName) =>
   fetchJson(`/api/groups/${encodeURIComponent(folder)}/agents/${encodeURIComponent(agentName)}`, { method: 'DELETE' });
 export const getTranscript = (groupFolder) => fetchJson(`/api/transcript?group=${encodeURIComponent(groupFolder)}`);

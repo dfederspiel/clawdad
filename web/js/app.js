@@ -326,6 +326,14 @@ export async function createGroup(name, folder, template, opts = {}) {
   return result;
 }
 
+export async function createTeam(data) {
+  const result = await api.createTeam(data);
+  await loadGroups();
+  await loadTriggers();
+  selectGroup(result.jid);
+  return result;
+}
+
 export async function toggleThread(threadId) {
   const threads = openThreads.value;
   if (threads[threadId]) {
