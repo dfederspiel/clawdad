@@ -36,6 +36,8 @@ const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 const PROGRESS_START_MARKER = '---NANOCLAW_PROGRESS_START---';
 const PROGRESS_END_MARKER = '---NANOCLAW_PROGRESS_END---';
+const TEXT_START_MARKER = '---NANOCLAW_TEXT_START---';
+const TEXT_END_MARKER = '---NANOCLAW_TEXT_END---';
 
 export interface ProgressEvent {
   tool?: string;
@@ -76,6 +78,7 @@ export interface ContainerOutput {
   newSessionId?: string;
   error?: string;
   usage?: UsageData;
+  textsAlreadyStreamed?: number;
 }
 
 interface VolumeMount {
@@ -397,6 +400,7 @@ export async function runContainerAgent(
   onProcess: (proc: ChildProcess, containerName: string) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
   onProgress?: (event: ProgressEvent) => void,
+  onText?: (text: string) => Promise<void>,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
@@ -513,8 +517,8 @@ export async function runContainerAgent(
         }
       }
 
-      // Stream-parse for output and progress markers
-      if (onOutput || onProgress) {
+      // Stream-parse for output, progress, and text markers
+      if (onOutput || onProgress || onText) {
         parseBuffer += chunk;
 
         // Parse progress markers (lightweight, no Promise chain)
@@ -537,6 +541,28 @@ export async function runContainerAgent(
               /* ignore malformed progress */
             }
             // Activity detected — reset timeout
+            resetTimeout();
+          }
+        }
+
+        // Parse text markers (async, ordered via outputChain)
+        if (onText) {
+          let textStart: number;
+          while ((textStart = parseBuffer.indexOf(TEXT_START_MARKER)) !== -1) {
+            const textEnd = parseBuffer.indexOf(TEXT_END_MARKER, textStart);
+            if (textEnd === -1) break;
+            const textJson = parseBuffer
+              .slice(textStart + TEXT_START_MARKER.length, textEnd)
+              .trim();
+            parseBuffer = parseBuffer.slice(textEnd + TEXT_END_MARKER.length);
+            try {
+              const parsed = JSON.parse(textJson);
+              if (parsed.text) {
+                outputChain = outputChain.then(() => onText(parsed.text));
+              }
+            } catch {
+              /* ignore malformed text */
+            }
             resetTimeout();
           }
         }

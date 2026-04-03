@@ -22,6 +22,23 @@ Here's what I found...
 
 **CRITICAL:** Only use `<internal>` for brief reasoning notes (plan-of-action, self-reminders). NEVER wrap content meant for the user — drafts, summaries, reports, :::blocks, code output, or any deliverable — in `<internal>` tags. Everything inside `<internal>` is **permanently stripped** before delivery. If you compile a draft and then say "it's above," but the draft was inside `<internal>` tags, the user will see nothing.
 
+### Message delivery — what the user actually sees
+
+**Only your FINAL text output is delivered to the user.** Text you produce between tool calls is part of your reasoning chain but is NOT sent. If you write a long draft, then make tool calls (logging, saving files), and then say "the draft is above" — the user only sees "the draft is above." The draft itself is lost.
+
+**Rules:**
+1. **All user-facing content must be in your final response** — the last text you produce after all tool calls are done. Do not make tool calls after writing content meant for the user.
+2. **If you need to do work after producing content**, use `mcp__nanoclaw__send_message` to deliver the content first, then continue with tool calls. `send_message` delivers immediately regardless of what happens after.
+3. **Never say "see above" or "the draft is above"** unless you used `send_message` to deliver it. If it's in your final response, say "here's the draft" — not "above."
+
+**Pattern — long content with follow-up work:**
+```
+1. Do all research/tool calls first
+2. Use send_message to deliver the main content
+3. Do any follow-up work (logging, saving files)
+4. Final response: brief acknowledgment only
+```
+
 ### Sub-agents and teammates
 
 When working as a sub-agent or teammate, only use `send_message` if instructed by the main agent.
@@ -112,21 +129,19 @@ The tool returns immediately — it does NOT block waiting for the user. The flo
 Credentials are injected by the credential proxy. Always use `/workspace/scripts/api.sh` for service API calls — it routes through the proxy automatically:
 
 ```bash
-# GitHub
-/workspace/scripts/api.sh github GET "https://api.github.com/user" \
-  -H "Authorization: token $GITHUB_TOKEN"
+/workspace/scripts/api.sh <service_label> <METHOD> <URL> [CURL_ARGS...]
+```
 
-# GitLab
-/workspace/scripts/api.sh gitlab GET "https://gitlab.com/api/v4/projects" \
-  -H "PRIVATE-TOKEN: $GITLAB_TOKEN"
+The first argument is a **service label** — a short name for logging and error tracking. Common labels: `github`, `gitlab`, `atlassian`, `harness`, `blackduck`, `launchdarkly`. Use any label for custom services.
 
-# Atlassian
-/workspace/scripts/api.sh atlassian GET "https://yourorg.atlassian.net/rest/api/3/myself" \
-  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN"
+**How auth works:** Your environment variables (e.g. `$GITHUB_TOKEN`, `$ATLASSIAN_API_TOKEN`) contain **placeholders**, not real secrets. The credential proxy substitutes real values at request time. You MUST pass auth headers/flags explicitly on every call — the proxy only replaces the placeholder values, it doesn't add headers for you.
 
-# Custom services — the env var name matches what was registered
-/workspace/scripts/api.sh myservice GET "https://api.example.com/data" \
-  -H "Authorization: Bearer $MYSERVICE_TOKEN"
+**Common auth patterns:**
+```bash
+# Bearer token:  -H "Authorization: token $SERVICE_TOKEN"
+# Private token: -H "PRIVATE-TOKEN: $SERVICE_TOKEN"
+# Basic auth:    -u "$SERVICE_EMAIL:$SERVICE_API_TOKEN"
+# API key:       -H "x-api-key: $SERVICE_API_KEY"
 ```
 
 The proxy replaces credential placeholders with real values at request time. Newly registered credentials work immediately — no container restart needed.
@@ -140,6 +155,17 @@ The proxy replaces credential placeholders with real values at request time. New
 - NEVER echo, log, or print credential values — they contain placeholders, not real secrets
 - NEVER use raw curl for authenticated API calls — always use `api.sh`
 - If an API call fails with 401/403, call `request_credential` — the token may have expired
+
+### Service-specific configuration
+
+Service URLs and auth details are provided as environment variables. Check what's available with `env | grep -E '(URL|EMAIL|ACCOUNT)' | sort` — this shows base URLs, emails, and account IDs for connected services. Your group's CLAUDE.md should document specific API endpoints and patterns relevant to your domain.
+
+### API pitfalls to avoid
+
+- **Deprecated endpoints:** Some service APIs deprecate endpoints over time (returning 410 Gone). If you get a 410, check the service's current API docs for the replacement endpoint. Do not retry the same URL.
+- **URL encoding in GET queries:** URL-encode JQL, CQL, or other query strings. Use `--data-urlencode` for complex query params or switch to POST with a JSON body.
+- **Rate limits:** If you get 429 responses, back off and retry with increasing delays. Log the rate limit event.
+- **Pagination:** Most APIs return paginated results. Check for `nextPage`, `startAt`/`total`, or `cursor` fields in responses and paginate as needed.
 
 ## Event Logging
 
