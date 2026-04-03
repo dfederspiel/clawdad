@@ -836,7 +836,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             );
           }
           await responseChannel.setTyping?.(responseJid, false, threadId);
-          outputSentForCurrentQuery = false;
+          // Only reset the flag when the success event carried actual output.
+          // The agent-runner emits a second {status:'success', result:null}
+          // as a session-update marker after the query loop — resetting here
+          // unconditionally caused the null-result warning to fire spuriously
+          // on that second event even when the first event delivered text.
+          if (result.result) {
+            outputSentForCurrentQuery = false;
+          }
         }
 
         if (result.status === 'error') {
@@ -894,7 +901,15 @@ async function runAgent(
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
-  const sessionId = sessions[agentId] || sessions[group.folder];
+  const agentName = agent?.name || DEFAULT_AGENT_NAME;
+  // Legacy session fallback: only use the group-level session for the default
+  // agent. Named agents (added after the group was created) get their own
+  // session directory and must not inherit the old single-agent session ID —
+  // the SDK would try to resume it from the wrong .claude/ mount and crash
+  // with "No conversation found".
+  const sessionId =
+    sessions[agentId] ||
+    (agentName === DEFAULT_AGENT_NAME ? sessions[group.folder] : undefined);
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -925,7 +940,10 @@ async function runAgent(
   // Wrap onOutput to track session ID and usage from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
+        // Only save session from successful outputs — error outputs carry the
+        // broken session ID and would re-poison the cache after the error
+        // handler clears it (race: outputChain settles after error resolve).
+        if (output.newSessionId && output.status !== 'error') {
           sessions[agentId] = output.newSessionId;
           setSession(agentId, output.newSessionId);
         }
