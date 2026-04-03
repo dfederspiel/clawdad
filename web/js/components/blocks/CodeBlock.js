@@ -1,7 +1,9 @@
 import { html } from 'htm/preact';
 import { useRef, useEffect, useState } from 'preact/hooks';
 
-export function CodeBlock({ content, language, filename }) {
+export function CodeBlock({ content, code, language, filename }) {
+  // Accept both "content" and "code" — agents may use either field name
+  content = content || code || '';
   const codeRef = useRef(null);
   const [copied, setCopied] = useState(false);
 
