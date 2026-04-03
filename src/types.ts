@@ -68,6 +68,15 @@ export interface ThreadInfo {
   reply_count?: number;
 }
 
+export interface Agent {
+  id: string; // '{group_folder}/{agent_name}'
+  groupFolder: string;
+  name: string;
+  displayName: string;
+  trigger?: string; // Agent-specific trigger pattern (overrides group trigger)
+  containerConfig?: ContainerConfig; // Agent-specific overrides
+}
+
 export interface ScheduledTask {
   id: string;
   group_folder: string;

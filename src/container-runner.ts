@@ -51,6 +51,10 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  agentId?: string; // '{group_folder}/{agent_name}' — used for session isolation
+  agentName?: string; // agent name within the group
+  canDelegate?: boolean; // true for coordinator agents (no trigger)
+  isDelegation?: boolean; // true when running as a delegated task (shorter timeout)
   script?: string;
   achievements?: { id: string; name: string; description: string }[];
 }
@@ -84,6 +88,7 @@ function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
   chatJid: string,
+  agentName?: string,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -139,12 +144,15 @@ function buildVolumeMounts(
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
+  // Per-agent Claude sessions directory (isolated from other agents)
+  // Each agent gets their own .claude/ to prevent cross-agent session access
+  const sessionSubdir = agentName
+    ? path.join(group.folder, agentName)
+    : group.folder;
   const groupSessionsDir = path.join(
     DATA_DIR,
     'sessions',
-    group.folder,
+    sessionSubdir,
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
@@ -206,11 +214,25 @@ function buildVolumeMounts(
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'credentials'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'delegations'), { recursive: true });
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
     readonly: false,
   });
+
+  // Mount agent-specific directory (for multi-agent groups with explicit agents/)
+  // The agent's CLAUDE.md lives here, mounted at /workspace/agent
+  if (agentName && agentName !== 'default') {
+    const agentDir = path.join(groupDir, 'agents', agentName);
+    if (fs.existsSync(agentDir)) {
+      mounts.push({
+        hostPath: agentDir,
+        containerPath: '/workspace/agent',
+        readonly: false,
+      });
+    }
+  }
 
   // Copy agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
@@ -224,17 +246,22 @@ function buildVolumeMounts(
   const groupAgentRunnerDir = path.join(
     DATA_DIR,
     'sessions',
-    group.folder,
+    sessionSubdir,
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
     const srcIndex = path.join(agentRunnerSrc, 'index.ts');
     const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
+    const srcStat = fs.existsSync(srcIndex) ? fs.statSync(srcIndex) : null;
+    const cachedStat = fs.existsSync(cachedIndex)
+      ? fs.statSync(cachedIndex)
+      : null;
     const needsCopy =
       !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+      !cachedStat ||
+      !srcStat ||
+      srcStat.mtimeMs > cachedStat.mtimeMs ||
+      srcStat.size !== cachedStat.size;
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
@@ -376,9 +403,18 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain, input.chatJid);
+  const mounts = buildVolumeMounts(
+    group,
+    input.isMain,
+    input.chatJid,
+    input.agentName,
+  );
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
-  const containerPrefix = `nanoclaw-${safeName}-`;
+  const agentSuffix =
+    input.agentName && input.agentName !== 'default'
+      ? `-${input.agentName.replace(/[^a-zA-Z0-9-]/g, '-')}`
+      : '';
+  const containerPrefix = `nanoclaw-${safeName}${agentSuffix}-`;
 
   // Stop any stale containers for this group before spawning a new one.
   // This prevents orphaned containers from stealing IPC messages.
@@ -571,7 +607,12 @@ export async function runContainerAgent(
     const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
     // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
     // graceful _close sentinel has time to trigger before the hard kill fires.
-    const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+    // Exception: scheduled tasks and delegations use their config timeout directly
+    // (no grace period) since they should exit promptly after completing work.
+    const timeoutMs =
+      input.isScheduledTask || input.isDelegation
+        ? configTimeout
+        : Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
 
     const killOnTimeout = () => {
       timedOut = true;

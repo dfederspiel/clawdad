@@ -4,10 +4,16 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 import {
+  DEFAULT_AGENT_NAME,
+  discoverAgents,
+  resolveAgentClaudeMdPath,
+} from '../agent-discovery.js';
+import {
   getAchievementResponse,
   checkTelemetryAchievements,
   AchievementDef,
 } from '../achievements.js';
+import { getActiveAgentName } from '../agent-state.js';
 import {
   DATA_DIR,
   GROUPS_DIR,
@@ -167,12 +173,15 @@ export class WebChannel implements Channel {
   ): Promise<void> {
     const timestamp = new Date().toISOString();
 
+    // Use active agent name if set (multi-agent groups), else default
+    const senderName = getActiveAgentName(jid) || ASSISTANT_NAME;
+
     // Persist agent response so it survives page reloads
     storeMessageDirect({
       id: randomUUID(),
       chat_jid: jid,
-      sender: ASSISTANT_NAME,
-      sender_name: ASSISTANT_NAME,
+      sender: senderName,
+      sender_name: senderName,
       content: text,
       timestamp,
       is_from_me: true,
@@ -180,7 +189,13 @@ export class WebChannel implements Channel {
       thread_id: threadId,
     });
 
-    this.broadcast('message', { jid, text, timestamp, thread_id: threadId });
+    this.broadcast('message', {
+      jid,
+      text,
+      timestamp,
+      thread_id: threadId,
+      sender_name: senderName,
+    });
     logger.info({ jid, length: text.length, threadId }, 'Web message sent');
   }
 
@@ -189,7 +204,13 @@ export class WebChannel implements Channel {
     isTyping: boolean,
     threadId?: string,
   ): Promise<void> {
-    this.broadcast('typing', { jid, isTyping, thread_id: threadId });
+    const agentName = isTyping ? getActiveAgentName(jid) : undefined;
+    this.broadcast('typing', {
+      jid,
+      isTyping,
+      thread_id: threadId,
+      agent_name: agentName,
+    });
   }
 
   /** Broadcast an achievement unlock to all connected clients. */
@@ -208,6 +229,29 @@ export class WebChannel implements Channel {
     this.broadcast('groups_changed', {});
   }
 
+  private sanitizeAgentName(name: string): string {
+    return name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  }
+
+  private getGroupDir(folder: string): string {
+    return path.resolve(process.cwd(), 'groups', folder);
+  }
+
+  private readJsonFile(filePath: string): Record<string, unknown> {
+    if (!fs.existsSync(filePath)) return {};
+    try {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    } catch {
+      return {};
+    }
+  }
+
+  private refreshAgentsAndRespond(res: http.ServerResponse, jid: string): void {
+    const agents = this.opts.refreshGroupAgents?.(jid) || [];
+    this.broadcastGroupsChanged();
+    this.json(res, 200, { ok: true, agents });
+  }
+
   broadcastCredentialRequest(request: {
     service: string;
     hostPattern?: string;
@@ -222,7 +266,12 @@ export class WebChannel implements Channel {
     chatJid: string,
     event: { tool?: string; summary: string; timestamp: string },
   ): void {
-    this.broadcast('agent_progress', { jid: chatJid, ...event });
+    const agentName = getActiveAgentName(chatJid);
+    this.broadcast('agent_progress', {
+      jid: chatJid,
+      ...event,
+      agent_name: agentName,
+    });
   }
 
   broadcastUsageUpdate(
@@ -293,8 +342,161 @@ export class WebChannel implements Channel {
           isMain: g.isMain,
           isSystem: g.isSystem || false,
           subtitle: g.subtitle || '',
+          agents: this.opts.getGroupAgents?.(jid) || [],
         }));
       return this.json(res, 200, { groups: webGroups });
+    }
+
+    // POST /api/groups/:folder/agents — add or clone an agent into a group
+    const addAgentMatch = url.pathname.match(
+      /^\/api\/groups\/([A-Za-z0-9_-]+)\/agents$/,
+    );
+    if (method === 'POST' && addAgentMatch) {
+      const folder = `web_${decodeURIComponent(addAgentMatch[1])}`;
+      const jid = `web:${decodeURIComponent(addAgentMatch[1])}`;
+      const group = this.opts.registeredGroups()[jid];
+      if (!group || group.folder !== folder) {
+        return this.json(res, 404, { error: 'Group not found' });
+      }
+
+      const body = await this.readBody(req);
+      const {
+        name,
+        displayName,
+        trigger,
+        instructions,
+        sourceGroupJid,
+        sourceAgentName,
+      } = body as {
+        name?: string;
+        displayName?: string;
+        trigger?: string;
+        instructions?: string;
+        sourceGroupJid?: string;
+        sourceAgentName?: string;
+      };
+
+      if (!name?.trim()) {
+        return this.json(res, 400, { error: 'Agent name is required' });
+      }
+
+      const agentName = this.sanitizeAgentName(name.trim());
+      if (!agentName) {
+        return this.json(res, 400, { error: 'Agent name is invalid' });
+      }
+      if (
+        (sourceGroupJid && !sourceAgentName) ||
+        (!sourceGroupJid && sourceAgentName)
+      ) {
+        return this.json(res, 400, {
+          error: 'Source group and source agent are both required for cloning',
+        });
+      }
+
+      const groupDir = this.getGroupDir(group.folder);
+      const agentDir = path.join(groupDir, 'agents', agentName);
+      if (fs.existsSync(agentDir)) {
+        return this.json(res, 409, { error: 'Agent already exists' });
+      }
+
+      let claudeMd = instructions?.trim();
+      let agentConfig: Record<string, unknown> = {};
+
+      if (sourceGroupJid && sourceAgentName) {
+        const sourceGroup = this.opts.registeredGroups()[sourceGroupJid];
+        if (!sourceGroup) {
+          return this.json(res, 404, { error: 'Source group not found' });
+        }
+
+        const sourceAgent = discoverAgents(sourceGroup).find(
+          (agent) => agent.name === sourceAgentName,
+        );
+        if (!sourceAgent) {
+          return this.json(res, 404, { error: 'Source agent not found' });
+        }
+
+        const sourceClaudeMd = resolveAgentClaudeMdPath(sourceAgent);
+        if (fs.existsSync(sourceClaudeMd)) {
+          claudeMd = fs.readFileSync(sourceClaudeMd, 'utf-8');
+        }
+
+        const sourceAgentDir = path.join(
+          this.getGroupDir(sourceGroup.folder),
+          'agents',
+          sourceAgent.name,
+        );
+        const sourceAgentJson = path.join(sourceAgentDir, 'agent.json');
+        agentConfig = this.readJsonFile(sourceAgentJson);
+      }
+
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(agentDir, 'CLAUDE.md'),
+        (claudeMd && claudeMd.length > 0
+          ? claudeMd
+          : `# ${displayName?.trim() || name.trim()}\n\nYou are a specialist in the ${group.name} group.\n`) +
+          (claudeMd?.endsWith('\n') ? '' : '\n'),
+      );
+
+      agentConfig = {
+        ...agentConfig,
+        displayName:
+          displayName?.trim() || agentConfig.displayName || name.trim(),
+      };
+      if (trigger?.trim()) {
+        agentConfig.trigger = trigger.trim();
+      } else if (!sourceAgentName && 'trigger' in agentConfig) {
+        delete agentConfig.trigger;
+      }
+
+      fs.writeFileSync(
+        path.join(agentDir, 'agent.json'),
+        JSON.stringify(agentConfig, null, 2) + '\n',
+      );
+
+      return this.refreshAgentsAndRespond(res, jid);
+    }
+
+    // DELETE /api/groups/:folder/agents/:agent — remove an agent from a group
+    const deleteAgentMatch = url.pathname.match(
+      /^\/api\/groups\/([A-Za-z0-9_-]+)\/agents\/([A-Za-z0-9_-]+)$/,
+    );
+    if (method === 'DELETE' && deleteAgentMatch) {
+      const folderSlug = decodeURIComponent(deleteAgentMatch[1]);
+      const agentName = decodeURIComponent(deleteAgentMatch[2]);
+      const jid = `web:${folderSlug}`;
+      const group = this.opts.registeredGroups()[jid];
+      if (!group) {
+        return this.json(res, 404, { error: 'Group not found' });
+      }
+
+      const agents = this.opts.getGroupAgents?.(jid) || [];
+      if (agents.length <= 1) {
+        return this.json(res, 400, {
+          error: 'Groups must keep at least one agent',
+        });
+      }
+      if (!agents.some((agent) => agent.name === agentName)) {
+        return this.json(res, 404, { error: 'Agent not found' });
+      }
+
+      const agentDir = path.join(
+        this.getGroupDir(group.folder),
+        'agents',
+        agentName,
+      );
+      if (!fs.existsSync(agentDir)) {
+        if (agentName === DEFAULT_AGENT_NAME) {
+          return this.json(res, 400, {
+            error: 'Cannot remove an implicit default agent',
+          });
+        }
+        return this.json(res, 404, { error: 'Agent folder not found' });
+      }
+
+      fs.rmSync(agentDir, { recursive: true, force: true });
+      return this.refreshAgentsAndRespond(res, jid);
     }
 
     // GET /api/triggers — list triggered agents for @-mention autocomplete
@@ -525,6 +727,137 @@ export class WebChannel implements Channel {
 
       this.opts.onRegisterGroup?.(jid, group);
       // Store chat metadata
+      this.opts.onChatMetadata(
+        jid,
+        new Date().toISOString(),
+        name,
+        'web',
+        true,
+      );
+      return this.json(res, 201, { jid, group });
+    }
+
+    // POST /api/teams — create a multi-agent team (coordinator + specialists)
+    if (method === 'POST' && url.pathname === '/api/teams') {
+      const body = await this.readBody(req);
+      const { name, folder, coordinator, specialists } = body as unknown as {
+        name: string;
+        folder: string;
+        coordinator: {
+          name?: string;
+          displayName?: string;
+          instructions?: string;
+        };
+        specialists: Array<{
+          name: string;
+          displayName?: string;
+          trigger: string;
+          instructions?: string;
+        }>;
+      };
+      if (
+        !name ||
+        !folder ||
+        !coordinator ||
+        !Array.isArray(specialists) ||
+        specialists.length === 0
+      ) {
+        return this.json(res, 400, {
+          error:
+            'name, folder, coordinator, and at least one specialist required',
+        });
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(folder)) {
+        return this.json(res, 400, {
+          error:
+            'folder must be alphanumeric with underscores/dashes, max 64 chars',
+        });
+      }
+      const jid = `web:${folder}`;
+      const existing = this.opts.registeredGroups();
+      if (existing[jid]) {
+        return this.json(res, 409, { error: 'Group already exists', jid });
+      }
+
+      // Validate specialist names are unique and valid
+      const names = new Set<string>();
+      const coordName = coordinator.name || 'coordinator';
+      names.add(coordName);
+      for (const spec of specialists) {
+        if (!spec.name || !spec.trigger) {
+          return this.json(res, 400, {
+            error: 'Each specialist needs a name and trigger',
+          });
+        }
+        const specName = spec.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+        if (names.has(specName)) {
+          return this.json(res, 400, {
+            error: `Duplicate agent name: ${specName}`,
+          });
+        }
+        names.add(specName);
+      }
+
+      const groupFolder = `web_${folder}`;
+      const groupDir = path.resolve(process.cwd(), 'groups', groupFolder);
+
+      // Group-level CLAUDE.md
+      fs.mkdirSync(groupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(groupDir, 'CLAUDE.md'),
+        `# ${name}\n\nMulti-agent team. See agents/ for individual agent instructions.\n`,
+      );
+
+      // Coordinator agent
+      const coordDir = path.join(groupDir, 'agents', coordName);
+      fs.mkdirSync(coordDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(coordDir, 'CLAUDE.md'),
+        coordinator.instructions ||
+          `# ${coordinator.displayName || 'Coordinator'}\n\nYou are the coordinator for the ${name} team.\n`,
+      );
+      fs.writeFileSync(
+        path.join(coordDir, 'agent.json'),
+        JSON.stringify(
+          { displayName: coordinator.displayName || 'Coordinator' },
+          null,
+          2,
+        ) + '\n',
+      );
+
+      // Specialist agents
+      for (const spec of specialists) {
+        const specName = spec.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+        const specDir = path.join(groupDir, 'agents', specName);
+        fs.mkdirSync(specDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(specDir, 'CLAUDE.md'),
+          spec.instructions ||
+            `# ${spec.displayName || spec.name}\n\nYou are a specialist on the ${name} team.\n`,
+        );
+        fs.writeFileSync(
+          path.join(specDir, 'agent.json'),
+          JSON.stringify(
+            {
+              displayName: spec.displayName || spec.name,
+              trigger: spec.trigger,
+            },
+            null,
+            2,
+          ) + '\n',
+        );
+      }
+
+      // Register the group
+      const group: RegisteredGroup = {
+        name,
+        folder: groupFolder,
+        trigger: `@${name}`,
+        added_at: new Date().toISOString(),
+        requiresTrigger: false,
+      };
+
+      this.opts.onRegisterGroup?.(jid, group);
       this.opts.onChatMetadata(
         jid,
         new Date().toISOString(),

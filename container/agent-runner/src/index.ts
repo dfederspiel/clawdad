@@ -28,6 +28,10 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  agentId?: string;
+  agentName?: string;
+  canDelegate?: boolean;
+  isDelegation?: boolean;
   script?: string;
   achievements?: { id: string; name: string; description: string }[];
 }
@@ -72,6 +76,11 @@ interface SDKUserMessage {
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
+
+// Module-level close flag — set when _close is consumed anywhere,
+// so waitForIpcMessage can exit even if the file was consumed by
+// a stale poll timer during the query.
+let closeRequested = false;
 
 /**
  * Push-based async iterable for streaming user messages to the SDK.
@@ -331,8 +340,10 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
  * Check for _close sentinel.
  */
 function shouldClose(): boolean {
+  if (closeRequested) return true;
   if (fs.existsSync(IPC_INPUT_CLOSE_SENTINEL)) {
     try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
+    closeRequested = true;
     return true;
   }
   return false;
@@ -508,6 +519,8 @@ async function runQuery(
             NANOCLAW_CHAT_JID: containerInput.chatJid,
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+            NANOCLAW_AGENT_NAME: containerInput.agentName || 'default',
+            NANOCLAW_CAN_DELEGATE: containerInput.canDelegate ? '1' : '0',
             NANOCLAW_ACHIEVEMENTS: JSON.stringify(containerInput.achievements || []),
           },
         },
@@ -594,6 +607,11 @@ async function runQuery(
       if (textResult) {
         nullResultRetries = 0;
       }
+      // End the stream after emitting a result so the for-await loop
+      // terminates. Without this, MessageStream keeps the SDK alive
+      // waiting for more user messages, and the query never returns.
+      ipcPolling = false;
+      stream.end();
     }
   }
 
@@ -694,6 +712,7 @@ async function main(): Promise<void> {
   fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
 
   // Clean up stale _close sentinel from previous container runs
+  closeRequested = false;
   try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
 
   // Build initial prompt (drain any pending IPC messages too)
@@ -851,6 +870,13 @@ async function main(): Promise<void> {
 
       // Emit session update so host can track it
       writeOutput({ status: 'success', result: null, newSessionId: sessionId });
+
+      // Delegation containers exit immediately after first response —
+      // no idle wait, no follow-up messages. Frees the concurrency slot.
+      if (containerInput.isDelegation) {
+        log('Delegation complete, exiting (no idle wait)');
+        break;
+      }
 
       log('Query ended, waiting for next IPC message...');
 

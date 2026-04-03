@@ -54,6 +54,45 @@ Implementation:
 1. Add MCP server config to the container settings (see `src/container-runner.ts` for how MCP servers are mounted)
 2. Document available tools in `groups/CLAUDE.md`
 
+### Creating an Agent Team (Multi-Agent Group)
+
+Questions to ask:
+- What is the team's purpose?
+- How many specialists, and what are their roles?
+- What triggers for each specialist? (e.g., `@analyst`, `@greeter`)
+
+**Via Web UI:** Click "New Agent" in sidebar → "Create team" at the bottom. Fill in coordinator + specialist details.
+
+**Via API:**
+```bash
+curl -X POST http://localhost:3456/api/teams -H 'Content-Type: application/json' -d '{
+  "name": "Research Team",
+  "folder": "research-team",
+  "coordinator": { "displayName": "Coordinator", "instructions": "You coordinate the research team..." },
+  "specialists": [
+    { "name": "analyst", "displayName": "Analyst", "trigger": "@analyst", "instructions": "You analyze data..." },
+    { "name": "writer", "displayName": "Writer", "trigger": "@writer", "instructions": "You write reports..." }
+  ]
+}'
+```
+
+**Via filesystem** (manual):
+```
+groups/web_{folder}/
+  CLAUDE.md                    # Team overview
+  agents/
+    coordinator/
+      CLAUDE.md                # Coordinator instructions (no trigger = coordinator)
+      agent.json               # { "displayName": "Coordinator" }
+    analyst/
+      CLAUDE.md                # Specialist instructions
+      agent.json               # { "displayName": "Analyst", "trigger": "@analyst" }
+```
+
+After creating, restart the service or send a message — agents are discovered on next `processGroupMessages` call.
+
+**Architecture:** Coordinator (no trigger) handles all messages and delegates to specialists via `delegate_to_agent` MCP tool. Delegations run in parallel. Coordinator re-triggers automatically when all delegations complete.
+
 ### Changing Assistant Behavior
 
 Questions to ask:

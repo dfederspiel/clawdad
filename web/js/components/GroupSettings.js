@@ -2,7 +2,7 @@ import { html } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
 import { TONES, TONE_NAMES, getGroupTone, setGroupTone, previewTone, isMuted, setMuted } from '../sounds.js';
 import * as api from '../api.js';
-import { loadGroups, usage } from '../app.js';
+import { groups, loadGroups, usage } from '../app.js';
 
 export function GroupSettings({ group, open, onClose }) {
   const [subtitle, setSubtitle] = useState(group?.subtitle || '');
@@ -11,6 +11,13 @@ export function GroupSettings({ group, open, onClose }) {
   const [saving, setSaving] = useState(false);
   const [claudeMd, setClaudeMd] = useState(null);
   const [memoryFiles, setMemoryFiles] = useState(null);
+  const [agentName, setAgentName] = useState('');
+  const [agentDisplayName, setAgentDisplayName] = useState('');
+  const [agentTrigger, setAgentTrigger] = useState('');
+  const [agentInstructions, setAgentInstructions] = useState('');
+  const [selectedSource, setSelectedSource] = useState('');
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentError, setAgentError] = useState('');
 
   useEffect(() => {
     if (!group || !open) return;
@@ -19,6 +26,13 @@ export function GroupSettings({ group, open, onClose }) {
     setMutedState(isMuted());
     setClaudeMd(null);
     setMemoryFiles(null);
+    setAgentName('');
+    setAgentDisplayName('');
+    setAgentTrigger('');
+    setAgentInstructions('');
+    setSelectedSource('');
+    setAgentBusy(false);
+    setAgentError('');
   }, [group?.jid, open]);
 
   if (!open || !group) return null;
@@ -50,6 +64,73 @@ export function GroupSettings({ group, open, onClose }) {
     setMuted(next);
   }
 
+  function resetAgentForm() {
+    setAgentName('');
+    setAgentDisplayName('');
+    setAgentTrigger('');
+    setAgentInstructions('');
+    setSelectedSource('');
+    setAgentError('');
+  }
+
+  async function handleAddAgent(e) {
+    e.preventDefault();
+    if (!agentName.trim() || agentBusy) return;
+    setAgentBusy(true);
+    setAgentError('');
+    try {
+      await api.addGroupAgent(folderName, {
+        name: agentName.trim(),
+        displayName: agentDisplayName.trim(),
+        trigger: agentTrigger.trim(),
+        instructions: agentInstructions.trim(),
+      });
+      await loadGroups();
+      resetAgentForm();
+    } catch (err) {
+      setAgentError(err.message || 'Failed to add agent');
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function handleCloneAgent(e) {
+    e.preventDefault();
+    if (!selectedSource || !agentName.trim() || agentBusy) return;
+    setAgentBusy(true);
+    setAgentError('');
+    try {
+      const [sourceGroupJid, sourceAgentName] = selectedSource.split('::');
+      await api.addGroupAgent(folderName, {
+        name: agentName.trim(),
+        displayName: agentDisplayName.trim(),
+        trigger: agentTrigger.trim(),
+        sourceGroupJid,
+        sourceAgentName,
+      });
+      await loadGroups();
+      resetAgentForm();
+    } catch (err) {
+      setAgentError(err.message || 'Failed to clone agent');
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function handleRemoveAgent(name) {
+    if (agentBusy) return;
+    setAgentBusy(true);
+    setAgentError('');
+    try {
+      await api.deleteGroupAgent(folderName, name);
+      await loadGroups();
+    } catch (err) {
+      setAgentError(err.message || 'Failed to remove agent');
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
   async function handleLoadClaudeMd() {
     try {
       const data = await api.getTranscript(group.folder);
@@ -64,6 +145,13 @@ export function GroupSettings({ group, open, onClose }) {
   // Group usage from the usage signal
   const usg = usage.value;
   const groupUsage = usg?.byGroup?.find(g => g.group_folder === group.folder);
+  const availableSources = groups.value
+    .filter((g) => g.jid !== group.jid)
+    .flatMap((g) => (g.agents || []).map((agent) => ({
+      key: `${g.jid}::${agent.name}`,
+      label: `${g.name} / ${agent.displayName || agent.name}`,
+      trigger: agent.trigger || '',
+    })));
 
   return html`
     <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center" onClick=${onClose}>
@@ -156,6 +244,85 @@ export function GroupSettings({ group, open, onClose }) {
                 </div>
               </div>
             </div>
+          `}
+
+          <div>
+            <label class="text-[10px] text-txt-muted uppercase tracking-wider block mb-2">Agents</label>
+            <div class="flex flex-col gap-3">
+              ${(group.agents || []).map((agent) => html`
+                <div class="border border-border rounded-lg px-3 py-2 flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="text-sm text-txt font-medium">${agent.displayName || agent.name}</div>
+                    <div class="text-xs text-txt-muted font-mono">${agent.name}${agent.trigger ? ` · ${agent.trigger}` : ' · coordinator'}</div>
+                  </div>
+                  <button
+                    class="px-2 py-1 text-xs border border-border rounded-md text-txt-2 hover:border-red-400 hover:text-red-300 disabled:opacity-50"
+                    onClick=${() => handleRemoveAgent(agent.name)}
+                    disabled=${agentBusy || (group.agents || []).length <= 1}
+                  >Remove</button>
+                </div>
+              `)}
+            </div>
+          </div>
+
+          <form class="flex flex-col gap-2" onSubmit=${handleAddAgent}>
+            <label class="text-[10px] text-txt-muted uppercase tracking-wider block">Add New Agent</label>
+            <input
+              type="text"
+              class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt placeholder-txt-muted focus:outline-none focus:border-accent"
+              placeholder="Agent name"
+              value=${agentName}
+              onInput=${(e) => setAgentName(e.target.value)}
+            />
+            <input
+              type="text"
+              class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt placeholder-txt-muted focus:outline-none focus:border-accent"
+              placeholder="Display name"
+              value=${agentDisplayName}
+              onInput=${(e) => setAgentDisplayName(e.target.value)}
+            />
+            <input
+              type="text"
+              class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt placeholder-txt-muted focus:outline-none focus:border-accent"
+              placeholder="Trigger, e.g. @Researcher"
+              value=${agentTrigger}
+              onInput=${(e) => setAgentTrigger(e.target.value)}
+            />
+            <textarea
+              class="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-txt placeholder-txt-muted focus:outline-none focus:border-accent min-h-24"
+              placeholder="Optional starter instructions"
+              value=${agentInstructions}
+              onInput=${(e) => setAgentInstructions(e.target.value)}
+            />
+            <button
+              type="submit"
+              class="px-3 py-1.5 text-xs bg-accent text-bg rounded-lg hover:opacity-90 disabled:opacity-50 self-start"
+              disabled=${agentBusy || !agentName.trim()}
+            >${agentBusy ? 'Working...' : 'Add Agent'}</button>
+          </form>
+
+          <form class="flex flex-col gap-2" onSubmit=${handleCloneAgent}>
+            <label class="text-[10px] text-txt-muted uppercase tracking-wider block">Pull Existing Agent Into Group</label>
+            <select
+              class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt focus:outline-none focus:border-accent"
+              value=${selectedSource}
+              onChange=${(e) => setSelectedSource(e.target.value)}
+            >
+              <option value="">Choose an agent to copy</option>
+              ${availableSources.map((source) => html`
+                <option value=${source.key}>${source.label}${source.trigger ? ` (${source.trigger})` : ''}</option>
+              `)}
+            </select>
+            <div class="text-xs text-txt-muted">This copies instructions/config into this group so it can evolve independently.</div>
+            <button
+              type="submit"
+              class="px-3 py-1.5 text-xs bg-bg-3 border border-border text-txt rounded-lg hover:border-accent disabled:opacity-50 self-start"
+              disabled=${agentBusy || !selectedSource || !agentName.trim()}
+            >Clone Into Group</button>
+          </form>
+
+          ${agentError && html`
+            <div class="text-xs text-red-300 border border-red-500/30 rounded-lg px-3 py-2 bg-red-500/5">${agentError}</div>
           `}
         </div>
       </div>

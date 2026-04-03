@@ -84,6 +84,15 @@ export function buildTriggerPattern(trigger: string): RegExp {
   return new RegExp(`^${escapeRegex(trigger.trim())}\\b`, 'i');
 }
 
+/**
+ * Build a trigger pattern that matches anywhere in the message (not just start).
+ * Used for agent-level triggers within multi-agent groups where @mentions
+ * can appear mid-sentence (e.g. "tell @analyst to look at this").
+ */
+export function buildAgentTriggerPattern(trigger: string): RegExp {
+  return new RegExp(`(?:^|\\s)${escapeRegex(trigger.trim())}\\b`, 'i');
+}
+
 export const DEFAULT_TRIGGER = `@${ASSISTANT_NAME}`;
 
 export function getTriggerPattern(trigger?: string): RegExp {

@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useRef, useEffect } from 'preact/hooks';
-import { messages, typing, threadMeta, openThreads, threadTyping, toggleThread, handleThreadReply } from '../app.js';
+import { messages, typing, threadMeta, openThreads, threadTyping, toggleThread, handleThreadReply, pendingInput } from '../app.js';
 import { Message } from './Message.js';
 import { ThreadView } from './ThreadView.js';
 import { TypingIndicator } from './TypingIndicator.js';
@@ -19,8 +19,16 @@ export function MessageList() {
     }
   }, [msgs.length, isTyping]);
 
+  function onClickMention(e) {
+    const mention = e.target.closest('.mention');
+    if (mention) {
+      const trigger = mention.dataset.trigger;
+      if (trigger) pendingInput.value = trigger;
+    }
+  }
+
   return html`
-    <div ref=${containerRef} class="flex-1 overflow-y-auto p-3 md:p-5 flex flex-col gap-3">
+    <div ref=${containerRef} class="flex-1 overflow-y-auto p-3 md:p-5 flex flex-col gap-3" onClick=${onClickMention}>
       ${msgs.length === 0 && !isTyping
         ? html`
             <div class="flex-1 flex items-center justify-center">

@@ -9,6 +9,19 @@ export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  /** Get agents for a group JID */
+  getGroupAgents?: (jid: string) => Array<{
+    id: string;
+    name: string;
+    displayName: string;
+    trigger?: string;
+  }>;
+  refreshGroupAgents?: (jid: string) => Array<{
+    id: string;
+    name: string;
+    displayName: string;
+    trigger?: string;
+  }>;
   onRegisterGroup?: (jid: string, group: RegisteredGroup) => void;
   onDeleteGroup?: (jid: string, group: RegisteredGroup) => void;
   /** Optional status provider for web UI telemetry/task management */

@@ -520,6 +520,42 @@ Set to empty string to clear.`,
   },
 );
 
+// Only coordinators (agents without triggers) can delegate to other agents.
+// Specialists should hand back to the coordinator via their output text.
+if (process.env.NANOCLAW_CAN_DELEGATE === '1') {
+  server.tool(
+    'delegate_to_agent',
+    `Delegate a task to another agent in this group. The target agent runs in its own container with the full conversation context plus your instructions. Use this when work falls outside your role.
+
+The target agent's response will appear in the chat. You do NOT need to wait for their response — it will arrive after your turn completes.
+
+Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the three jokes I just told and rate them." })`,
+    {
+      agent: z.string().describe('Name of the target agent (e.g. "analyst", "greeter"). Must be an agent in this group.'),
+      message: z.string().describe('Instructions or context for the target agent. Be specific about what you want them to do.'),
+    },
+    async (args) => {
+      const DELEGATIONS_DIR = path.join(IPC_DIR, 'delegations');
+      writeIpcFile(DELEGATIONS_DIR, {
+        type: 'delegate',
+        targetAgent: args.agent,
+        message: args.message,
+        sourceAgent: process.env.NANOCLAW_AGENT_NAME || 'default',
+        chatJid,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Delegated to ${args.agent}. They will respond in the chat.`,
+        }],
+      };
+    },
+  );
+}
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

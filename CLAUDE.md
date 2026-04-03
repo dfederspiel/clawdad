@@ -29,7 +29,53 @@ Single Node.js process with web UI channel (always-on) and optional messaging ch
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
+| `groups/{name}/agents/{agent}/CLAUDE.md` | Per-agent identity (multi-agent groups) |
+| `groups/{name}/agents/{agent}/agent.json` | Per-agent config (trigger, display name) |
+| `src/agent-discovery.ts` | Agent discovery, multi-agent context injection |
+| `src/agent-state.ts` | Active agent name tracking for message attribution |
 | `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
+
+## Multi-Agent Groups
+
+Groups support 1:N agents. A group with no `agents/` dir behaves as a single-agent group (backward compatible).
+
+**Architecture:**
+- **Coordinator** (no trigger) — handles untriggered messages, delegates to specialists via `delegate_to_agent` MCP tool. Every multi-agent group should have exactly one.
+- **Specialists** (with trigger, e.g. `@analyst`) — respond when @-mentioned by users or delegated to by the coordinator. Cannot delegate to other agents.
+
+**Folder structure:**
+```
+groups/web_my-team/
+  CLAUDE.md              # Group-level context (team charter)
+  agents/
+    coordinator/
+      CLAUDE.md          # Coordinator identity and orchestration rules
+      agent.json         # { "displayName": "Coordinator" }  (no trigger)
+    analyst/
+      CLAUDE.md          # Specialist identity
+      agent.json         # { "displayName": "Analyst", "trigger": "@analyst" }
+```
+
+**How it works:**
+- On startup, `discoverAgents()` scans `agents/` subdirs for each group
+- User messages route to agents by @-mention trigger matching (anywhere in message)
+- Untriggered messages go to the coordinator (first agent without a trigger)
+- Coordinators delegate via `mcp__nanoclaw__delegate_to_agent` IPC tool
+- Delegations run in **parallel** via `GroupQueue.enqueueDelegation` — specialists spawn concurrently alongside the coordinator
+- Delegation containers **exit immediately** after responding (no idle loop) — `isDelegation` flag in agent-runner skips `waitForIpcMessage`
+- When all delegations complete, the queue automatically re-triggers the coordinator via `enqueueMessageCheck`
+- Each agent gets its own Claude session, container, and CLAUDE.md
+- All agents share `/workspace/group/` filesystem for artifacts
+- Multi-agent context is auto-injected into prompts (role, teammates, instructions)
+- Bot messages carry the agent's display name as `sender_name` (re-asserted before each `sendMessage` to handle parallel clobbering)
+- Multi-agent groups **never use the message loop piping path** — all messages route through `processGroupMessages` with `includeBotMessages = true` so coordinators see specialist output
+
+**Creating teams:**
+- **Web UI**: "New Agent" → "Create team" — coordinator + dynamic specialist list
+- **API**: `POST /api/teams` with `{ name, folder, coordinator, specialists[] }`
+- **Filesystem**: Create `agents/` subdirectories with `CLAUDE.md` + `agent.json`
+
+**Key files:** `src/agent-discovery.ts`, `src/agent-state.ts`, `src/group-queue.ts` (enqueueDelegation, runDelegation), `src/index.ts` (processGroupMessages, onDelegateToAgent), `container/agent-runner/src/ipc-mcp-stdio.ts` (delegate_to_agent tool), `src/channels/web.ts` (POST /api/teams)
 
 ## Usage Tracking & Cost Observability
 

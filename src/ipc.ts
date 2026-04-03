@@ -48,6 +48,13 @@ export interface IpcDeps {
     label?: string,
   ) => void;
   onSetSubtitle?: (jid: string, subtitle: string) => void;
+  onDelegateToAgent?: (request: {
+    sourceGroup: string;
+    chatJid: string;
+    targetAgent: string;
+    message: string;
+    sourceAgent: string;
+  }) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -169,6 +176,61 @@ export function startIpcWatcher(deps: IpcDeps): void {
         }
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
+      }
+
+      // Process agent delegations from this group's IPC directory
+      const delegationsDir = path.join(ipcBaseDir, sourceGroup, 'delegations');
+      try {
+        if (fs.existsSync(delegationsDir)) {
+          const delegationFiles = fs
+            .readdirSync(delegationsDir)
+            .filter((f) => f.endsWith('.json'));
+          for (const file of delegationFiles) {
+            const filePath = path.join(delegationsDir, file);
+            try {
+              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              fs.unlinkSync(filePath);
+              if (
+                data.type === 'delegate' &&
+                data.targetAgent &&
+                data.message
+              ) {
+                if (deps.onDelegateToAgent) {
+                  deps.onDelegateToAgent({
+                    sourceGroup,
+                    chatJid: data.chatJid || '',
+                    targetAgent: data.targetAgent,
+                    message: data.message,
+                    sourceAgent: data.sourceAgent || 'unknown',
+                  });
+                  logger.info(
+                    {
+                      sourceGroup,
+                      sourceAgent: data.sourceAgent,
+                      targetAgent: data.targetAgent,
+                    },
+                    'Agent delegation requested',
+                  );
+                }
+              }
+            } catch (err) {
+              logger.error(
+                { file, sourceGroup, err },
+                'Error processing IPC delegation',
+              );
+              try {
+                fs.unlinkSync(filePath);
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(
+          { err, sourceGroup },
+          'Error reading IPC delegations directory',
+        );
       }
 
       // Process achievement unlocks from this group's IPC directory
