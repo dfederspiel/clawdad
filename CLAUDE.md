@@ -61,13 +61,21 @@ groups/web_my-team/
 - User messages route to agents by @-mention trigger matching (anywhere in message)
 - Untriggered messages go to the coordinator (first agent without a trigger)
 - Coordinators delegate via `mcp__nanoclaw__delegate_to_agent` IPC tool
-- Delegations queue via `GroupQueue.enqueueTask` — run after the current container exits
+- Delegations run in **parallel** via `GroupQueue.enqueueDelegation` — specialists spawn concurrently alongside the coordinator
+- Delegation containers **exit immediately** after responding (no idle loop) — `isDelegation` flag in agent-runner skips `waitForIpcMessage`
+- When all delegations complete, the queue automatically re-triggers the coordinator via `enqueueMessageCheck`
 - Each agent gets its own Claude session, container, and CLAUDE.md
 - All agents share `/workspace/group/` filesystem for artifacts
 - Multi-agent context is auto-injected into prompts (role, teammates, instructions)
-- Bot messages carry the agent's display name as `sender_name`
+- Bot messages carry the agent's display name as `sender_name` (re-asserted before each `sendMessage` to handle parallel clobbering)
+- Multi-agent groups **never use the message loop piping path** — all messages route through `processGroupMessages` with `includeBotMessages = true` so coordinators see specialist output
 
-**Key files:** `src/agent-discovery.ts`, `src/agent-state.ts`, `src/index.ts` (processGroupMessages, onDelegateToAgent), `container/agent-runner/src/ipc-mcp-stdio.ts` (delegate_to_agent tool)
+**Creating teams:**
+- **Web UI**: "New Agent" → "Create team" — coordinator + dynamic specialist list
+- **API**: `POST /api/teams` with `{ name, folder, coordinator, specialists[] }`
+- **Filesystem**: Create `agents/` subdirectories with `CLAUDE.md` + `agent.json`
+
+**Key files:** `src/agent-discovery.ts`, `src/agent-state.ts`, `src/group-queue.ts` (enqueueDelegation, runDelegation), `src/index.ts` (processGroupMessages, onDelegateToAgent), `container/agent-runner/src/ipc-mcp-stdio.ts` (delegate_to_agent tool), `src/channels/web.ts` (POST /api/teams)
 
 ## Usage Tracking & Cost Observability
 
