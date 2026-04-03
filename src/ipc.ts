@@ -342,6 +342,18 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For register_team
+    coordinator?: {
+      name?: string;
+      displayName?: string;
+      instructions?: string;
+    };
+    specialists?: Array<{
+      name: string;
+      displayName?: string;
+      trigger: string;
+      instructions?: string;
+    }>;
     // For request_credential
     service?: string;
     hostPattern?: string;
@@ -652,6 +664,133 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'register_team': {
+      // Only main group can create teams
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized register_team attempt blocked',
+        );
+        break;
+      }
+      if (
+        !data.name ||
+        !data.folder ||
+        !data.coordinator ||
+        !Array.isArray(data.specialists) ||
+        data.specialists.length === 0
+      ) {
+        logger.warn(
+          { data },
+          'Invalid register_team request - missing required fields',
+        );
+        break;
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(data.folder)) {
+        logger.warn(
+          { folder: data.folder },
+          'Invalid register_team request - unsafe folder name',
+        );
+        break;
+      }
+      const teamFolder = `web_${data.folder}`;
+      const teamJid = `web:${data.folder}`;
+      if (registeredGroups[teamJid]) {
+        logger.warn({ jid: teamJid }, 'register_team: group already exists');
+        break;
+      }
+
+      // Validate specialist names are unique
+      const agentNames = new Set<string>();
+      const coordName = data.coordinator.name || 'coordinator';
+      agentNames.add(coordName);
+      let hasDuplicate = false;
+      for (const spec of data.specialists) {
+        const specName = spec.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+        if (agentNames.has(specName)) {
+          logger.warn({ specName }, 'register_team: duplicate agent name');
+          hasDuplicate = true;
+          break;
+        }
+        agentNames.add(specName);
+      }
+      if (hasDuplicate) break;
+
+      const teamGroupDir = path.resolve(process.cwd(), 'groups', teamFolder);
+
+      // Group-level CLAUDE.md
+      fs.mkdirSync(teamGroupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(teamGroupDir, 'CLAUDE.md'),
+        `# ${data.name}\n\nMulti-agent team. See agents/ for individual agent instructions.\n`,
+      );
+
+      // Coordinator agent
+      const coordDir = path.join(teamGroupDir, 'agents', coordName);
+      fs.mkdirSync(coordDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(coordDir, 'CLAUDE.md'),
+        data.coordinator.instructions ||
+          `# ${data.coordinator.displayName || 'Coordinator'}\n\nYou are the coordinator for the ${data.name} team.\n`,
+      );
+      fs.writeFileSync(
+        path.join(coordDir, 'agent.json'),
+        JSON.stringify(
+          {
+            displayName: data.coordinator.displayName || 'Coordinator',
+          },
+          null,
+          2,
+        ) + '\n',
+      );
+
+      // Specialist agents
+      for (const spec of data.specialists) {
+        const specName = spec.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+        const specDir = path.join(teamGroupDir, 'agents', specName);
+        fs.mkdirSync(specDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(specDir, 'CLAUDE.md'),
+          spec.instructions ||
+            `# ${spec.displayName || spec.name}\n\nYou are a specialist on the ${data.name} team.\n`,
+        );
+        fs.writeFileSync(
+          path.join(specDir, 'agent.json'),
+          JSON.stringify(
+            {
+              displayName: spec.displayName || spec.name,
+              trigger: spec.trigger,
+            },
+            null,
+            2,
+          ) + '\n',
+        );
+      }
+
+      // Register the group
+      deps.registerGroup(teamJid, {
+        name: data.name,
+        folder: teamFolder,
+        trigger: `@${data.name}`,
+        added_at: new Date().toISOString(),
+        requiresTrigger: false,
+      });
+      const teamChannel = 'web';
+      deps.storeChatMetadata?.(
+        teamJid,
+        new Date().toISOString(),
+        data.name,
+        teamChannel,
+        true,
+      );
+      deps.onGroupRegistered?.(teamJid);
+      logger.info(
+        { teamJid, teamFolder, agents: Array.from(agentNames) },
+        'Multi-agent team registered via IPC',
+      );
+      break;
+    }
 
     case 'request_credential':
       // Broadcast to web UI to show the credential popup

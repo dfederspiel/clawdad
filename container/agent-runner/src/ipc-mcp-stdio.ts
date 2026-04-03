@@ -343,6 +343,65 @@ After registering, write a CLAUDE.md in the new group's folder with the agent's 
   },
 );
 
+server.tool(
+  'register_team',
+  `Create a multi-agent team (coordinator + specialists). Main group only.
+
+Creates the full agents/ directory structure with CLAUDE.md and agent.json for each agent. The coordinator handles untriggered messages and delegates to specialists. Specialists respond when @-mentioned or delegated to.
+
+Example:
+  name: "Research Team"
+  folder: "research-team"
+  coordinator: { displayName: "Coordinator", instructions: "# Coordinator\\n\\nYou coordinate research tasks..." }
+  specialists: [{ name: "analyst", displayName: "Analyst", trigger: "@analyst", instructions: "# Analyst\\n\\nYou analyze data..." }]`,
+  {
+    name: z.string().describe('Team display name'),
+    folder: z.string().describe('Folder name (alphanumeric, underscores, dashes, max 64 chars)'),
+    coordinator: z.object({
+      name: z.string().optional().describe('Agent code name (default: "coordinator")'),
+      displayName: z.string().optional().describe('Human-readable name (default: "Coordinator")'),
+      instructions: z.string().optional().describe('Full CLAUDE.md content for the coordinator'),
+    }).describe('Coordinator agent config'),
+    specialists: z.array(z.object({
+      name: z.string().describe('Agent code name (e.g., "analyst")'),
+      displayName: z.string().optional().describe('Human-readable name'),
+      trigger: z.string().describe('Trigger pattern (e.g., "@analyst")'),
+      instructions: z.string().optional().describe('Full CLAUDE.md content for the specialist'),
+    })).describe('Specialist agents (at least one required)'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can create teams.' }],
+        isError: true,
+      };
+    }
+
+    if (!args.specialists || args.specialists.length === 0) {
+      return {
+        content: [{ type: 'text' as const, text: 'At least one specialist is required.' }],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'register_team',
+      name: args.name,
+      folder: args.folder,
+      coordinator: args.coordinator,
+      specialists: args.specialists,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    const specNames = args.specialists.map((s) => s.displayName || s.name).join(', ');
+    return {
+      content: [{ type: 'text' as const, text: `Team "${args.name}" created with coordinator + specialists: ${specNames}. It will appear in the sidebar immediately.` }],
+    };
+  },
+);
+
 const ACHIEVEMENTS_DIR = path.join(IPC_DIR, 'achievements');
 
 // Build achievement list dynamically from host-provided data (via ContainerInput)
