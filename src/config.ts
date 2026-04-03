@@ -75,6 +75,11 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
+export const WARM_POOL_ENABLED = process.env.WARM_POOL_ENABLED === 'true';
+export const POOL_IDLE_TIMEOUT = parseInt(
+  process.env.POOL_IDLE_TIMEOUT || '300000',
+  10,
+); // 5min default — how long to keep a coordinator warm in the pool
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

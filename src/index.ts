@@ -10,16 +10,19 @@ import { setActiveAgentName, clearActiveAgentName } from './agent-state.js';
 import {
   ASSISTANT_NAME,
   buildAgentTriggerPattern,
+  CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  POOL_IDLE_TIMEOUT,
   TRIGGER_IDLE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
   POLL_INTERVAL,
   TIMEZONE,
+  WARM_POOL_ENABLED,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import { checkContainerSmoke } from './health.js';
@@ -34,9 +37,11 @@ import {
   ProgressEvent,
   UsageData,
   runContainerAgent,
+  spawnContainer,
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { ContainerPool } from './container-pool.js';
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
@@ -160,6 +165,8 @@ let broadcastThreadCreated:
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+const pool = new ContainerPool(POOL_IDLE_TIMEOUT, WARM_POOL_ENABLED);
+pool.setOnCountChange((idleCount) => queue.setIdlePoolCount(idleCount));
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -1004,9 +1011,17 @@ async function runAgent(
   );
 
   // Container lifecycle telemetry
-  const containerReuse: 'cold_start' | 'warm_reuse' = 'cold_start'; // will change with warm pool
+  const isCoordinator = agent ? !agent.trigger : true;
+  let containerReuse: 'cold_start' | 'warm_reuse' = 'cold_start';
   logger.info(
-    { agent: agentId, chatJid, containerReuse, hasSession: !!sessionId },
+    {
+      agent: agentId,
+      chatJid,
+      containerReuse: 'pending',
+      hasSession: !!sessionId,
+      isCoordinator,
+      isDelegation,
+    },
     'Container lifecycle decision',
   );
 
@@ -1092,21 +1107,133 @@ async function runAgent(
     : undefined;
 
   try {
+    // ── Warm reuse path (coordinators only) ────────────────────────
+    if (isCoordinator && !isDelegation) {
+      const warmHandle = pool.acquire(agentId);
+      if (warmHandle) {
+        containerReuse = 'warm_reuse';
+        broadcastWorkState({
+          jid: chatJid,
+          phase: 'pool_acquired',
+          agent_name: agent?.displayName,
+          summary: 'Reusing warm container',
+          updated_at: new Date().toISOString(),
+        });
+
+        // Write prompt as IPC message to the group's input dir.
+        // Coordinator-only scope: one warm container per group, one IPC reader.
+        const inputDir = path.join(DATA_DIR, 'ipc', group.folder, 'input');
+        fs.mkdirSync(inputDir, { recursive: true });
+        const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
+        const tempPath = path.join(inputDir, `${filename}.tmp`);
+        fs.writeFileSync(
+          tempPath,
+          JSON.stringify({ type: 'message', text: prompt }),
+        );
+        fs.renameSync(tempPath, path.join(inputDir, filename));
+
+        const configTimeout =
+          group.containerConfig?.timeout || CONTAINER_TIMEOUT;
+        const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+
+        const result = await warmHandle.queryOnce(
+          wrappedOnOutput,
+          wrappedOnProgress,
+          timeoutMs,
+        );
+
+        if (result.status !== 'error') {
+          pool.release(agentId, warmHandle, chatJid);
+        } else {
+          await pool.reclaim(agentId);
+          // Clear stale session on error
+          if (
+            result.error &&
+            /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
+              result.error,
+            )
+          ) {
+            delete sessions[agentId];
+            deleteSession(agentId);
+          }
+        }
+
+        if (result.newSessionId) {
+          sessions[agentId] = result.newSessionId;
+          setSession(agentId, result.newSessionId);
+        }
+
+        return result.status === 'error' ? 'error' : 'success';
+      }
+    }
+
+    // ── Cold start path ────────────────────────────────────────────
+    const containerInput = {
+      prompt,
+      sessionId,
+      groupFolder: group.folder,
+      chatJid,
+      isMain,
+      assistantName: agent?.displayName || ASSISTANT_NAME,
+      agentId,
+      agentName: agent?.name || DEFAULT_AGENT_NAME,
+      canDelegate: agent ? !agent.trigger : false,
+      isDelegation: isDelegation || false,
+      achievements: getAchievementsForContainer(),
+    };
+
+    // Coordinators with pool enabled: use spawnContainer + queryOnce,
+    // then release to pool for warm reuse on subsequent messages.
+    if (isCoordinator && !isDelegation && WARM_POOL_ENABLED) {
+      const handle = await spawnContainer(group, containerInput);
+      queue.registerProcess(
+        chatJid,
+        handle.process,
+        handle.containerName,
+        group.folder,
+      );
+
+      const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
+      const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+
+      const result = await handle.queryOnce(
+        wrappedOnOutput,
+        wrappedOnProgress,
+        timeoutMs,
+      );
+
+      if (result.status !== 'error') {
+        pool.release(agentId, handle, chatJid);
+        if (result.newSessionId) {
+          sessions[agentId] = result.newSessionId;
+          setSession(agentId, result.newSessionId);
+        }
+        return 'success';
+      }
+
+      // Error: wait for exit, handle session cleanup
+      await handle.exitPromise;
+      if (
+        result.error &&
+        /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
+          result.error,
+        )
+      ) {
+        delete sessions[agentId];
+        deleteSession(agentId);
+      }
+      logger.error(
+        { agent: agentId, error: result.error },
+        'Container agent error',
+      );
+      return 'error';
+    }
+
+    // Non-pool path: delegations, tasks, or pool disabled.
+    // Uses runContainerAgent which waits for container exit.
     const output = await runContainerAgent(
       group,
-      {
-        prompt,
-        sessionId,
-        groupFolder: group.folder,
-        chatJid,
-        isMain,
-        assistantName: agent?.displayName || ASSISTANT_NAME,
-        agentId,
-        agentName: agent?.name || DEFAULT_AGENT_NAME,
-        canDelegate: agent ? !agent.trigger : false,
-        isDelegation: isDelegation || false,
-        achievements: getAchievementsForContainer(),
-      },
+      containerInput,
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
@@ -1114,8 +1241,6 @@ async function runAgent(
     );
 
     if (output.status === 'error') {
-      // If the error is a missing session, clear the stale session so the next
-      // attempt starts fresh instead of retrying the same broken session forever.
       if (
         output.error &&
         /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
@@ -1498,6 +1623,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
+    await pool.shutdown();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
