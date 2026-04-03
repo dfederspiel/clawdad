@@ -854,6 +854,22 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             { agent: agent.id, responseJid, threadId: threadId || null },
             `Agent output: ${raw.length} chars → ${threadId ? 'thread' : 'main'}`,
           );
+          if (raw.length > 0 && text.length === 0) {
+            logger.warn(
+              { agent: agent.id, responseJid, rawLen: raw.length },
+              'Agent output entirely stripped by <internal> tag removal — user sees nothing',
+            );
+          } else if (raw.length - text.length > 500) {
+            logger.info(
+              {
+                agent: agent.id,
+                responseJid,
+                rawLen: raw.length,
+                strippedLen: text.length,
+              },
+              `<internal> tags stripped ${raw.length - text.length} chars from agent output`,
+            );
+          }
           if (text) {
             // Re-set agent name before each send — parallel delegations
             // on the same chatJid can clobber the shared activeAgentName
@@ -1620,7 +1636,15 @@ async function main(): Promise<void> {
       }
       // Always strip <internal> tags — agents use these for reasoning
       const stripped = stripInternalTags(rawText);
-      if (!stripped) return;
+      if (!stripped) {
+        if (rawText.trim().length > 0) {
+          logger.warn(
+            { jid, rawLen: rawText.length },
+            'Scheduler output entirely stripped by <internal> tag removal — message dropped',
+          );
+        }
+        return;
+      }
       // Web channel renders blocks client-side — formatOutbound would corrupt
       // :::blocks JSON by transforming markdown inside the fences.
       const text =
@@ -1641,7 +1665,15 @@ async function main(): Promise<void> {
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       // Always strip <internal> tags — agents use these for reasoning
       const stripped = stripInternalTags(rawText);
-      if (!stripped) return Promise.resolve();
+      if (!stripped) {
+        if (rawText.trim().length > 0) {
+          logger.warn(
+            { jid, rawLen: rawText.length },
+            'IPC send_message entirely stripped by <internal> tag removal — message dropped',
+          );
+        }
+        return Promise.resolve();
+      }
       // Web channel renders blocks client-side — formatOutbound would corrupt
       // :::blocks JSON by transforming markdown inside the fences.
       const text =

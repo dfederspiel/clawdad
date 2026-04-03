@@ -20,6 +20,8 @@ Wrap internal reasoning in `<internal>` tags — it's logged but not sent:
 Here's what I found...
 ```
 
+**CRITICAL:** Only use `<internal>` for brief reasoning notes (plan-of-action, self-reminders). NEVER wrap content meant for the user — drafts, summaries, reports, :::blocks, code output, or any deliverable — in `<internal>` tags. Everything inside `<internal>` is **permanently stripped** before delivery. If you compile a draft and then say "it's above," but the draft was inside `<internal>` tags, the user will see nothing.
+
 ### Sub-agents and teammates
 
 When working as a sub-agent or teammate, only use `send_message` if instructed by the main agent.
