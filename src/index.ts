@@ -574,8 +574,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (cmdResult.handled) return cmdResult.success;
   // --- End session command interception ---
 
-  // For non-main groups, check if trigger is required and present
-  if (!isMainGroup && group.requiresTrigger !== false) {
+  // For non-main single-agent groups, check if trigger is required and present.
+  // Multi-agent groups bypass: the coordinator handles untriggered messages.
+  if (!isMainGroup && !isMultiAgent && group.requiresTrigger !== false) {
     const triggerPattern = getTriggerPattern(group.trigger);
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
@@ -1401,9 +1402,15 @@ async function startMessageLoop(): Promise<void> {
           }
           // --- End session command interception ---
 
-          const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
+          const agents = groupAgents[chatJid] || [];
+          const isMultiAgent = agents.length > 1;
+          // Multi-agent groups bypass the trigger gate: the coordinator
+          // handles untriggered messages, specialist routing happens
+          // inside processGroupMessages via trigger matching.
+          const needsTrigger =
+            !isMainGroup && !isMultiAgent && group.requiresTrigger !== false;
 
-          // For non-main groups, only act on trigger messages.
+          // For non-main single-agent groups, only act on trigger messages.
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
@@ -1430,11 +1437,7 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          // Multi-agent groups: if the message targets a different agent than
-          // the one currently running, don't pipe — close and re-enqueue so
-          // processGroupMessages can route to the correct agent.
-          const agents = groupAgents[chatJid] || [];
-          const isMultiAgent = agents.length > 1;
+          // Multi-agent groups: never pipe — route through processGroupMessages.
           let shouldPipe = true;
 
           if (isMultiAgent) {
