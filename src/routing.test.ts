@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import { _initTestDatabase, storeChatMetadata } from './db.js';
-import { getAvailableGroups, _setRegisteredGroups } from './index.js';
+import {
+  getAvailableGroups,
+  _setRegisteredGroups,
+  needsTriggerForGroup,
+} from './index.js';
 
 beforeEach(() => {
   _initTestDatabase();
@@ -166,5 +170,31 @@ describe('getAvailableGroups', () => {
   it('returns empty array when no chats exist', () => {
     const groups = getAvailableGroups();
     expect(groups).toHaveLength(0);
+  });
+});
+
+// --- Trigger gate bypass for multi-agent groups ---
+
+describe('needsTriggerForGroup', () => {
+  it('main group never needs trigger', () => {
+    expect(needsTriggerForGroup(true, false, true)).toBe(false);
+    expect(needsTriggerForGroup(true, true, true)).toBe(false);
+  });
+
+  it('multi-agent group never needs trigger (coordinator handles untriggered)', () => {
+    expect(needsTriggerForGroup(false, true, true)).toBe(false);
+    expect(needsTriggerForGroup(false, true, undefined)).toBe(false);
+  });
+
+  it('single-agent non-main group with requiresTrigger=true needs trigger', () => {
+    expect(needsTriggerForGroup(false, false, true)).toBe(true);
+  });
+
+  it('single-agent non-main group with requiresTrigger=undefined needs trigger (default)', () => {
+    expect(needsTriggerForGroup(false, false, undefined)).toBe(true);
+  });
+
+  it('single-agent non-main group with requiresTrigger=false skips trigger', () => {
+    expect(needsTriggerForGroup(false, false, false)).toBe(false);
   });
 });

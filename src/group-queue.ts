@@ -33,7 +33,8 @@ interface GroupState {
 
 export class GroupQueue {
   private groups = new Map<string, GroupState>();
-  private activeCount = 0;
+  private activeWorkCount = 0;
+  private idlePoolCount = 0;
   private waitingGroups: string[] = [];
   private processMessagesFn: ((groupJid: string) => Promise<boolean>) | null =
     null;
@@ -68,6 +69,11 @@ export class GroupQueue {
 
   setOnWorkState(fn: (event: WorkStateEvent) => void): void {
     this.onWorkStateFn = fn;
+  }
+
+  /** Called by ContainerPool when idle pool count changes. */
+  setIdlePoolCount(count: number): void {
+    this.idlePoolCount = count;
   }
 
   private emitWorkState(
@@ -116,7 +122,10 @@ export class GroupQueue {
       return;
     }
 
-    if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
+    if (
+      this.activeWorkCount + this.idlePoolCount >=
+      MAX_CONCURRENT_CONTAINERS
+    ) {
       state.pendingMessages = true;
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
@@ -125,7 +134,7 @@ export class GroupQueue {
         summary: 'Waiting for container slot',
       });
       logger.debug(
-        { groupJid, activeCount: this.activeCount },
+        { groupJid, activeCount: this.activeWorkCount },
         'At concurrency limit, message queued',
       );
       return;
@@ -160,13 +169,16 @@ export class GroupQueue {
       return;
     }
 
-    if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
+    if (
+      this.activeWorkCount + this.idlePoolCount >=
+      MAX_CONCURRENT_CONTAINERS
+    ) {
       state.pendingTasks.push({ id: taskId, groupJid, fn });
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
       }
       logger.debug(
-        { groupJid, taskId, activeCount: this.activeCount },
+        { groupJid, taskId, activeCount: this.activeWorkCount },
         'At concurrency limit, task queued',
       );
       return;
@@ -276,10 +288,13 @@ export class GroupQueue {
       return;
     }
 
-    if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
+    if (
+      this.activeWorkCount + this.idlePoolCount >=
+      MAX_CONCURRENT_CONTAINERS
+    ) {
       state.pendingDelegations.push({ id: taskId, groupJid, fn });
       logger.debug(
-        { groupJid, taskId, activeCount: this.activeCount },
+        { groupJid, taskId, activeCount: this.activeWorkCount },
         'At concurrency limit, delegation queued',
       );
       return;
@@ -299,14 +314,14 @@ export class GroupQueue {
   ): Promise<void> {
     const state = this.getGroup(groupJid);
     state.activeDelegations++;
-    this.activeCount++;
+    this.activeWorkCount++;
 
     logger.debug(
       {
         groupJid,
         taskId: task.id,
         activeDelegations: state.activeDelegations,
-        activeCount: this.activeCount,
+        activeCount: this.activeWorkCount,
       },
       'Running delegation',
     );
@@ -323,7 +338,7 @@ export class GroupQueue {
       );
     } finally {
       state.activeDelegations--;
-      this.activeCount--;
+      this.activeWorkCount--;
       if (state.activeDelegations > 0) {
         this.emitWorkState(groupJid, 'delegating', {
           summary: `${state.activeDelegations} delegation(s) still active`,
@@ -355,7 +370,7 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     while (
       state.pendingDelegations.length > 0 &&
-      this.activeCount < MAX_CONCURRENT_CONTAINERS
+      this.activeWorkCount + this.idlePoolCount < MAX_CONCURRENT_CONTAINERS
     ) {
       const task = state.pendingDelegations.shift()!;
       this.runDelegation(groupJid, task).catch((err) =>
@@ -376,10 +391,10 @@ export class GroupQueue {
     state.idleWaiting = false;
     state.isTaskContainer = false;
     state.pendingMessages = false;
-    this.activeCount++;
+    this.activeWorkCount++;
 
     logger.debug(
-      { groupJid, reason, activeCount: this.activeCount },
+      { groupJid, reason, activeCount: this.activeWorkCount },
       'Starting container for group',
     );
     this.emitWorkState(groupJid, 'working', { summary: 'Processing messages' });
@@ -404,7 +419,7 @@ export class GroupQueue {
       state.process = null;
       state.containerName = null;
       state.groupFolder = null;
-      this.activeCount--;
+      this.activeWorkCount--;
       this.emitWorkState(groupJid, 'idle');
       this.drainGroup(groupJid);
     }
@@ -416,10 +431,10 @@ export class GroupQueue {
     state.idleWaiting = false;
     state.isTaskContainer = true;
     state.runningTaskId = task.id;
-    this.activeCount++;
+    this.activeWorkCount++;
 
     logger.debug(
-      { groupJid, taskId: task.id, activeCount: this.activeCount },
+      { groupJid, taskId: task.id, activeCount: this.activeWorkCount },
       'Running queued task',
     );
     this.emitWorkState(groupJid, 'task_running', {
@@ -439,7 +454,7 @@ export class GroupQueue {
       state.process = null;
       state.containerName = null;
       state.groupFolder = null;
-      this.activeCount--;
+      this.activeWorkCount--;
       this.emitWorkState(groupJid, 'idle');
       this.drainGroup(groupJid);
     }
@@ -506,7 +521,7 @@ export class GroupQueue {
   private drainWaiting(): void {
     while (
       this.waitingGroups.length > 0 &&
-      this.activeCount < MAX_CONCURRENT_CONTAINERS
+      this.activeWorkCount + this.idlePoolCount < MAX_CONCURRENT_CONTAINERS
     ) {
       const nextJid = this.waitingGroups.shift()!;
       const state = this.getGroup(nextJid);
@@ -534,6 +549,7 @@ export class GroupQueue {
 
   getSnapshot(): {
     activeCount: number;
+    idlePoolCount: number;
     maxConcurrent: number;
     groups: Array<{
       jid: string;
@@ -575,7 +591,8 @@ export class GroupQueue {
       }
     }
     return {
-      activeCount: this.activeCount,
+      activeCount: this.activeWorkCount,
+      idlePoolCount: this.idlePoolCount,
       maxConcurrent: MAX_CONCURRENT_CONTAINERS,
       groups,
       waitingCount: this.waitingGroups.length,
@@ -596,7 +613,10 @@ export class GroupQueue {
     }
 
     logger.info(
-      { activeCount: this.activeCount, detachedContainers: activeContainers },
+      {
+        activeCount: this.activeWorkCount,
+        detachedContainers: activeContainers,
+      },
       'GroupQueue shutting down (containers detached, not killed)',
     );
   }

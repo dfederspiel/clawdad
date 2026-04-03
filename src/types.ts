@@ -85,6 +85,8 @@ export type WorkPhase =
   | 'delegating'
   | 'task_running'
   | 'completed'
+  | 'pool_idle'
+  | 'pool_acquired'
   | 'error'
   | 'idle';
 

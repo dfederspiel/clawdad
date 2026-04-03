@@ -137,7 +137,7 @@ async function callClaude(
   };
 
   const body = JSON.stringify({
-    model: 'claude-sonnet-4-5-20250514',
+    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6-20250627',
     max_tokens: 16000,
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }],

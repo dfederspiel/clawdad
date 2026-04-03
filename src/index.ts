@@ -10,16 +10,19 @@ import { setActiveAgentName, clearActiveAgentName } from './agent-state.js';
 import {
   ASSISTANT_NAME,
   buildAgentTriggerPattern,
+  CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  POOL_IDLE_TIMEOUT,
   TRIGGER_IDLE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
   POLL_INTERVAL,
   TIMEZONE,
+  WARM_POOL_ENABLED,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import { checkContainerSmoke } from './health.js';
@@ -34,9 +37,11 @@ import {
   ProgressEvent,
   UsageData,
   runContainerAgent,
+  spawnContainer,
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { ContainerPool } from './container-pool.js';
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
@@ -160,6 +165,8 @@ let broadcastThreadCreated:
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+const pool = new ContainerPool(POOL_IDLE_TIMEOUT, WARM_POOL_ENABLED);
+pool.setOnCountChange((idleCount) => queue.setIdlePoolCount(idleCount));
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -467,6 +474,21 @@ export function getAvailableGroups(): import('./container-runner.js').AvailableG
 }
 
 /** @internal - exported for testing */
+/**
+ * Determines whether a group requires a trigger pattern match before processing.
+ * Multi-agent groups always bypass — the coordinator handles untriggered messages.
+ * Exported for testing.
+ */
+export function needsTriggerForGroup(
+  isMainGroup: boolean,
+  isMultiAgent: boolean,
+  requiresTrigger: boolean | undefined,
+): boolean {
+  if (isMainGroup) return false;
+  if (isMultiAgent) return false;
+  return requiresTrigger !== false;
+}
+
 export function _setRegisteredGroups(
   groups: Record<string, RegisteredGroup>,
 ): void {
@@ -568,8 +590,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (cmdResult.handled) return cmdResult.success;
   // --- End session command interception ---
 
-  // For non-main groups, check if trigger is required and present
-  if (!isMainGroup && group.requiresTrigger !== false) {
+  // For non-main single-agent groups, check if trigger is required and present.
+  if (needsTriggerForGroup(isMainGroup, isMultiAgent, group.requiresTrigger)) {
     const triggerPattern = getTriggerPattern(group.trigger);
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
@@ -1060,6 +1082,40 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
+  // Container lifecycle telemetry
+  const isCoordinator = agent ? !agent.trigger : true;
+  let containerReuse: 'cold_start' | 'warm_reuse' = 'cold_start';
+  logger.info(
+    {
+      agent: agentId,
+      chatJid,
+      containerReuse: 'pending',
+      hasSession: !!sessionId,
+      isCoordinator,
+      isDelegation,
+    },
+    'Container lifecycle decision',
+  );
+
+  // Accumulate tool history from progress events for persistence
+  const toolHistory: Array<{
+    tool: string;
+    summary: string;
+    timestamp: string;
+  }> = [];
+  const wrappedOnProgress = onProgress
+    ? (event: ProgressEvent) => {
+        if (event.tool) {
+          toolHistory.push({
+            tool: event.tool,
+            summary: event.summary,
+            timestamp: event.timestamp,
+          });
+        }
+        onProgress(event);
+      }
+    : undefined;
+
   // Wrap onOutput to track session ID and usage from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
@@ -1092,15 +1148,29 @@ async function runAgent(
             duration_ms: u.durationMs,
             num_turns: u.numTurns,
             is_error: output.status === 'error',
+            tool_history:
+              toolHistory.length > 0 ? JSON.stringify(toolHistory) : null,
+            container_reuse: containerReuse,
           });
-          attachUsageToLastBotMessage(chatJid, JSON.stringify(u));
+          attachUsageToLastBotMessage(
+            chatJid,
+            JSON.stringify({
+              ...u,
+              toolHistory: toolHistory.length > 0 ? toolHistory : undefined,
+            }),
+          );
           broadcastUsage(chatJid, u);
+          const cacheHitRatio =
+            u.cacheReadTokens /
+            Math.max(1, u.cacheReadTokens + u.cacheWriteTokens);
           logger.info(
             {
               agent: agentId,
               cost: u.costUsd,
               turns: u.numTurns,
               tokens: u.inputTokens + u.outputTokens,
+              cacheHitRatio: Math.round(cacheHitRatio * 100),
+              containerReuse,
             },
             'Agent run usage stored',
           );
@@ -1109,31 +1179,140 @@ async function runAgent(
     : undefined;
 
   try {
+    // ── Warm reuse path (coordinators only) ────────────────────────
+    if (isCoordinator && !isDelegation) {
+      const warmHandle = pool.acquire(agentId);
+      if (warmHandle) {
+        containerReuse = 'warm_reuse';
+        broadcastWorkState({
+          jid: chatJid,
+          phase: 'pool_acquired',
+          agent_name: agent?.displayName,
+          summary: 'Reusing warm container',
+          updated_at: new Date().toISOString(),
+        });
+
+        // Write prompt as IPC message to the group's input dir.
+        // Coordinator-only scope: one warm container per group, one IPC reader.
+        const inputDir = path.join(DATA_DIR, 'ipc', group.folder, 'input');
+        fs.mkdirSync(inputDir, { recursive: true });
+        const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
+        const tempPath = path.join(inputDir, `${filename}.tmp`);
+        fs.writeFileSync(
+          tempPath,
+          JSON.stringify({ type: 'message', text: prompt }),
+        );
+        fs.renameSync(tempPath, path.join(inputDir, filename));
+
+        const configTimeout =
+          group.containerConfig?.timeout || CONTAINER_TIMEOUT;
+        const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+
+        const result = await warmHandle.queryOnce(
+          wrappedOnOutput,
+          wrappedOnProgress,
+          timeoutMs,
+        );
+
+        if (result.status !== 'error') {
+          pool.release(agentId, warmHandle, chatJid);
+        } else {
+          await pool.reclaim(agentId);
+          // Clear stale session on error
+          if (
+            result.error &&
+            /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
+              result.error,
+            )
+          ) {
+            delete sessions[agentId];
+            deleteSession(agentId);
+          }
+        }
+
+        if (result.newSessionId) {
+          sessions[agentId] = result.newSessionId;
+          setSession(agentId, result.newSessionId);
+        }
+
+        return result.status === 'error' ? 'error' : 'success';
+      }
+    }
+
+    // ── Cold start path ────────────────────────────────────────────
+    const containerInput = {
+      prompt,
+      sessionId,
+      groupFolder: group.folder,
+      chatJid,
+      isMain,
+      assistantName: agent?.displayName || ASSISTANT_NAME,
+      agentId,
+      agentName: agent?.name || DEFAULT_AGENT_NAME,
+      canDelegate: agent ? !agent.trigger : false,
+      isDelegation: isDelegation || false,
+      achievements: getAchievementsForContainer(),
+    };
+
+    // Coordinators with pool enabled: use spawnContainer + queryOnce,
+    // then release to pool for warm reuse on subsequent messages.
+    if (isCoordinator && !isDelegation && WARM_POOL_ENABLED) {
+      const handle = await spawnContainer(group, containerInput);
+      queue.registerProcess(
+        chatJid,
+        handle.process,
+        handle.containerName,
+        group.folder,
+      );
+
+      const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
+      const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+
+      const result = await handle.queryOnce(
+        wrappedOnOutput,
+        wrappedOnProgress,
+        timeoutMs,
+      );
+
+      if (result.status !== 'error') {
+        pool.release(agentId, handle, chatJid);
+        if (result.newSessionId) {
+          sessions[agentId] = result.newSessionId;
+          setSession(agentId, result.newSessionId);
+        }
+        return 'success';
+      }
+
+      // Error: wait for exit, handle session cleanup
+      await handle.exitPromise;
+      if (
+        result.error &&
+        /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
+          result.error,
+        )
+      ) {
+        delete sessions[agentId];
+        deleteSession(agentId);
+      }
+      logger.error(
+        { agent: agentId, error: result.error },
+        'Container agent error',
+      );
+      return 'error';
+    }
+
+    // Non-pool path: delegations, tasks, or pool disabled.
+    // Uses runContainerAgent which waits for container exit.
     const output = await runContainerAgent(
       group,
-      {
-        prompt,
-        sessionId,
-        groupFolder: group.folder,
-        chatJid,
-        isMain,
-        assistantName: agent?.displayName || ASSISTANT_NAME,
-        agentId,
-        agentName: agent?.name || DEFAULT_AGENT_NAME,
-        canDelegate: agent ? !agent.trigger : false,
-        isDelegation: isDelegation || false,
-        achievements: getAchievementsForContainer(),
-      },
+      containerInput,
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
-      onProgress,
-      onText,
+      wrappedOnProgress,
     );
 
     if (output.status === 'error') {
-      // If the error is a missing session, clear the stale session so the next
-      // attempt starts fresh instead of retrying the same broken session forever.
       if (
         output.error &&
         /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
@@ -1299,9 +1478,15 @@ async function startMessageLoop(): Promise<void> {
           }
           // --- End session command interception ---
 
-          const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
+          const agents = groupAgents[chatJid] || [];
+          const isMultiAgent = agents.length > 1;
+          const needsTrigger = needsTriggerForGroup(
+            isMainGroup,
+            isMultiAgent,
+            group.requiresTrigger,
+          );
 
-          // For non-main groups, only act on trigger messages.
+          // For non-main single-agent groups, only act on trigger messages.
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
@@ -1328,11 +1513,7 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          // Multi-agent groups: if the message targets a different agent than
-          // the one currently running, don't pipe — close and re-enqueue so
-          // processGroupMessages can route to the correct agent.
-          const agents = groupAgents[chatJid] || [];
-          const isMultiAgent = agents.length > 1;
+          // Multi-agent groups: never pipe — route through processGroupMessages.
           let shouldPipe = true;
 
           if (isMultiAgent) {
@@ -1521,6 +1702,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
+    await pool.shutdown();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);

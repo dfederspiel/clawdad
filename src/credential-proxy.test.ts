@@ -53,6 +53,7 @@ import {
   substituteCredentials,
   readClaudeCodeToken,
   resolveAnthropicCredentials,
+  isAllowedCredentialTarget,
 } from './credential-proxy.js';
 
 function makeRequest(
@@ -217,6 +218,7 @@ describe('credential-proxy', () => {
     proxyPort = await startProxy({
       ANTHROPIC_API_KEY: 'sk-ant-real-key',
       GITHUB_TOKEN: 'ghp_real_github_token',
+      GITHUB_URL: `http://127.0.0.1:${upstreamPort}`,
     });
 
     await makeRequest(proxyPort, {
@@ -253,6 +255,7 @@ describe('credential-proxy', () => {
     proxyPort = await startProxy({
       ANTHROPIC_API_KEY: 'sk-ant-real-key',
       MY_SECRET: 'super_secret_value',
+      MY_URL: `http://127.0.0.1:${upstreamPort}`,
     });
 
     await makeRequest(
@@ -308,6 +311,7 @@ describe('credential-proxy', () => {
     proxyPort = await startProxy({
       ANTHROPIC_API_KEY: 'sk-ant-real-key',
       GITHUB_TOKEN: 'old_token',
+      GITHUB_URL: `http://127.0.0.1:${upstreamPort}`,
     });
 
     // First request with old token
@@ -334,6 +338,25 @@ describe('credential-proxy', () => {
       },
     });
     expect(lastUpstreamHeaders['authorization']).toBe('token new_token');
+  });
+
+  it('/forward blocks credential substitution to unauthorized hosts', async () => {
+    proxyPort = await startProxy({
+      ANTHROPIC_API_KEY: 'sk-ant-real-key',
+      GITHUB_TOKEN: 'ghp_real_github_token',
+    });
+
+    const res = await makeRequest(proxyPort, {
+      method: 'GET',
+      path: '/forward',
+      headers: {
+        'x-forward-to': `http://127.0.0.1:${upstreamPort}/api/user`,
+        authorization: 'token __CRED_GITHUB_TOKEN__',
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toBe('Credential forwarding blocked for target host');
   });
 
   it('returns 502 when upstream is unreachable', async () => {
@@ -415,6 +438,51 @@ describe('substituteCredentials', () => {
       __CRED_GITHUB_TOKEN__: 'ghp_real',
     });
     expect(result).toBe('no placeholders here');
+  });
+});
+
+describe('isAllowedCredentialTarget', () => {
+  it('allows GitHub credentials for github.com hosts', () => {
+    expect(
+      isAllowedCredentialTarget(
+        '__CRED_GITHUB_TOKEN__',
+        'https://api.github.com/user',
+        { GITHUB_TOKEN: 'ghp_real' },
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects GitHub credentials for arbitrary hosts', () => {
+    expect(
+      isAllowedCredentialTarget(
+        '__CRED_GITHUB_TOKEN__',
+        'https://evil.example.com/steal',
+        { GITHUB_TOKEN: 'ghp_real' },
+      ),
+    ).toBe(false);
+  });
+
+  it('allows unknown prefixes without an allowlist (warn-but-allow)', () => {
+    expect(
+      isAllowedCredentialTarget(
+        '__CRED_CUSTOM_TOKEN__',
+        'https://custom.example.com/api',
+        { CUSTOM_TOKEN: 'tok_real' },
+      ),
+    ).toBe(true);
+  });
+
+  it('allows configured custom hosts for a service prefix', () => {
+    expect(
+      isAllowedCredentialTarget(
+        '__CRED_GITLAB_TOKEN__',
+        'https://gitlab.internal.example.com/api/v4/projects',
+        {
+          GITLAB_TOKEN: 'glpat_real',
+          GITLAB_URL: 'https://gitlab.internal.example.com',
+        },
+      ),
+    ).toBe(true);
   });
 });
 

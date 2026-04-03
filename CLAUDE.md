@@ -210,6 +210,7 @@ Four types of skills exist in ClawDad. See [CONTRIBUTING.md](CONTRIBUTING.md) fo
 |-------|-------------|
 | `/setup` | First-time installation, authentication, service configuration |
 | `/update` | Pull latest code, rebuild, restart service |
+| `/restart` | Build and restart the service (no git pull) |
 | `/customize` | Adding channels, integrations, changing behavior |
 | `/debug` | Container issues, logs, troubleshooting |
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
@@ -269,20 +270,19 @@ curl -sf http://localhost:3456/health    # Windows web UI
 wsl -d Ubuntu -e bash -ic "systemctl --user status nanoclaw.service"  # WSL Discord + Gmail
 ```
 
-## Multi-Instance Architecture
+## Instance Architecture
 
-This install runs two separate instances:
+Single active instance (as of 2026-04-03):
 
-| Instance | Location | Channels | Trigger | Auto-start |
-|----------|----------|----------|---------|------------|
-| Windows | `C:\Users\david\code\clawdad-home` | Web UI (`:3456`) | `@DavidAF` | Startup folder bat |
-| WSL Ubuntu | `/home/david/code/nanoclaw` | Discord, Gmail | `@Andy` | systemd user service |
+| Instance | Location | Service Unit | Channels | Trigger |
+|----------|----------|-------------|----------|---------|
+| WSL Ubuntu | `/home/david/code/clawdad` | `com-nanoclaw-clawdad.service` | Web UI (`:3456`) | `@Andy` |
 
-**Important:** The Discord bot token can only have one active gateway connection. Starting multiple instances that include Discord will cause the bot to appear offline. Only the WSL nanoclaw instance should run Discord.
+The previous WSL nanoclaw instance (`/home/david/code/nanoclaw`, `nanoclaw.service`) ran Discord + Gmail but has been stopped and disabled. If those channels are needed again, re-enable that service or add the channels to this instance.
 
 **WSL gotcha:** Node is installed via Linuxbrew (`/home/linuxbrew/.linuxbrew/bin/node`) and is not in the non-interactive PATH. The systemd unit uses the full path. If starting manually, use `bash -ic` or the full node path.
 
-**Stale WSL services:** There are inactive systemd units (`com-nanoclaw-clawdad-test.service`, `com-nanoclaw-test2.service`) pointing at test repos. These are disabled. Only `nanoclaw.service` should be enabled.
+**Stale services:** There are inactive systemd units (`com-nanoclaw-clawdad-test.service`, `com-nanoclaw-test2.service`, `nanoclaw.service`) pointing at old/test repos. These are disabled. Only `com-nanoclaw-clawdad.service` should be enabled.
 
 ## Troubleshooting
 
