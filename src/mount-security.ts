@@ -166,12 +166,17 @@ function matchesBlockedPattern(
 }
 
 /**
- * Check if a real path is under an allowed root
+ * Check if a real path is under an allowed root.
+ * Returns the most specific (deepest) matching root so that a child root
+ * like ~/code/ember-repos can override a parent root like ~/code.
  */
 function findAllowedRoot(
   realPath: string,
   allowedRoots: AllowedRoot[],
 ): AllowedRoot | null {
+  let bestMatch: AllowedRoot | null = null;
+  let bestDepth = -1;
+
   for (const root of allowedRoots) {
     const expandedRoot = expandPath(root.path);
     const realRoot = getRealPath(expandedRoot);
@@ -184,11 +189,16 @@ function findAllowedRoot(
     // Check if realPath is under realRoot
     const relative = path.relative(realRoot, realPath);
     if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
-      return root;
+      // Prefer deeper (more specific) roots
+      const depth = realRoot.split(path.sep).length;
+      if (depth > bestDepth) {
+        bestMatch = root;
+        bestDepth = depth;
+      }
     }
   }
 
-  return null;
+  return bestMatch;
 }
 
 /**
