@@ -54,14 +54,22 @@ if [ -z "$PROXY_URL" ]; then
 fi
 
 # Fetch the real credential from the proxy
-CRED_VALUE=$(curl -sf "${PROXY_URL}/credential/${SERVICE}" 2>/dev/null) || {
-  echo "Error: failed to fetch credential for service '${SERVICE}'" >&2
-  echo "Check that the credential is registered (use request_credential if needed)" >&2
+HTTP_CODE=$(curl -s -o /tmp/.cred-exec-response -w "%{http_code}" "${PROXY_URL}/credential/${SERVICE}" 2>/dev/null) || {
+  echo "Error: could not reach credential proxy at ${PROXY_URL}" >&2
+  echo "Is ClawDad running? Check the service status." >&2
   exit 1
 }
 
-if [ -z "$CRED_VALUE" ]; then
-  echo "Error: empty credential returned for service '${SERVICE}'" >&2
+CRED_VALUE=$(cat /tmp/.cred-exec-response 2>/dev/null)
+rm -f /tmp/.cred-exec-response
+
+if [ "$HTTP_CODE" != "200" ] || [ -z "$CRED_VALUE" ]; then
+  # The proxy returns a helpful text error — pass it through
+  echo "Error: credential lookup failed for service '${SERVICE}' (HTTP ${HTTP_CODE})" >&2
+  if [ -n "$CRED_VALUE" ]; then
+    echo "" >&2
+    echo "$CRED_VALUE" >&2
+  fi
   exit 1
 fi
 
