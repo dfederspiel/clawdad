@@ -53,6 +53,7 @@ interface ContainerOutput {
   newSessionId?: string;
   error?: string;
   usage?: UsageData;
+  textsAlreadyStreamed?: number;
 }
 
 interface SessionEntry {
@@ -132,6 +133,8 @@ const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 const PROGRESS_START_MARKER = '---NANOCLAW_PROGRESS_START---';
 const PROGRESS_END_MARKER = '---NANOCLAW_PROGRESS_END---';
+const TEXT_START_MARKER = '---NANOCLAW_TEXT_START---';
+const TEXT_END_MARKER = '---NANOCLAW_TEXT_END---';
 
 interface ProgressEvent {
   tool?: string;
@@ -149,6 +152,12 @@ function writeProgress(event: ProgressEvent): void {
   console.log(PROGRESS_START_MARKER);
   console.log(JSON.stringify(event));
   console.log(PROGRESS_END_MARKER);
+}
+
+function writeText(text: string): void {
+  console.log(TEXT_START_MARKER);
+  console.log(JSON.stringify({ text, timestamp: new Date().toISOString() }));
+  console.log(TEXT_END_MARKER);
 }
 
 function log(message: string): void {
@@ -546,6 +555,7 @@ async function runQuery(
         for (const block of assistantMsg.message.content) {
           if (block.type === 'text' && block.text) {
             assistantTexts.push(block.text);
+            writeText(block.text);
           }
           if (block.type === 'tool_use' && block.name) {
             const summary = summarizeTool(block.name, block.input);
@@ -602,6 +612,7 @@ async function runQuery(
         result: textResult || null,
         newSessionId,
         usage: accumulatedUsage,
+        textsAlreadyStreamed: assistantTexts.length,
       });
       // Reset retry counter on successful text output
       if (textResult) {
@@ -618,17 +629,16 @@ async function runQuery(
   ipcPolling = false;
   log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
 
-  // If no result was emitted but we have assistant text, send it as the result
-  // This handles cases where the agent uses interactive elements (action buttons, rich blocks)
-  // and the SDK doesn't generate a result message because it's waiting for user input
+  // If no result was emitted but we have assistant text, send completion.
+  // Text was already streamed via writeText markers — just emit usage/session.
   if (resultCount === 0 && assistantTexts.length > 0) {
-    const combinedText = assistantTexts.join('\n\n');
-    log(`No result message received, using collected assistant text (${combinedText.length} chars)`);
+    log(`No result message received, ${assistantTexts.length} text blocks already streamed`);
     writeOutput({
       status: 'success',
-      result: combinedText,
+      result: null,
       newSessionId,
       usage: accumulatedUsage,
+      textsAlreadyStreamed: assistantTexts.length,
     });
   }
 

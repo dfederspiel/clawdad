@@ -37,6 +37,8 @@ const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 const PROGRESS_START_MARKER = '---NANOCLAW_PROGRESS_START---';
 const PROGRESS_END_MARKER = '---NANOCLAW_PROGRESS_END---';
+const TEXT_START_MARKER = '---NANOCLAW_TEXT_START---';
+const TEXT_END_MARKER = '---NANOCLAW_TEXT_END---';
 
 export interface ProgressEvent {
   tool?: string;
@@ -77,6 +79,7 @@ export interface ContainerOutput {
   newSessionId?: string;
   error?: string;
   usage?: UsageData;
+  textsAlreadyStreamed?: number;
 }
 
 interface VolumeMount {
@@ -300,6 +303,7 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   isMain: boolean,
+  group?: RegisteredGroup,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -354,6 +358,13 @@ async function buildContainerArgs(
     '-e',
     `CRED_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
   );
+
+  // SSH agent forwarding — mount host socket so containers can use SSH
+  // without the private key ever entering the container.
+  if (group?.containerConfig?.sshAgent && process.env.SSH_AUTH_SOCK) {
+    const sock = process.env.SSH_AUTH_SOCK;
+    args.push('-v', `${sock}:/ssh-agent`, '-e', 'SSH_AUTH_SOCK=/ssh-agent');
+  }
 
   // Pass model override for LiteLLM proxy routing
   const claudeModel = process.env.CLAUDE_MODEL || allEnv.CLAUDE_MODEL;
@@ -420,6 +431,27 @@ export class StdoutParser extends EventEmitter {
       }
     }
 
+    // Parse text markers (intermediate agent text blocks)
+    let textStart: number;
+    while ((textStart = this.parseBuffer.indexOf(TEXT_START_MARKER)) !== -1) {
+      const textEnd = this.parseBuffer.indexOf(TEXT_END_MARKER, textStart);
+      if (textEnd === -1) break;
+      const textJson = this.parseBuffer
+        .slice(textStart + TEXT_START_MARKER.length, textEnd)
+        .trim();
+      this.parseBuffer = this.parseBuffer.slice(
+        textEnd + TEXT_END_MARKER.length,
+      );
+      try {
+        const parsed = JSON.parse(textJson);
+        if (parsed.text) {
+          this.emit('text', parsed.text as string);
+        }
+      } catch {
+        /* ignore malformed text */
+      }
+    }
+
     // Parse output markers
     let startIdx: number;
     while ((startIdx = this.parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1) {
@@ -469,6 +501,7 @@ export interface ContainerHandle {
   queryOnce(
     onOutput?: (output: ContainerOutput) => Promise<void>,
     onProgress?: (event: ProgressEvent) => void,
+    onText?: (text: string) => Promise<void>,
     timeoutMs?: number,
   ): Promise<ContainerOutput>;
 }
@@ -476,15 +509,17 @@ export interface ContainerHandle {
 function createQueryOnce(
   handle: ContainerHandle,
 ): ContainerHandle['queryOnce'] {
-  return (onOutput, onProgress, timeoutMs) => {
+  return (onOutput, onProgress, onText, timeoutMs) => {
     return new Promise<ContainerOutput>((resolve) => {
       let resolved = false;
       let timeout: ReturnType<typeof setTimeout> | null = null;
+      let textChain = Promise.resolve();
 
       const cleanup = () => {
         if (timeout) clearTimeout(timeout);
         handle.parser.off('output', onOutputEvent);
         handle.parser.off('progress', onProgressEvent);
+        handle.parser.off('text', onTextEvent);
         handle.parser.off('exit', onExitEvent);
       };
 
@@ -525,6 +560,14 @@ function createQueryOnce(
         if (onProgress) onProgress(event);
       };
 
+      const onTextEvent = (text: string) => {
+        if (resolved) return;
+        resetTimeout();
+        if (onText) {
+          textChain = textChain.then(() => onText(text));
+        }
+      };
+
       const onExitEvent = ({ code }: { code: number | null }) => {
         if (resolved) return;
         resolved = true;
@@ -539,6 +582,7 @@ function createQueryOnce(
 
       handle.parser.on('output', onOutputEvent);
       handle.parser.on('progress', onProgressEvent);
+      handle.parser.on('text', onTextEvent);
       handle.parser.on('exit', onExitEvent);
 
       if (timeoutMs) resetTimeout();
@@ -597,6 +641,7 @@ export async function spawnContainer(
     mounts,
     containerName,
     input.isMain,
+    group,
   );
 
   logger.info(
@@ -780,6 +825,7 @@ export async function runContainerAgent(
   onProcess: (proc: ChildProcess, containerName: string) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
   onProgress?: (event: ProgressEvent) => void,
+  onText?: (text: string) => Promise<void>,
 ): Promise<ContainerOutput> {
   const handle = await spawnContainer(group, input);
   onProcess(handle.process, handle.containerName);
@@ -791,7 +837,12 @@ export async function runContainerAgent(
       : Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
 
   // First query (already in-flight via stdin)
-  const firstResult = await handle.queryOnce(onOutput, onProgress, timeoutMs);
+  const firstResult = await handle.queryOnce(
+    onOutput,
+    onProgress,
+    onText,
+    timeoutMs,
+  );
 
   // Delegation or error: wait for container to exit, return result
   if (input.isDelegation || firstResult.status === 'error') {
@@ -807,9 +858,14 @@ export async function runContainerAgent(
       if (output.newSessionId) handle.sessionId = output.newSessionId;
       if (onOutput) await onOutput(output);
     };
+    const onSubsequentText = async (text: string) => {
+      if (onText) await onText(text);
+    };
     handle.parser.on('output', onSubsequentOutput);
+    handle.parser.on('text', onSubsequentText);
     handle.exitPromise.then(() => {
       handle.parser.off('output', onSubsequentOutput);
+      handle.parser.off('text', onSubsequentText);
       resolve({
         status: 'success',
         result: null,

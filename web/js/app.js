@@ -79,6 +79,7 @@ api.onSSE('message', (data) => {
     messages.value = [
       ...messages.value,
       {
+        id: data.message_id,
         role: 'assistant',
         content: data.text,
         timestamp: data.timestamp,
@@ -94,6 +95,16 @@ api.onSSE('message', (data) => {
     // Ding for message in background group
     playNotification(data.jid);
   }
+});
+
+api.onSSE('message_update', (data) => {
+  // Update an existing message in-place (used for streaming intermediate text)
+  if (data.jid === selectedJid.value) {
+    messages.value = messages.value.map((m) =>
+      m.id === data.message_id ? { ...m, content: data.text } : m
+    );
+  }
+  // No notification sound — it's an update, not a new message
 });
 
 api.onSSE('typing', (data) => {

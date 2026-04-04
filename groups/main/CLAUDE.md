@@ -64,9 +64,47 @@ When you learn something important:
 
 This is the **main channel** with elevated privileges.
 
-## Authentication
+## API Access & Credentials
 
-Anthropic credentials are resolved automatically from Claude Code's credential store (`~/.claude/.credentials.json`), with `.env` as fallback. The credential proxy handles injection — see `src/credential-proxy.ts`. Service credentials use `api.sh` which routes through the proxy's `/forward` endpoint.
+You have access to multiple services through the credential proxy. **NEVER use raw `curl`** — use `/workspace/scripts/api.sh` for HTTP API calls and `/workspace/scripts/cred-exec.sh` for CLI tools (`gh`, `glab`, etc.).
+
+Your environment variables (`$GITHUB_TOKEN`, `$ATLASSIAN_API_TOKEN`, etc.) contain **placeholders**, not real secrets. The proxy substitutes them at request time. You MUST pass auth headers explicitly.
+
+### Available services
+
+| Service | Auth pattern |
+|---------|-------------|
+| GitHub | `/workspace/scripts/api.sh github GET "https://api.github.com/repos/OWNER/REPO" -H "Authorization: token $GITHUB_TOKEN"` |
+| GitLab | `/workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects" -H "PRIVATE-TOKEN: $GITLAB_TOKEN"` |
+| Atlassian (Jira/Confluence) | `/workspace/scripts/api.sh atlassian GET "$ATLASSIAN_BASE_URL/rest/api/3/..." -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN"` |
+| Harness | `/workspace/scripts/api.sh harness GET "https://app.harness.io/ng/api/..." -H "x-api-key: $HARNESS_API_KEY"` |
+| LaunchDarkly | `/workspace/scripts/api.sh launchdarkly GET "https://app.launchdarkly.com/api/v2/..." -H "Authorization: $LAUNCHDARKLY_API_KEY"` |
+| BlackDuck | `/workspace/scripts/api.sh blackduck GET "$BLACKDUCK_URL/api/..." -H "Authorization: token $BLACKDUCK_API_TOKEN"` |
+
+### CLI tools (gh, glab, etc.)
+
+```bash
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- gh pr list
+/workspace/scripts/cred-exec.sh gitlab GITLAB_TOKEN -- glab mr list
+```
+
+### Cloning repos
+
+```bash
+# HTTPS clone with cred-exec
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- \
+  git clone https://x-access-token:${GITHUB_TOKEN}@github.com/OWNER/REPO.git /workspace/group/repo
+
+# Or read individual files via API
+/workspace/scripts/api.sh github GET "https://api.github.com/repos/OWNER/REPO/contents/PATH" \
+  -H "Authorization: token $GITHUB_TOKEN"
+```
+
+### If you get a 401
+
+1. Check you're using `api.sh` or `cred-exec.sh`, not raw `curl`/`gh`
+2. Check you're passing the auth header/flag
+3. If still failing, use `mcp__nanoclaw__request_credential` to re-register the credential
 
 ## Container Mounts
 

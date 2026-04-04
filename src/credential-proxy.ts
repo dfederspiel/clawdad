@@ -329,6 +329,17 @@ export function startCredentialProxy(
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
+        // ── /credential — list available services or fetch a specific one
+        if (req.method === 'GET' && req.url === '/credential') {
+          handleCredentialList(res);
+          return;
+        }
+        const credMatch = req.url?.match(/^\/credential\/([a-zA-Z0-9_-]+)$/);
+        if (credMatch && req.method === 'GET') {
+          handleCredentialLookup(credMatch[1], res);
+          return;
+        }
+
         // ── /forward — generic credential-injecting forward proxy ───
         if (req.url === '/forward' || req.url?.startsWith('/forward?')) {
           handleForward(req, res, Buffer.concat(chunks));
@@ -441,6 +452,125 @@ function substituteInHeader(
   return substituteCredentials(value, credMap);
 }
 
+// ── /credential/:service handler ────────────────────────────────────
+
+/**
+ * Return the raw credential value for a named service.
+ * Looks up env vars matching the service prefix (e.g., "github" → GITHUB_TOKEN).
+ * Used by `cred-exec` inside containers to inject credentials into CLI tools.
+ */
+/** List available credential services (by prefix) from .env. */
+function listAvailableServices(
+  env: Record<string, string>,
+): { service: string; envVar: string }[] {
+  const results: { service: string; envVar: string }[] = [];
+  for (const key of Object.keys(env)) {
+    if (CREDENTIAL_PATTERN.test(key) && env[key]) {
+      // Derive service name: GITHUB_TOKEN → github, ATLASSIAN_API_TOKEN → atlassian
+      const match = key.match(/^(.+?)(?:_API)?_(TOKEN|KEY|SECRET|PASSWORD)$/);
+      if (match) {
+        results.push({
+          service: match[1].toLowerCase(),
+          envVar: key,
+        });
+      }
+    }
+  }
+  // Deduplicate by service name (keep first match, which is the one our lookup would find)
+  const seen = new Set<string>();
+  return results.filter((r) => {
+    if (seen.has(r.service)) return false;
+    seen.add(r.service);
+    return true;
+  });
+}
+
+function handleCredentialLookup(
+  service: string,
+  res: import('http').ServerResponse,
+): void {
+  const env = readEnvFile();
+  const prefix = service.toUpperCase();
+
+  // Find the best matching credential: try _TOKEN, _KEY, _SECRET, _PASSWORD, _API_TOKEN, _API_KEY
+  const suffixes = [
+    '_TOKEN',
+    '_API_TOKEN',
+    '_API_KEY',
+    '_KEY',
+    '_SECRET',
+    '_PASSWORD',
+  ];
+  let value: string | undefined;
+  let matchedKey: string | undefined;
+
+  for (const suffix of suffixes) {
+    const key = `${prefix}${suffix}`;
+    if (env[key]) {
+      value = env[key];
+      matchedKey = key;
+      break;
+    }
+  }
+
+  if (!value || !matchedKey) {
+    const available = listAvailableServices(env);
+    const availableList = available
+      .map((a) => `  - "${a.service}" (${a.envVar})`)
+      .join('\n');
+    const tried = suffixes.map((s) => `${prefix}${s}`).join(', ');
+
+    logger.debug(
+      { service, prefix, availableCount: available.length },
+      'Credential lookup: no matching credential found',
+    );
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end(
+      [
+        `No credential found for service "${service}".`,
+        '',
+        `Looked for env vars: ${tried}`,
+        '',
+        available.length > 0
+          ? `Available services:\n${availableList}`
+          : 'No credentials are configured. Use mcp__nanoclaw__request_credential to register one.',
+        '',
+        'To fix:',
+        `  1. Use one of the available service names listed above`,
+        `  2. Or register a new credential with mcp__nanoclaw__request_credential`,
+        '',
+        'Usage: cred-exec.sh <service> <ENV_VAR> -- <command>',
+        'For HTTP API calls, prefer: api.sh <service> <METHOD> <URL> [CURL_ARGS]',
+      ].join('\n'),
+    );
+    return;
+  }
+
+  logger.debug(
+    { service, key: matchedKey },
+    'Credential lookup: returning value',
+  );
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end(value);
+}
+
+/** GET /credential — list all available services (no values exposed). */
+function handleCredentialList(res: import('http').ServerResponse): void {
+  const env = readEnvFile();
+  const available = listAvailableServices(env);
+
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end(
+    [
+      'Available credential services:',
+      ...available.map((a) => `  - "${a.service}" (${a.envVar})`),
+      '',
+      'Usage: cred-exec.sh <service> <ENV_VAR> -- <command>',
+      'For HTTP API calls: api.sh <service> <METHOD> <URL> [CURL_ARGS]',
+    ].join('\n'),
+  );
+}
+
 // ── /forward handler ────────────────────────────────────────────────
 
 function handleForward(
@@ -486,7 +616,15 @@ function handleForward(
   );
 
   // Build outbound headers with placeholder substitution
-  const parsed = new URL(targetUrl);
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    logger.warn({ targetUrl }, 'Credential proxy /forward: invalid URL');
+    res.writeHead(400);
+    res.end(`Invalid X-Forward-To URL: ${targetUrl}`);
+    return;
+  }
   const outIsHttps = parsed.protocol === 'https:';
   const makeRequest = outIsHttps ? httpsRequest : httpRequest;
 

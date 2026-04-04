@@ -1,0 +1,217 @@
+---
+name: credential-proxy
+description: How to make authenticated API calls to external services. Covers api.sh, cred-exec, auth patterns, available credentials, cloning repos, SSH forwarding, and troubleshooting 401s. Read this before calling any external API or using a CLI tool that needs auth.
+---
+
+# Credential Proxy — Authenticated API Access
+
+All external API calls go through the credential proxy via `/workspace/scripts/api.sh`. The proxy injects real credentials at request time — your environment variables contain **placeholders**, not real secrets.
+
+## The One Rule
+
+**ALWAYS use `/workspace/scripts/api.sh`** for authenticated HTTP requests. Never use raw `curl`, `gh`, `git clone` with SSH, or any other tool that bypasses the proxy — unless you wrap it with `cred-exec.sh` (see below).
+
+```bash
+/workspace/scripts/api.sh <service_label> <METHOD> <URL> [CURL_ARGS...]
+```
+
+The first argument is a service label (for logging). The rest is passed to `curl`.
+
+## CLI Tools — `cred-exec`
+
+For CLI tools that need credentials (like `gh`, `glab`, `aws`, etc.), use `cred-exec.sh` to inject a real credential for the duration of a single command:
+
+```bash
+/workspace/scripts/cred-exec.sh <service> <env_var> -- <command...>
+```
+
+This fetches the real credential from the proxy and sets it as `<env_var>` only for the child process. The credential never touches disk or the container's global environment.
+
+### Examples
+
+```bash
+# GitHub CLI
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- gh pr list
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- gh repo clone owner/repo
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- gh issue view 123
+
+# GitLab CLI
+/workspace/scripts/cred-exec.sh gitlab GITLAB_TOKEN -- glab mr list
+
+# Any CLI tool that reads auth from an env var
+/workspace/scripts/cred-exec.sh myservice MY_API_KEY -- some-cli --flag
+```
+
+### How it works
+
+1. `cred-exec.sh` calls the credential proxy's `/credential/<service>` endpoint
+2. The proxy looks up the best matching credential in `.env` (e.g., `github` → `GITHUB_TOKEN`)
+3. The real value is set as the specified env var for the wrapped command
+4. The command runs and exits — credential exists only in that process's memory
+
+### When to use `api.sh` vs `cred-exec.sh`
+
+| Scenario | Tool |
+|----------|------|
+| HTTP API calls (REST, GraphQL) | `api.sh` |
+| CLI tools (`gh`, `glab`, `aws`, `jira`, etc.) | `cred-exec.sh` |
+| `git clone` / `git push` over HTTPS | `cred-exec.sh` (see Cloning Repositories below) |
+
+## Available Services
+
+Check what's configured in your container:
+
+```bash
+env | grep -E '_(TOKEN|KEY|SECRET|URL|EMAIL)=' | sed 's/=.*//' | sort
+```
+
+## Auth Patterns by Service
+
+### GitHub
+
+```bash
+# API calls
+/workspace/scripts/api.sh github GET "https://api.github.com/repos/OWNER/REPO" \
+  -H "Authorization: token $GITHUB_TOKEN"
+
+# CLI tool
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- gh pr list
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- gh repo clone owner/repo
+```
+
+### GitLab
+
+```bash
+# API calls
+/workspace/scripts/api.sh gitlab GET "$GITLAB_URL/api/v4/projects?membership=true" \
+  -H "PRIVATE-TOKEN: $GITLAB_TOKEN"
+
+# CLI tool
+/workspace/scripts/cred-exec.sh gitlab GITLAB_TOKEN -- glab mr list
+```
+
+### Atlassian (Jira / Confluence)
+
+**IMPORTANT:** `/rest/api/3/search` is deprecated (returns 410). Use `/rest/api/3/search/jql` with POST instead.
+
+```bash
+INSTANCE="$ATLASSIAN_BASE_URL"
+
+# Search Jira issues (POST — required for /search/jql)
+/workspace/scripts/api.sh atlassian POST "${INSTANCE}/rest/api/3/search/jql" \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN" \
+  -d '{"jql": "project = PROJ AND assignee = currentUser() ORDER BY updated DESC", "fields": ["summary", "status", "updated"], "maxResults": 20}'
+
+# Get a single issue
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/rest/api/3/issue/PROJ-123" \
+  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN"
+
+# Read a Confluence page
+/workspace/scripts/api.sh atlassian GET "${INSTANCE}/wiki/rest/api/content/PAGE_ID?expand=body.storage" \
+  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN"
+```
+
+### Harness
+
+```bash
+/workspace/scripts/api.sh harness GET "https://app.harness.io/ng/api/..." \
+  -H "x-api-key: $HARNESS_API_KEY"
+```
+
+### LaunchDarkly
+
+```bash
+/workspace/scripts/api.sh launchdarkly GET "https://app.launchdarkly.com/api/v2/flags/PROJECT_KEY" \
+  -H "Authorization: $LAUNCHDARKLY_API_KEY"
+```
+
+### BlackDuck
+
+```bash
+/workspace/scripts/api.sh blackduck GET "$BLACKDUCK_URL/api/..." \
+  -H "Authorization: token $BLACKDUCK_API_TOKEN"
+```
+
+### Custom / Other Services
+
+Use any label — the proxy doesn't restrict service names:
+
+```bash
+/workspace/scripts/api.sh my-service GET "https://api.example.com/endpoint" \
+  -H "Authorization: Bearer $MY_SERVICE_TOKEN"
+
+# Or with cred-exec for a CLI tool
+/workspace/scripts/cred-exec.sh my-service MY_SERVICE_TOKEN -- some-tool
+```
+
+## Cloning Repositories
+
+### HTTPS clone with `cred-exec`
+
+The easiest way to clone a full repo:
+
+```bash
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- \
+  git clone https://x-access-token:${GITHUB_TOKEN}@github.com/OWNER/REPO.git /workspace/group/repo-name
+```
+
+Note: `cred-exec` sets the real `GITHUB_TOKEN` value, so the `${GITHUB_TOKEN}` in the URL resolves to the real token within the child process.
+
+### GitHub API (for a few files)
+
+```bash
+/workspace/scripts/api.sh github GET "https://api.github.com/repos/OWNER/REPO/contents/path/to/file" \
+  -H "Authorization: token $GITHUB_TOKEN" | jq -r '.content' | base64 -d
+```
+
+### SSH clone (requires `sshAgent` opt-in)
+
+If the group has `containerConfig.sshAgent: true` and the host has `SSH_AUTH_SOCK` set, the host's SSH agent socket is forwarded into the container. This allows SSH operations without the private key entering the container:
+
+```bash
+git clone git@github.com:OWNER/REPO.git /workspace/group/repo-name
+ssh user@host "command"
+```
+
+The agent cannot be configured from within the container — it only provides access to keys already loaded on the host.
+
+### Ask for a local mount
+
+If the user has the repo on their machine:
+
+> I can't clone repos directly from inside my container. Could you tell me the local path to the repo? I'll set it up as an additional mount.
+
+## Registering New Credentials
+
+If a service returns 401 and you've confirmed you're using `api.sh` with the right auth header:
+
+```
+Use mcp__nanoclaw__request_credential with:
+- service: "service-name"
+- description: "Why this credential is needed"
+```
+
+This opens a popup in the user's browser. The credential is available immediately — no restart needed. A `[credential_registered]` message appears in chat when complete.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| 401 Unauthorized | Not using `api.sh` or `cred-exec` | Switch from raw `curl`/`gh` to `api.sh` or `cred-exec.sh` |
+| 401 Unauthorized | Missing auth header | Add `-H "Authorization: token $TOKEN"` or equivalent |
+| 401 Unauthorized | Credential expired/missing | Use `request_credential` to re-register |
+| 410 Gone | Deprecated Jira endpoint | Use `/rest/api/3/search/jql` POST instead of `/rest/api/3/search` GET |
+| Connection refused | Wrong base URL | Check `env \| grep _URL` for the correct service URL |
+| Empty response | Placeholder not substituted | Verify the env var name matches exactly (case-sensitive) |
+| `cred-exec` fails | CRED_PROXY_URL not set | You're likely not in a container — use `api.sh` on the host |
+
+## Key Rules
+
+1. **Always `api.sh`** — never raw `curl` for authenticated HTTP calls
+2. **Always `cred-exec.sh`** — for CLI tools that need credentials (`gh`, `glab`, etc.)
+3. **Always pass auth headers** — the proxy substitutes placeholders, it doesn't add headers
+4. **Never echo credentials** — env vars contain placeholders, but don't log them anyway
+5. **Never ask users to paste tokens** — use `request_credential` instead
+6. **Try first, ask second** — attempt the API call before requesting new credentials

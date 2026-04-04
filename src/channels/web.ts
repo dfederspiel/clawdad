@@ -25,6 +25,7 @@ import { getHealthStatus } from '../health.js';
 import {
   getMessagesSince,
   storeMessageDirect,
+  updateMessageContent,
   clearMessages,
   getAllTasks,
   getTaskById,
@@ -170,7 +171,8 @@ export class WebChannel implements Channel {
     jid: string,
     text: string,
     threadId?: string,
-  ): Promise<void> {
+  ): Promise<string> {
+    const id = randomUUID();
     const timestamp = new Date().toISOString();
 
     // Use active agent name if set (multi-agent groups), else default
@@ -178,7 +180,7 @@ export class WebChannel implements Channel {
 
     // Persist agent response so it survives page reloads
     storeMessageDirect({
-      id: randomUUID(),
+      id,
       chat_jid: jid,
       sender: senderName,
       sender_name: senderName,
@@ -191,12 +193,34 @@ export class WebChannel implements Channel {
 
     this.broadcast('message', {
       jid,
+      message_id: id,
       text,
       timestamp,
       thread_id: threadId,
       sender_name: senderName,
     });
     logger.info({ jid, length: text.length, threadId }, 'Web message sent');
+    return id;
+  }
+
+  async updateMessage(
+    jid: string,
+    messageId: string,
+    text: string,
+    _threadId?: string,
+  ): Promise<void> {
+    const senderName = getActiveAgentName(jid) || ASSISTANT_NAME;
+
+    // Update content only — preserve original timestamp and rowid so
+    // message order stays stable on page refresh.
+    updateMessageContent(messageId, jid, text);
+
+    this.broadcast('message_update', {
+      jid,
+      message_id: messageId,
+      text,
+      sender_name: senderName,
+    });
   }
 
   async setTyping(

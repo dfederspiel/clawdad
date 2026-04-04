@@ -30,6 +30,7 @@ export interface AllowedRoot {
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
+  sshAgent?: boolean; // Mount host SSH_AUTH_SOCK into container (default: false)
 }
 
 export interface RegisteredGroup {
@@ -137,12 +138,19 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string, threadId?: string): Promise<void>;
+  sendMessage(jid: string, text: string, threadId?: string): Promise<string>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
   setTyping?(jid: string, isTyping: boolean, threadId?: string): Promise<void>;
+  // Optional: update a previously sent message in-place.
+  updateMessage?(
+    jid: string,
+    messageId: string,
+    text: string,
+    threadId?: string,
+  ): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
 }

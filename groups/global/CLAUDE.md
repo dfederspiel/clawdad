@@ -20,6 +20,25 @@ Wrap internal reasoning in `<internal>` tags — it's logged but not sent:
 Here's what I found...
 ```
 
+**CRITICAL:** Only use `<internal>` for brief reasoning notes (plan-of-action, self-reminders). NEVER wrap content meant for the user — drafts, summaries, reports, :::blocks, code output, or any deliverable — in `<internal>` tags. Everything inside `<internal>` is **permanently stripped** before delivery. If you compile a draft and then say "it's above," but the draft was inside `<internal>` tags, the user will see nothing.
+
+### Message delivery — what the user actually sees
+
+**Only your FINAL text output is delivered to the user.** Text you produce between tool calls is part of your reasoning chain but is NOT sent. If you write a long draft, then make tool calls (logging, saving files), and then say "the draft is above" — the user only sees "the draft is above." The draft itself is lost.
+
+**Rules:**
+1. **All user-facing content must be in your final response** — the last text you produce after all tool calls are done. Do not make tool calls after writing content meant for the user.
+2. **If you need to do work after producing content**, use `mcp__nanoclaw__send_message` to deliver the content first, then continue with tool calls. `send_message` delivers immediately regardless of what happens after.
+3. **Never say "see above" or "the draft is above"** unless you used `send_message` to deliver it. If it's in your final response, say "here's the draft" — not "above."
+
+**Pattern — long content with follow-up work:**
+```
+1. Do all research/tool calls first
+2. Use send_message to deliver the main content
+3. Do any follow-up work (logging, saving files)
+4. Final response: brief acknowledgment only
+```
+
 ### Sub-agents and teammates
 
 When working as a sub-agent or teammate, only use `send_message` if instructed by the main agent.
@@ -86,58 +105,20 @@ The `conversations/` folder contains searchable markdown snapshots of past sessi
 - Remove memories that are no longer true
 - Keep `MEMORY.md` under 50 lines
 
-## Credential Registration
+## API Access & Credentials
 
-If you need API credentials for a service, use the `mcp__nanoclaw__request_credential` tool. It opens a secure popup in the user's browser — you never see the secret.
+**All external API calls MUST go through `/workspace/scripts/api.sh`** — it routes through the credential proxy which injects real secrets at request time. Your environment variables contain placeholders, not real secrets. Never use raw `curl`, `gh` CLI, or `git clone` with SSH.
 
-**CRITICAL: Never ask users to paste secrets, API keys, or tokens in chat.** Always use `request_credential`.
+The `credential-proxy` skill has full documentation: auth patterns for every service, repo cloning, troubleshooting 401s, and examples. Read it before making any API call.
 
-```
-Use mcp__nanoclaw__request_credential with:
-- service: "github" (or "atlassian", "gitlab", "launchdarkly", or a custom name)
-- description: "Why this credential is needed — shown to the user in the popup"
-```
-
-The tool returns immediately — it does NOT block waiting for the user. The flow is:
-1. Tool opens a popup in the user's browser
-2. Tool returns right away — continue with other work
-3. User enters their secret in the form (you never see it)
-4. Secret is saved and available immediately via the credential proxy — no restart needed
-5. A `[credential_registered]` message appears in the chat — that's your signal to proceed
-
-### Using registered credentials
-
-Credentials are injected by the credential proxy. Always use `/workspace/scripts/api.sh` for service API calls — it routes through the proxy automatically:
-
+**Quick reference:**
 ```bash
-# GitHub
-/workspace/scripts/api.sh github GET "https://api.github.com/user" \
-  -H "Authorization: token $GITHUB_TOKEN"
-
-# GitLab
-/workspace/scripts/api.sh gitlab GET "https://gitlab.com/api/v4/projects" \
-  -H "PRIVATE-TOKEN: $GITLAB_TOKEN"
-
-# Atlassian
-/workspace/scripts/api.sh atlassian GET "https://yourorg.atlassian.net/rest/api/3/myself" \
-  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN"
-
-# Custom services — the env var name matches what was registered
-/workspace/scripts/api.sh myservice GET "https://api.example.com/data" \
-  -H "Authorization: Bearer $MYSERVICE_TOKEN"
+/workspace/scripts/api.sh <service_label> <METHOD> <URL> [CURL_ARGS...]
 ```
 
-The proxy replaces credential placeholders with real values at request time. Newly registered credentials work immediately — no container restart needed.
+You MUST pass auth headers explicitly — the proxy substitutes placeholder values but doesn't add headers for you.
 
-**IMPORTANT: Try the API call first** using `api.sh`. If the call returns 401, THEN use `request_credential` to ask the user.
-
-**Do NOT use `gh` CLI or raw `curl` for authenticated requests** — use `api.sh` so credentials are injected by the proxy.
-
-**Security rules:**
-- NEVER ask the user to paste tokens, keys, or passwords in chat
-- NEVER echo, log, or print credential values — they contain placeholders, not real secrets
-- NEVER use raw curl for authenticated API calls — always use `api.sh`
-- If an API call fails with 401/403, call `request_credential` — the token may have expired
+**Requesting new credentials:** Use `mcp__nanoclaw__request_credential` — it opens a secure popup in the user's browser. Never ask users to paste secrets in chat. Try the API call first; only request credentials if you get a 401.
 
 ## Event Logging
 
