@@ -468,23 +468,62 @@ async function pollStatus() {
     const data = await api.getStatus();
     status.value = data;
 
-    // Clear stale typing for containers that have stopped.
-    // Typing is SET only by SSE 'typing' events (actual generation),
-    // not by container being active (it may be idle between messages).
     if (data?.containers?.groups) {
-      const activeJids = new Set(
-        data.containers.groups
-          .filter((g) => g.active && !g.isTask)
-          .map((g) => g.jid),
-      );
-      const newTyping = {};
-      for (const [jid, val] of Object.entries(typingGroups.value)) {
-        if (val && activeJids.has(jid)) {
-          newTyping[jid] = true;
+      const newTyping = { ...typingGroups.value };
+      const newAgentNames = { ...typingAgentName.value };
+      const newStartTimes = { ...typingStartTime.value };
+      const newActiveAgentMap = { ...activeAgents.value };
+
+      const activeJids = new Set();
+
+      for (const g of data.containers.groups) {
+        if (g.isTask) continue;
+        const hasWork = g.active || g.activeDelegations > 0;
+        if (!hasWork) continue;
+        activeJids.add(g.jid);
+
+        // Hydrate typing state for active containers — covers
+        // page refresh while agents are working (bug-telemetry-gaps P1)
+        if (!newTyping[g.jid]) {
+          newTyping[g.jid] = true;
+          newStartTimes[g.jid] = Date.now();
         }
-        // If container is no longer active, typing gets dropped
+        if (g.agentName && !newAgentNames[g.jid]) {
+          newAgentNames[g.jid] = g.agentName;
+        }
+        // Track active agents for per-agent activity dots in sidebar.
+        // activeDelegationAgents carries displayNames (matches AgentRow).
+        // agentName is the raw name — resolve to displayName via groups list.
+        const groupDef = groups.value.find(gr => gr.jid === g.jid);
+        const resolveDisplayName = (name) => {
+          const match = groupDef?.agents?.find(a => a.name === name);
+          return match?.displayName || name;
+        };
+        const agentsWorking = [
+          ...(g.agentName ? [resolveDisplayName(g.agentName)] : []),
+          ...(g.activeDelegationAgents || []),
+        ];
+        if (agentsWorking.length > 0) {
+          const current = newActiveAgentMap[g.jid] || [];
+          const merged = [...new Set([...current, ...agentsWorking])];
+          newActiveAgentMap[g.jid] = merged;
+        }
       }
+
+      // Clear stale typing for containers that have stopped
+      for (const [jid, val] of Object.entries(newTyping)) {
+        if (val && !activeJids.has(jid)) {
+          delete newTyping[jid];
+          delete newAgentNames[jid];
+          delete newStartTimes[jid];
+          delete newActiveAgentMap[jid];
+        }
+      }
+
       typingGroups.value = newTyping;
+      typingAgentName.value = newAgentNames;
+      typingStartTime.value = newStartTimes;
+      activeAgents.value = newActiveAgentMap;
     }
   } catch { /* ignore */ }
 }

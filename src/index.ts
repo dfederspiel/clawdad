@@ -727,112 +727,117 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       for (const agent of specialists) {
         const savedConfig = group.containerConfig;
         const taskId = `mention-${agent.name}-${Date.now()}`;
-        queue.enqueueDelegation(chatJid, taskId, async () => {
-          group.containerConfig = {
-            ...savedConfig,
-            timeout: Math.min(
-              savedConfig?.timeout || Infinity,
-              MENTION_TIMEOUT,
-            ),
-          };
-          const multiAgentCtx = buildMultiAgentContext(agent, agents);
-          const agentPrompt = multiAgentCtx ? multiAgentCtx + prompt : prompt;
+        queue.enqueueDelegation(
+          chatJid,
+          taskId,
+          async () => {
+            group.containerConfig = {
+              ...savedConfig,
+              timeout: Math.min(
+                savedConfig?.timeout || Infinity,
+                MENTION_TIMEOUT,
+              ),
+            };
+            const multiAgentCtx = buildMultiAgentContext(agent, agents);
+            const agentPrompt = multiAgentCtx ? multiAgentCtx + prompt : prompt;
 
-          setActiveAgentName(responseJid, agent.displayName);
-          await responseChannel.setTyping?.(responseJid, true, threadId);
-          // Intermediate TEXT blocks are shown as status in the typing indicator
+            setActiveAgentName(responseJid, agent.displayName);
+            await responseChannel.setTyping?.(responseJid, true, threadId);
+            // Intermediate TEXT blocks are shown as status in the typing indicator
 
-          const status = await runAgent(
-            group,
-            agentPrompt,
-            chatJid,
-            async (result) => {
-              if (result.result) {
-                if (
-                  result.textsAlreadyStreamed &&
-                  result.textsAlreadyStreamed > 0
-                ) {
-                  // Text already delivered via intermediate markers
-                } else {
-                  const raw =
-                    typeof result.result === 'string'
-                      ? result.result
-                      : JSON.stringify(result.result);
-                  const text = raw
-                    .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                    .trim();
-                  if (text) {
-                    setActiveAgentName(responseJid, agent.displayName);
-                    await responseChannel.sendMessage(
-                      responseJid,
-                      text,
-                      threadId,
-                    );
+            const status = await runAgent(
+              group,
+              agentPrompt,
+              chatJid,
+              async (result) => {
+                if (result.result) {
+                  if (
+                    result.textsAlreadyStreamed &&
+                    result.textsAlreadyStreamed > 0
+                  ) {
+                    // Text already delivered via intermediate markers
+                  } else {
+                    const raw =
+                      typeof result.result === 'string'
+                        ? result.result
+                        : JSON.stringify(result.result);
+                    const text = raw
+                      .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                      .trim();
+                    if (text) {
+                      setActiveAgentName(responseJid, agent.displayName);
+                      await responseChannel.sendMessage(
+                        responseJid,
+                        text,
+                        threadId,
+                      );
+                    }
                   }
                 }
-              }
-              if (result.status === 'success' || result.status === 'error') {
-                await responseChannel.setTyping?.(
-                  responseJid,
-                  false,
-                  threadId,
-                  agent.displayName,
-                );
-              }
-            },
-            (event) => broadcastProgress(responseJid, event),
-            async (rawText) => {
-              const text = rawText
-                .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                .trim();
-              if (!text) return;
-              setActiveAgentName(responseJid, agent.displayName);
-              const summary =
-                text.length > 120 ? text.slice(0, 117) + '...' : text;
-              broadcastProgress(responseJid, {
-                tool: 'text',
-                summary,
-                timestamp: new Date().toISOString(),
+                if (result.status === 'success' || result.status === 'error') {
+                  await responseChannel.setTyping?.(
+                    responseJid,
+                    false,
+                    threadId,
+                    agent.displayName,
+                  );
+                }
+              },
+              (event) => broadcastProgress(responseJid, event),
+              async (rawText) => {
+                const text = rawText
+                  .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                  .trim();
+                if (!text) return;
+                setActiveAgentName(responseJid, agent.displayName);
+                const summary =
+                  text.length > 120 ? text.slice(0, 117) + '...' : text;
+                broadcastProgress(responseJid, {
+                  tool: 'text',
+                  summary,
+                  timestamp: new Date().toISOString(),
+                });
+              },
+              agent,
+              true, // isDelegation
+            );
+
+            group.containerConfig = savedConfig;
+            clearActiveAgentName(responseJid);
+            await responseChannel.setTyping?.(
+              responseJid,
+              false,
+              threadId,
+              agent.displayName,
+            );
+
+            // Evaluate automation rules on agent result (Phase 1: logging only)
+            if (status === 'success') {
+              evaluateAutomationRules(group.folder, {
+                type: 'agent_result',
+                groupJid: chatJid,
+                groupFolder: group.folder,
+                agentName: agent.name,
               });
-            },
-            agent,
-            true, // isDelegation
-          );
+            }
 
-          group.containerConfig = savedConfig;
-          clearActiveAgentName(responseJid);
-          await responseChannel.setTyping?.(
-            responseJid,
-            false,
-            threadId,
-            agent.displayName,
-          );
-
-          // Evaluate automation rules on agent result (Phase 1: logging only)
-          if (status === 'success') {
-            evaluateAutomationRules(group.folder, {
-              type: 'agent_result',
-              groupJid: chatJid,
-              groupFolder: group.folder,
-              agentName: agent.name,
+            const resultNote =
+              status === 'error'
+                ? `[${agent.displayName} was unable to respond.]`
+                : `[${agent.displayName} has responded above.]`;
+            storeMessage({
+              id: `mention-result-${agent.name}-${Date.now()}`,
+              chat_jid: chatJid,
+              sender: 'system',
+              sender_name: 'System',
+              content: resultNote,
+              timestamp: new Date().toISOString(),
+              is_from_me: false,
+              is_bot_message: false,
             });
-          }
-
-          const resultNote =
-            status === 'error'
-              ? `[${agent.displayName} was unable to respond.]`
-              : `[${agent.displayName} has responded above.]`;
-          storeMessage({
-            id: `mention-result-${agent.name}-${Date.now()}`,
-            chat_jid: chatJid,
-            sender: 'system',
-            sender_name: 'System',
-            content: resultNote,
-            timestamp: new Date().toISOString(),
-            is_from_me: false,
-            is_bot_message: false,
-          });
-        });
+          },
+          agent.displayName,
+        );
       }
 
       // All specialists are enqueued. Return immediately — when all delegations
@@ -1232,11 +1237,9 @@ async function runAgent(
 
     // Deliver text to user via onText — bypasses the caller's onOutput
     // which bundles piping-loop lifecycle signals (notifyIdle, idle timer).
-    // Skip if intermediate text was already streamed via TEXT markers.
-    if (
-      output.result &&
-      !(output.textsAlreadyStreamed && output.textsAlreadyStreamed > 0)
-    ) {
+    // Always deliver the final result — TEXT markers route to the typing
+    // indicator as ephemeral progress, not to chat as messages.
+    if (output.result) {
       const raw =
         typeof output.result === 'string'
           ? output.result
@@ -2004,6 +2007,7 @@ async function main(): Promise<void> {
       })),
     getStatus: () => ({
       containers: queue.getSnapshot(),
+      pool: pool.getSnapshot(),
       uptime: process.uptime(),
     }),
     getThreadInfo: (threadId: string) => activeThreads.get(threadId),
@@ -2224,134 +2228,144 @@ async function main(): Promise<void> {
       const savedConfig = group.containerConfig;
       const DELEGATION_TIMEOUT = 120_000; // 2 minutes
       const taskId = `delegation-${agent.name}-${Date.now()}`;
-      queue.enqueueDelegation(chatJid, taskId, async () => {
-        group.containerConfig = {
-          ...savedConfig,
-          timeout: Math.min(
-            savedConfig?.timeout || Infinity,
-            DELEGATION_TIMEOUT,
-          ),
-        };
-        // Build prompt at execution time (not enqueue time) so conversation
-        // context includes any messages that arrived while queued.
-        const multiAgentCtx = buildMultiAgentContext(agent, agents);
-        const recentMessages = getMessagesSince(
-          chatJid,
-          '',
-          ASSISTANT_NAME,
-          MAX_MESSAGES_PER_PROMPT,
-          true, // include bot messages for full context
-        );
-        const conversationCtx = formatMessages(recentMessages, TIMEZONE);
-        const delegationPrompt =
-          multiAgentCtx +
-          conversationCtx +
-          `\n\n--- Delegation from ${sourceAgent} ---\n${message}\n--- End delegation ---\n`;
+      queue.enqueueDelegation(
+        chatJid,
+        taskId,
+        async () => {
+          group.containerConfig = {
+            ...savedConfig,
+            timeout: Math.min(
+              savedConfig?.timeout || Infinity,
+              DELEGATION_TIMEOUT,
+            ),
+          };
+          // Build prompt at execution time (not enqueue time) so conversation
+          // context includes any messages that arrived while queued.
+          const multiAgentCtx = buildMultiAgentContext(agent, agents);
+          const recentMessages = getMessagesSince(
+            chatJid,
+            '',
+            ASSISTANT_NAME,
+            MAX_MESSAGES_PER_PROMPT,
+            true, // include bot messages for full context
+          );
+          const conversationCtx = formatMessages(recentMessages, TIMEZONE);
+          const delegationPrompt =
+            multiAgentCtx +
+            conversationCtx +
+            `\n\n--- Delegation from ${sourceAgent} ---\n${message}\n--- End delegation ---\n`;
 
-        setActiveAgentName(chatJid, agent.displayName);
-        await channel.setTyping?.(chatJid, true);
-        // Intermediate TEXT blocks are shown as status in the typing indicator
+          setActiveAgentName(chatJid, agent.displayName);
+          await channel.setTyping?.(chatJid, true);
+          // Intermediate TEXT blocks are shown as status in the typing indicator
 
-        const status = await runAgent(
-          group,
-          delegationPrompt,
-          chatJid,
-          async (result) => {
-            if (result.result) {
-              if (
-                result.textsAlreadyStreamed &&
-                result.textsAlreadyStreamed > 0
-              ) {
-                // Text already delivered via intermediate markers
-              } else {
-                const raw =
-                  typeof result.result === 'string'
-                    ? result.result
-                    : JSON.stringify(result.result);
-                const text = raw
-                  .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                  .trim();
-                if (text) {
-                  // Set agent name right before sending — parallel delegations
-                  // share the same chatJid so we must claim the name each time
-                  setActiveAgentName(chatJid, agent.displayName);
-                  await channel.sendMessage(chatJid, text);
+          const status = await runAgent(
+            group,
+            delegationPrompt,
+            chatJid,
+            async (result) => {
+              if (result.result) {
+                if (
+                  result.textsAlreadyStreamed &&
+                  result.textsAlreadyStreamed > 0
+                ) {
+                  // Text already delivered via intermediate markers
+                } else {
+                  const raw =
+                    typeof result.result === 'string'
+                      ? result.result
+                      : JSON.stringify(result.result);
+                  const text = raw
+                    .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                    .trim();
+                  if (text) {
+                    // Set agent name right before sending — parallel delegations
+                    // share the same chatJid so we must claim the name each time
+                    setActiveAgentName(chatJid, agent.displayName);
+                    await channel.sendMessage(chatJid, text);
+                  }
                 }
               }
-            }
-            // Delegation containers exit on their own (isDelegation skips
-            // the idle loop in agent-runner) — no notifyIdle needed.
-            if (result.status === 'success') {
-              await channel.setTyping?.(
-                chatJid,
-                false,
-                undefined,
-                agent.displayName,
-              );
-            }
-            if (result.status === 'error') {
-              await channel.setTyping?.(
-                chatJid,
-                false,
-                undefined,
-                agent.displayName,
-              );
-            }
-          },
-          (event) => broadcastProgress(chatJid, event),
-          async (rawText) => {
-            const text = rawText
-              .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-              .trim();
-            if (!text) return;
-            setActiveAgentName(chatJid, agent.displayName);
-            const summary =
-              text.length > 120 ? text.slice(0, 117) + '...' : text;
-            broadcastProgress(chatJid, {
-              tool: 'text',
-              summary,
-              timestamp: new Date().toISOString(),
+              // Delegation containers exit on their own (isDelegation skips
+              // the idle loop in agent-runner) — no notifyIdle needed.
+              if (result.status === 'success') {
+                await channel.setTyping?.(
+                  chatJid,
+                  false,
+                  undefined,
+                  agent.displayName,
+                );
+              }
+              if (result.status === 'error') {
+                await channel.setTyping?.(
+                  chatJid,
+                  false,
+                  undefined,
+                  agent.displayName,
+                );
+              }
+            },
+            (event) => broadcastProgress(chatJid, event),
+            async (rawText) => {
+              const text = rawText
+                .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                .trim();
+              if (!text) return;
+              setActiveAgentName(chatJid, agent.displayName);
+              const summary =
+                text.length > 120 ? text.slice(0, 117) + '...' : text;
+              broadcastProgress(chatJid, {
+                tool: 'text',
+                summary,
+                timestamp: new Date().toISOString(),
+              });
+            },
+            agent,
+            true, // isDelegation — use shorter timeout
+          );
+
+          group.containerConfig = savedConfig; // restore original config
+          clearActiveAgentName(chatJid);
+          await channel.setTyping?.(
+            chatJid,
+            false,
+            undefined,
+            agent.displayName,
+          );
+
+          // Evaluate automation rules on delegation result (Phase 1: logging only)
+          if (status === 'success') {
+            evaluateAutomationRules(group.folder, {
+              type: 'agent_result',
+              groupJid: chatJid,
+              groupFolder: group.folder,
+              agentName: agent.name,
             });
-          },
-          agent,
-          true, // isDelegation — use shorter timeout
-        );
+          }
 
-        group.containerConfig = savedConfig; // restore original config
-        clearActiveAgentName(chatJid);
-        await channel.setTyping?.(chatJid, false, undefined, agent.displayName);
-
-        // Evaluate automation rules on delegation result (Phase 1: logging only)
-        if (status === 'success') {
-          evaluateAutomationRules(group.folder, {
-            type: 'agent_result',
-            groupJid: chatJid,
-            groupFolder: group.folder,
-            agentName: agent.name,
+          // Store a system message so the coordinator sees the result attribution.
+          // The queue re-triggers the coordinator when all delegations complete.
+          const resultNote =
+            status === 'error'
+              ? `[${agent.displayName} was unable to complete the delegated task.]`
+              : `[${agent.displayName} has responded above.]`;
+          storeMessage({
+            id: `delegation-result-${Date.now()}`,
+            chat_jid: chatJid,
+            sender: 'system',
+            sender_name: 'System',
+            content: resultNote,
+            timestamp: new Date().toISOString(),
+            is_from_me: false,
+            is_bot_message: false,
           });
-        }
-
-        // Store a system message so the coordinator sees the result attribution.
-        // The queue re-triggers the coordinator when all delegations complete.
-        const resultNote =
-          status === 'error'
-            ? `[${agent.displayName} was unable to complete the delegated task.]`
-            : `[${agent.displayName} has responded above.]`;
-        storeMessage({
-          id: `delegation-result-${Date.now()}`,
-          chat_jid: chatJid,
-          sender: 'system',
-          sender_name: 'System',
-          content: resultNote,
-          timestamp: new Date().toISOString(),
-          is_from_me: false,
-          is_bot_message: false,
-        });
-        logger.info(
-          { group: group.name, target: targetAgent, status },
-          'Delegation complete',
-        );
-      });
+          logger.info(
+            { group: group.name, target: targetAgent, status },
+            'Delegation complete',
+          );
+        },
+        agent.displayName,
+      );
     },
     onSetSubtitle: (jid, subtitle) => {
       // Update DB and broadcast

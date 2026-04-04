@@ -10,6 +10,7 @@ import { WorkPhase, WorkStateEvent } from './types.js';
 interface QueuedTask {
   id: string;
   groupJid: string;
+  agentName?: string;
   fn: () => Promise<void>;
 }
 
@@ -32,6 +33,7 @@ interface GroupState {
   retryCount: number;
   // Parallel delegation tracking — delegations bypass per-group serialization
   activeDelegations: number;
+  activeDelegationAgents: string[];
   pendingDelegations: QueuedTask[];
 }
 
@@ -63,6 +65,7 @@ export class GroupQueue {
         noPipe: false,
         retryCount: 0,
         activeDelegations: 0,
+        activeDelegationAgents: [],
         pendingDelegations: [],
       };
       this.groups.set(groupJid, state);
@@ -309,6 +312,7 @@ export class GroupQueue {
     groupJid: string,
     taskId: string,
     fn: () => Promise<void>,
+    agentName?: string,
   ): void {
     if (this.shuttingDown) return;
 
@@ -324,7 +328,7 @@ export class GroupQueue {
       this.activeWorkCount + this.idlePoolCount >=
       MAX_CONCURRENT_CONTAINERS
     ) {
-      state.pendingDelegations.push({ id: taskId, groupJid, fn });
+      state.pendingDelegations.push({ id: taskId, groupJid, agentName, fn });
       logger.debug(
         { groupJid, taskId, activeCount: this.activeWorkCount },
         'At concurrency limit, delegation queued',
@@ -332,7 +336,12 @@ export class GroupQueue {
       return;
     }
 
-    this.runDelegation(groupJid, { id: taskId, groupJid, fn }).catch((err) =>
+    this.runDelegation(groupJid, {
+      id: taskId,
+      groupJid,
+      agentName,
+      fn,
+    }).catch((err) =>
       logger.error(
         { groupJid, taskId, err },
         'Unhandled error in runDelegation',
@@ -346,12 +355,16 @@ export class GroupQueue {
   ): Promise<void> {
     const state = this.getGroup(groupJid);
     state.activeDelegations++;
+    if (task.agentName) {
+      state.activeDelegationAgents.push(task.agentName);
+    }
     this.activeWorkCount++;
 
     logger.debug(
       {
         groupJid,
         taskId: task.id,
+        agentName: task.agentName,
         activeDelegations: state.activeDelegations,
         activeCount: this.activeWorkCount,
       },
@@ -370,6 +383,10 @@ export class GroupQueue {
       );
     } finally {
       state.activeDelegations--;
+      if (task.agentName) {
+        const idx = state.activeDelegationAgents.indexOf(task.agentName);
+        if (idx !== -1) state.activeDelegationAgents.splice(idx, 1);
+      }
       this.activeWorkCount--;
       if (state.activeDelegations > 0) {
         this.emitWorkState(groupJid, 'delegating', {
@@ -598,6 +615,7 @@ export class GroupQueue {
       pendingMessages: boolean;
       pendingTaskCount: number;
       activeDelegations: number;
+      activeDelegationAgents: string[];
       pendingDelegationCount: number;
       containerName: string | null;
       groupFolder: string | null;
@@ -623,6 +641,7 @@ export class GroupQueue {
           pendingMessages: state.pendingMessages,
           pendingTaskCount: state.pendingTasks.length,
           activeDelegations: state.activeDelegations,
+          activeDelegationAgents: state.activeDelegationAgents,
           pendingDelegationCount: state.pendingDelegations.length,
           containerName: state.containerName,
           groupFolder: state.groupFolder,
