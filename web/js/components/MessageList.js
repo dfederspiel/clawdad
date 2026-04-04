@@ -35,7 +35,7 @@ export function MessageList() {
               <p class="text-txt-muted text-sm">No messages yet. Start the conversation below.</p>
             </div>
           `
-        : msgs.map(
+        : msgs.filter((m) => m.senderName !== 'System').map(
             (m, i) => {
               const thread = m.id ? threads[m.id] : null;
               return html`
