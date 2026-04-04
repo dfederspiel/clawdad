@@ -150,6 +150,12 @@ Every agent run records token usage, cost, duration, and turn count. This data i
 - Click the footer to expand and see the full tool call chain
 - Telemetry panel shows 24h totals, cache stats, and cost-by-group
 
+## Intermediate Text & Message Streaming
+
+Agents emit intermediate TEXT markers during long runs. Each marker becomes its own message via `sendMessage`. Consecutive assistant messages are visually merged in the UI using CSS adjacent sibling selectors (`[data-role="assistant"] + [data-role="assistant"]`), collapsing the gap and squaring off corners so they appear as one growing response.
+
+**Design note:** A server-side `updateMessage` approach was tried first (accumulate text into a single DB row, broadcast `message_update` SSE events). It caused ordering bugs on refresh and state leaks across warm pool queries. The CSS-only approach is stateless and immune to those issues. The `updateMessage` method and `message_update` SSE handler still exist in the codebase but are currently unused.
+
 ## Secrets / Credentials
 
 All credentials live in `.env` (untracked). Two types:

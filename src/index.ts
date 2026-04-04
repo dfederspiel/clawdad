@@ -891,8 +891,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     let outputSentForCurrentQuery = false;
     let outputSentToUser = false;
     let automationFiredForAgent = false;
-    let streamedMessageId: string | undefined;
-    let streamedContent = '';
+    let textsDelivered = 0;
 
     const output = await runAgent(
       group,
@@ -902,10 +901,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         if (result.result) {
           // If intermediate texts were actually delivered to the user, skip
           // re-sending the final result to avoid duplicate content.
-          // Check our local streamedMessageId (not just textsAlreadyStreamed) because
+          // Check our local textsDelivered (not just textsAlreadyStreamed) because
           // the container may have emitted TEXT markers whose content was stripped
           // by <internal> tag removal — those don't count as "sent to user".
-          if (streamedMessageId) {
+          if (textsDelivered > 0) {
             logger.info(
               {
                 agent: agent.id,
@@ -999,28 +998,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         broadcastProgress(responseJid, event);
       },
       async (rawText) => {
-        // Intermediate text block — append to a single growing message
+        // Intermediate text block — send as its own message
         const text = rawText
           .replace(/<internal>[\s\S]*?<\/internal>/g, '')
           .trim();
         if (!text) return;
         setActiveAgentName(responseJid, agent.displayName);
-        if (!streamedMessageId) {
-          streamedContent = text;
-          streamedMessageId = await responseChannel.sendMessage(
-            responseJid,
-            text,
-            threadId,
-          );
-        } else {
-          streamedContent += '\n\n' + text;
-          await responseChannel.updateMessage?.(
-            responseJid,
-            streamedMessageId,
-            streamedContent,
-            threadId,
-          );
-        }
+        await responseChannel.sendMessage(responseJid, text, threadId);
+        textsDelivered++;
         outputSentToUser = true;
         outputSentForCurrentQuery = true;
         resetIdleTimer();

@@ -85,3 +85,16 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
   background: var(--accent-dim, rgba(99, 102, 241, 0.25));
   filter: brightness(1.1);
 }
+
+/* ── Consecutive assistant message merging (CSS-only) ──────────────── */
+/* Collapse the gap between consecutive assistant bubbles so they read
+   as a single response that grew over time. */
+[data-role="assistant"] + [data-role="assistant"] {
+  margin-top: -8px;   /* eat most of the flex gap-3 (12px) */
+}
+
+/* Square off the touching corners so the bubbles fuse visually */
+[data-role="assistant"] + [data-role="assistant"] > :first-child {
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+}

@@ -39,7 +39,7 @@ export function MessageList() {
             (m, i) => {
               const thread = m.id ? threads[m.id] : null;
               return html`
-                <div key=${i}>
+                <div key=${i} data-role=${m.role}>
                   <${Message}
                     role=${m.role}
                     content=${m.content}
