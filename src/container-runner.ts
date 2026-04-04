@@ -303,6 +303,7 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   isMain: boolean,
+  group?: RegisteredGroup,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -357,6 +358,13 @@ async function buildContainerArgs(
     '-e',
     `CRED_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
   );
+
+  // SSH agent forwarding — mount host socket so containers can use SSH
+  // without the private key ever entering the container.
+  if (group?.containerConfig?.sshAgent && process.env.SSH_AUTH_SOCK) {
+    const sock = process.env.SSH_AUTH_SOCK;
+    args.push('-v', `${sock}:/ssh-agent`, '-e', 'SSH_AUTH_SOCK=/ssh-agent');
+  }
 
   // Pass model override for LiteLLM proxy routing
   const claudeModel = process.env.CLAUDE_MODEL || allEnv.CLAUDE_MODEL;
@@ -633,6 +641,7 @@ export async function spawnContainer(
     mounts,
     containerName,
     input.isMain,
+    group,
   );
 
   logger.info(

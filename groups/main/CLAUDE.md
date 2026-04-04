@@ -66,7 +66,7 @@ This is the **main channel** with elevated privileges.
 
 ## API Access & Credentials
 
-You have access to multiple services through the credential proxy. **NEVER use raw `curl`, `git clone` with SSH, or `gh` CLI** — always use `/workspace/scripts/api.sh` which routes through the proxy and injects real credentials automatically.
+You have access to multiple services through the credential proxy. **NEVER use raw `curl`** — use `/workspace/scripts/api.sh` for HTTP API calls and `/workspace/scripts/cred-exec.sh` for CLI tools (`gh`, `glab`, etc.).
 
 Your environment variables (`$GITHUB_TOKEN`, `$ATLASSIAN_API_TOKEN`, etc.) contain **placeholders**, not real secrets. The proxy substitutes them at request time. You MUST pass auth headers explicitly.
 
@@ -81,16 +81,28 @@ Your environment variables (`$GITHUB_TOKEN`, `$ATLASSIAN_API_TOKEN`, etc.) conta
 | LaunchDarkly | `/workspace/scripts/api.sh launchdarkly GET "https://app.launchdarkly.com/api/v2/..." -H "Authorization: $LAUNCHDARKLY_API_KEY"` |
 | BlackDuck | `/workspace/scripts/api.sh blackduck GET "$BLACKDUCK_URL/api/..." -H "Authorization: token $BLACKDUCK_API_TOKEN"` |
 
+### CLI tools (gh, glab, etc.)
+
+```bash
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- gh pr list
+/workspace/scripts/cred-exec.sh gitlab GITLAB_TOKEN -- glab mr list
+```
+
 ### Cloning repos
 
-**Do NOT use `git clone` with SSH** — your container has no SSH keys. Instead:
-- Use the GitHub API to read repo contents: `/workspace/scripts/api.sh github GET "https://api.github.com/repos/OWNER/REPO/contents/PATH"`
-- Or ask the user to provide the local path and mount it via `containerConfig.additionalMounts`
-- For bulk file reads, clone via HTTPS with token: `git clone https://x-access-token:$GITHUB_TOKEN@github.com/OWNER/REPO.git` (this also goes through the proxy)
+```bash
+# HTTPS clone with cred-exec
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- \
+  git clone https://x-access-token:${GITHUB_TOKEN}@github.com/OWNER/REPO.git /workspace/group/repo
+
+# Or read individual files via API
+/workspace/scripts/api.sh github GET "https://api.github.com/repos/OWNER/REPO/contents/PATH" \
+  -H "Authorization: token $GITHUB_TOKEN"
+```
 
 ### If you get a 401
 
-1. Check you're using `api.sh`, not raw `curl`
+1. Check you're using `api.sh` or `cred-exec.sh`, not raw `curl`/`gh`
 2. Check you're passing the auth header/flag
 3. If still failing, use `mcp__nanoclaw__request_credential` to re-register the credential
 

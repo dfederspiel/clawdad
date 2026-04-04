@@ -329,6 +329,13 @@ export function startCredentialProxy(
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
+        // ── /credential/:service — return raw credential value ──────
+        const credMatch = req.url?.match(/^\/credential\/([a-zA-Z0-9_-]+)$/);
+        if (credMatch && req.method === 'GET') {
+          handleCredentialLookup(credMatch[1], res);
+          return;
+        }
+
         // ── /forward — generic credential-injecting forward proxy ───
         if (req.url === '/forward' || req.url?.startsWith('/forward?')) {
           handleForward(req, res, Buffer.concat(chunks));
@@ -439,6 +446,61 @@ function substituteInHeader(
     }
   }
   return substituteCredentials(value, credMap);
+}
+
+// ── /credential/:service handler ────────────────────────────────────
+
+/**
+ * Return the raw credential value for a named service.
+ * Looks up env vars matching the service prefix (e.g., "github" → GITHUB_TOKEN).
+ * Used by `cred-exec` inside containers to inject credentials into CLI tools.
+ */
+function handleCredentialLookup(
+  service: string,
+  res: import('http').ServerResponse,
+): void {
+  const env = readEnvFile();
+  const prefix = service.toUpperCase();
+
+  // Find the best matching credential: try _TOKEN, _KEY, _SECRET, _PASSWORD, _API_TOKEN, _API_KEY
+  const suffixes = [
+    '_TOKEN',
+    '_API_TOKEN',
+    '_API_KEY',
+    '_KEY',
+    '_SECRET',
+    '_PASSWORD',
+  ];
+  let value: string | undefined;
+  let matchedKey: string | undefined;
+
+  for (const suffix of suffixes) {
+    const key = `${prefix}${suffix}`;
+    if (env[key]) {
+      value = env[key];
+      matchedKey = key;
+      break;
+    }
+  }
+
+  if (!value || !matchedKey) {
+    logger.debug(
+      { service, prefix },
+      'Credential lookup: no matching credential found',
+    );
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({ error: `No credential found for service: ${service}` }),
+    );
+    return;
+  }
+
+  logger.debug(
+    { service, key: matchedKey },
+    'Credential lookup: returning value',
+  );
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end(value);
 }
 
 // ── /forward handler ────────────────────────────────────────────────
