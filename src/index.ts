@@ -802,10 +802,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             },
             agent,
             true, // isDelegation
-            async (text) => {
-              setActiveAgentName(responseJid, agent.displayName);
-              await responseChannel.sendMessage(responseJid, text, threadId);
-            },
           );
 
           group.containerConfig = savedConfig;
@@ -1035,13 +1031,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         resetIdleTimer();
       },
       agent,
-      undefined, // isDelegation
-      async (text) => {
-        // Pool path text delivery — no lifecycle signals
-        setActiveAgentName(responseJid, agent.displayName);
-        await responseChannel.sendMessage(responseJid, text, threadId);
-        outputSentToUser = true;
-      },
     );
 
     await responseChannel.setTyping?.(responseJid, false, threadId);
@@ -1096,7 +1085,6 @@ async function runAgent(
   onText?: (text: string) => Promise<void>,
   agent?: Agent,
   isDelegation?: boolean,
-  onText?: (text: string) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
@@ -1258,8 +1246,12 @@ async function runAgent(
     }
 
     // Deliver text to user via onText — bypasses the caller's onOutput
-    // which bundles piping-loop lifecycle signals (notifyIdle, idle timer)
-    if (output.result) {
+    // which bundles piping-loop lifecycle signals (notifyIdle, idle timer).
+    // Skip if intermediate text was already streamed via TEXT markers.
+    if (
+      output.result &&
+      !(output.textsAlreadyStreamed && output.textsAlreadyStreamed > 0)
+    ) {
       const raw =
         typeof output.result === 'string'
           ? output.result
@@ -2332,10 +2324,6 @@ async function main(): Promise<void> {
           },
           agent,
           true, // isDelegation — use shorter timeout
-          async (text) => {
-            setActiveAgentName(chatJid, agent.displayName);
-            await channel.sendMessage(chatJid, text);
-          },
         );
 
         group.containerConfig = savedConfig; // restore original config
