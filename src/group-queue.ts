@@ -27,6 +27,7 @@ interface GroupState {
   containerName: string | null;
   groupFolder: string | null;
   agentName: string | null;
+  coordinatorAgentName: string | null; // Preserved across delegations for closeStdin/sendMessage
   noPipe: boolean; // Pool-managed: don't pipe via sendMessage
   retryCount: number;
   // Parallel delegation tracking — delegations bypass per-group serialization
@@ -58,6 +59,7 @@ export class GroupQueue {
         containerName: null,
         groupFolder: null,
         agentName: null,
+        coordinatorAgentName: null,
         noPipe: false,
         retryCount: 0,
         activeDelegations: 0,
@@ -201,12 +203,22 @@ export class GroupQueue {
     containerName: string,
     groupFolder?: string,
     agentName?: string,
+    isDelegation?: boolean,
   ): void {
     const state = this.getGroup(groupJid);
-    state.process = proc;
-    state.containerName = containerName;
-    if (groupFolder) state.groupFolder = groupFolder;
-    if (agentName) state.agentName = agentName;
+    if (!isDelegation) {
+      // Coordinator registration — track separately so closeStdin always targets it
+      state.process = proc;
+      state.containerName = containerName;
+      if (groupFolder) state.groupFolder = groupFolder;
+      if (agentName) {
+        state.agentName = agentName;
+        state.coordinatorAgentName = agentName;
+      }
+    } else {
+      // Delegation registration — don't overwrite coordinator's agent name
+      if (groupFolder) state.groupFolder = groupFolder;
+    }
   }
 
   setNoPipe(groupJid: string, noPipe: boolean): void {
@@ -242,7 +254,9 @@ export class GroupQueue {
     if (state.noPipe) return false;
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 
-    const agentName = state.agentName || 'default';
+    // Always target the coordinator — it's the one idle-waiting for IPC input
+    const agentName =
+      state.coordinatorAgentName || state.agentName || 'default';
     const inputDir = resolveAgentIpcInputPath(state.groupFolder, agentName);
     try {
       fs.mkdirSync(inputDir, { recursive: true });
@@ -264,7 +278,9 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     if (!state.active || !state.groupFolder) return;
 
-    const agentName = state.agentName || 'default';
+    // Always target the coordinator — it's the one idle-waiting for IPC input
+    const agentName =
+      state.coordinatorAgentName || state.agentName || 'default';
     const inputDir = resolveAgentIpcInputPath(state.groupFolder, agentName);
     try {
       fs.mkdirSync(inputDir, { recursive: true });
@@ -436,6 +452,7 @@ export class GroupQueue {
       state.containerName = null;
       state.groupFolder = null;
       state.agentName = null;
+      state.coordinatorAgentName = null;
       state.noPipe = false;
       this.activeWorkCount--;
       this.emitWorkState(groupJid, 'idle');
@@ -473,6 +490,7 @@ export class GroupQueue {
       state.containerName = null;
       state.groupFolder = null;
       state.agentName = null;
+      state.coordinatorAgentName = null;
       state.noPipe = false;
       this.activeWorkCount--;
       this.emitWorkState(groupJid, 'idle');

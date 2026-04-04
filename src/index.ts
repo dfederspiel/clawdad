@@ -1497,6 +1497,7 @@ async function runAgent(
           containerName,
           group.folder,
           agent?.name || DEFAULT_AGENT_NAME,
+          isDelegation,
         ),
       wrappedOnOutput,
       wrappedOnProgress,
