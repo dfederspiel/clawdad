@@ -18,11 +18,13 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   POOL_IDLE_TIMEOUT,
+  SPECIALIST_IDLE_TIMEOUT,
   TRIGGER_IDLE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
   POLL_INTERVAL,
   TIMEZONE,
   WARM_POOL_ENABLED,
+  WARM_SPECIALISTS_ENABLED,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import { checkContainerSmoke } from './health.js';
@@ -74,7 +76,10 @@ import {
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
-import { resolveGroupFolderPath } from './group-folder.js';
+import {
+  resolveAgentIpcInputPath,
+  resolveGroupFolderPath,
+} from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import {
   findChannel,
@@ -1200,11 +1205,112 @@ async function runAgent(
       }
     : undefined;
 
+  // poolManaged: container stays alive for follow-up queries (warm pool).
+  // Coordinators always pool when enabled. Specialists pool when both
+  // WARM_POOL_ENABLED and WARM_SPECIALISTS_ENABLED are set.
+  const shouldPool =
+    WARM_POOL_ENABLED && (isCoordinator || WARM_SPECIALISTS_ENABLED) && !isMain;
+
+  // ── Pool output handler ─────────────────────────────────────────
+  // Pool-managed containers use a dedicated output handler that does
+  // message routing and usage tracking but NOT lifecycle signals
+  // (notifyIdle, resetIdleTimer). The pool owns container lifetime —
+  // the message-loop piping path must never touch pooled containers.
+  //
+  // Invariant: pooled containers are never resumed via sendMessage().
+  // Every new message re-enters through normal scheduling and may then
+  // acquire a warm handle from the pool.
+  // poolOnOutput: standalone output handler for pool-managed queries.
+  // Does NOT call the caller's onOutput — that callback bundles piping-
+  // loop concerns (notifyIdle, resetIdleTimer, automation rules).
+  // Instead, we handle message delivery and usage tracking directly.
+  const poolOnOutput = async (output: ContainerOutput) => {
+    if (output.newSessionId && output.status !== 'error') {
+      sessions[agentId] = output.newSessionId;
+      setSession(agentId, output.newSessionId);
+    }
+
+    // Deliver text to user via onText — bypasses the caller's onOutput
+    // which bundles piping-loop lifecycle signals (notifyIdle, idle timer).
+    // Skip if intermediate text was already streamed via TEXT markers.
+    if (
+      output.result &&
+      !(output.textsAlreadyStreamed && output.textsAlreadyStreamed > 0)
+    ) {
+      const raw =
+        typeof output.result === 'string'
+          ? output.result
+          : JSON.stringify(output.result);
+      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+      if (text && onText) {
+        logger.info(
+          { agent: agentId, chatJid },
+          `Agent output: ${raw.length} chars (pool path)`,
+        );
+        await onText(text);
+      }
+    }
+
+    if (output.usage && output.usage.numTurns > 0) {
+      const u = output.usage;
+      storeAgentRun({
+        chat_jid: chatJid,
+        group_folder: group.folder,
+        session_id: sessions[agentId],
+        timestamp: new Date().toISOString(),
+        input_tokens: u.inputTokens,
+        output_tokens: u.outputTokens,
+        cache_read_tokens: u.cacheReadTokens,
+        cache_write_tokens: u.cacheWriteTokens,
+        cost_usd: u.costUsd,
+        duration_ms: u.durationMs,
+        num_turns: u.numTurns,
+        is_error: output.status === 'error',
+        tool_history:
+          toolHistory.length > 0 ? JSON.stringify(toolHistory) : null,
+        container_reuse: containerReuse,
+      });
+      attachUsageToLastBotMessage(
+        chatJid,
+        JSON.stringify({
+          ...u,
+          toolHistory: toolHistory.length > 0 ? toolHistory : undefined,
+        }),
+      );
+      broadcastUsage(chatJid, u);
+      const cacheHitRatio =
+        u.cacheReadTokens / Math.max(1, u.cacheReadTokens + u.cacheWriteTokens);
+      logger.info(
+        {
+          agent: agentId,
+          cost: u.costUsd,
+          turns: u.numTurns,
+          tokens: u.inputTokens + u.outputTokens,
+          cacheHitRatio: Math.round(cacheHitRatio * 100),
+          containerReuse,
+        },
+        'Agent run usage stored',
+      );
+    }
+  };
+
   try {
-    // ── Warm reuse path (coordinators only) ────────────────────────
-    if (isCoordinator && !isDelegation) {
+    // ── Pool path ──────────────────────────────────────────────────
+    // Pool-managed containers bypass the piping/message-loop entirely.
+    // queryOnce is the only execution step. runAgent returns immediately
+    // after releasing/reclaiming the handle. The queue never keeps pooled
+    // handles in "active process" state beyond the query.
+    if (shouldPool) {
+      // Suppress message-loop piping while pool query runs.
+      // Without this, sendMessage succeeds (state.active is true during
+      // runForGroup), the message loop pipes follow-up messages into the
+      // container's IPC dir, and they get consumed with no listener.
+      queue.setNoPipe(chatJid, true);
+
       const warmHandle = pool.acquire(agentId);
+
       if (warmHandle) {
+        // ── Warm reuse: query existing container ───────────────────
         containerReuse = 'warm_reuse';
         broadcastWorkState({
           jid: chatJid,
@@ -1214,9 +1320,11 @@ async function runAgent(
           updated_at: new Date().toISOString(),
         });
 
-        // Write prompt as IPC message to the group's input dir.
-        // Coordinator-only scope: one warm container per group, one IPC reader.
-        const inputDir = path.join(DATA_DIR, 'ipc', group.folder, 'input');
+        const effectiveAgentName = agent?.name || DEFAULT_AGENT_NAME;
+        const inputDir = resolveAgentIpcInputPath(
+          group.folder,
+          effectiveAgentName,
+        );
         fs.mkdirSync(inputDir, { recursive: true });
         const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
         const tempPath = path.join(inputDir, `${filename}.tmp`);
@@ -1231,17 +1339,37 @@ async function runAgent(
         const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
 
         const result = await warmHandle.queryOnce(
-          wrappedOnOutput,
+          poolOnOutput,
           wrappedOnProgress,
           onText,
           timeoutMs,
         );
 
         if (result.status !== 'error') {
-          pool.release(agentId, warmHandle, chatJid);
+          const idleMs = isCoordinator ? undefined : SPECIALIST_IDLE_TIMEOUT;
+          pool.release(
+            agentId,
+            warmHandle,
+            chatJid,
+            effectiveAgentName,
+            idleMs,
+          );
+          broadcastWorkState({
+            jid: chatJid,
+            phase: 'pool_released',
+            agent_name: agent?.displayName,
+            summary: `Released to pool (${isCoordinator ? 'coordinator' : 'specialist'})`,
+            updated_at: new Date().toISOString(),
+          });
         } else {
+          broadcastWorkState({
+            jid: chatJid,
+            phase: 'pool_reclaimed',
+            agent_name: agent?.displayName,
+            summary: 'Reclaimed due to error',
+            updated_at: new Date().toISOString(),
+          });
           await pool.reclaim(agentId);
-          // Clear stale session on error
           if (
             result.error &&
             /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
@@ -1260,46 +1388,62 @@ async function runAgent(
 
         return result.status === 'error' ? 'error' : 'success';
       }
-    }
 
-    // ── Cold start path ────────────────────────────────────────────
-    const containerInput = {
-      prompt,
-      sessionId,
-      groupFolder: group.folder,
-      chatJid,
-      isMain,
-      assistantName: agent?.displayName || ASSISTANT_NAME,
-      agentId,
-      agentName: agent?.name || DEFAULT_AGENT_NAME,
-      canDelegate: agent ? !agent.trigger : false,
-      isDelegation: isDelegation || false,
-      achievements: getAchievementsForContainer(),
-    };
+      // ── Cold start with pool release ───────────────────────────
+      containerReuse = 'cold_start';
+      broadcastWorkState({
+        jid: chatJid,
+        phase: 'pool_cold_start',
+        agent_name: agent?.displayName,
+        summary: 'Spawning new container (will pool after)',
+        updated_at: new Date().toISOString(),
+      });
 
-    // Coordinators with pool enabled: use spawnContainer + queryOnce,
-    // then release to pool for warm reuse on subsequent messages.
-    if (isCoordinator && !isDelegation && WARM_POOL_ENABLED) {
+      const containerInput = {
+        prompt,
+        sessionId,
+        groupFolder: group.folder,
+        chatJid,
+        isMain,
+        assistantName: agent?.displayName || ASSISTANT_NAME,
+        agentId,
+        agentName: agent?.name || DEFAULT_AGENT_NAME,
+        canDelegate: agent ? !agent.trigger : false,
+        isDelegation: isDelegation || false,
+        poolManaged: true,
+        achievements: getAchievementsForContainer(),
+      };
+
       const handle = await spawnContainer(group, containerInput);
       queue.registerProcess(
         chatJid,
         handle.process,
         handle.containerName,
         group.folder,
+        agent?.name || DEFAULT_AGENT_NAME,
       );
 
       const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
       const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
 
       const result = await handle.queryOnce(
-        wrappedOnOutput,
+        poolOnOutput,
         wrappedOnProgress,
         onText,
         timeoutMs,
       );
 
       if (result.status !== 'error') {
-        pool.release(agentId, handle, chatJid);
+        const coldAgentName = agent?.name || DEFAULT_AGENT_NAME;
+        const idleMs = isCoordinator ? undefined : SPECIALIST_IDLE_TIMEOUT;
+        pool.release(agentId, handle, chatJid, coldAgentName, idleMs);
+        broadcastWorkState({
+          jid: chatJid,
+          phase: 'pool_released',
+          agent_name: agent?.displayName,
+          summary: `Released to pool (${isCoordinator ? 'coordinator' : 'specialist'})`,
+          updated_at: new Date().toISOString(),
+        });
         if (result.newSessionId) {
           sessions[agentId] = result.newSessionId;
           setSession(agentId, result.newSessionId);
@@ -1325,13 +1469,35 @@ async function runAgent(
       return 'error';
     }
 
-    // Non-pool path: delegations, tasks, or pool disabled.
+    // ── Non-pool path: delegations, tasks, or pool disabled ─────
+    const containerInput = {
+      prompt,
+      sessionId,
+      groupFolder: group.folder,
+      chatJid,
+      isMain,
+      assistantName: agent?.displayName || ASSISTANT_NAME,
+      agentId,
+      agentName: agent?.name || DEFAULT_AGENT_NAME,
+      canDelegate: agent ? !agent.trigger : false,
+      isDelegation: isDelegation || false,
+      poolManaged: false,
+      achievements: getAchievementsForContainer(),
+    };
+
+    //
     // Uses runContainerAgent which waits for container exit.
     const output = await runContainerAgent(
       group,
       containerInput,
       (proc, containerName) =>
-        queue.registerProcess(chatJid, proc, containerName, group.folder),
+        queue.registerProcess(
+          chatJid,
+          proc,
+          containerName,
+          group.folder,
+          agent?.name || DEFAULT_AGENT_NAME,
+        ),
       wrappedOnOutput,
       wrappedOnProgress,
       onText,

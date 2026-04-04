@@ -1,25 +1,26 @@
 /**
- * Warm Container Pool for coordinator reuse.
+ * Warm Container Pool for agent reuse (coordinators and specialists).
  *
- * Keeps coordinator containers alive between queries so subsequent
+ * Keeps agent containers alive between queries so subsequent
  * messages get cache hits instead of cache writes. The pool owns
  * idle containers exclusively — the queue does not track them.
  *
  * Ownership model:
  *   Queue owns running work (activeWorkCount)
- *   Pool owns idle warm coordinators (idlePoolCount)
+ *   Pool owns idle warm agents (idlePoolCount)
  *   A container is never in both.
  */
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR } from './config.js';
 import type { ContainerHandle } from './container-runner.js';
+import { resolveAgentIpcInputPath } from './group-folder.js';
 import { logger } from './logger.js';
 
 interface PoolEntry {
   handle: ContainerHandle;
   agentId: string;
+  agentName: string;
   groupJid: string;
   state: 'idle' | 'reclaiming';
   idleSince: number;
@@ -97,12 +98,20 @@ export class ContainerPool {
   /**
    * Release a container into the pool after a query completes.
    * Pool takes exclusive ownership. Starts idle timer and crash monitor.
+   * @param idleTimeoutMs - Override the default idle timeout (e.g., shorter for specialists).
    */
-  release(agentId: string, handle: ContainerHandle, groupJid: string): void {
+  release(
+    agentId: string,
+    handle: ContainerHandle,
+    groupJid: string,
+    agentName?: string,
+    idleTimeoutMs?: number,
+  ): void {
+    const effectiveAgentName = agentName || 'default';
     if (!this.enabled || handle.exited) {
       // Pool disabled or container already dead — write _close to clean up
       if (!handle.exited) {
-        this.writeCloseSentinel(handle.groupFolder);
+        this.writeCloseSentinel(handle.groupFolder, effectiveAgentName);
       }
       return;
     }
@@ -116,20 +125,22 @@ export class ContainerPool {
     const entry: PoolEntry = {
       handle,
       agentId,
+      agentName: effectiveAgentName,
       groupJid,
       state: 'idle',
       idleSince: Date.now(),
       idleTimer: null,
     };
 
-    // Start idle timeout
+    // Start idle timeout (per-role override or pool default)
+    const timeout = idleTimeoutMs ?? this.idleTimeoutMs;
     entry.idleTimer = setTimeout(() => {
       logger.info(
         { agentId, containerName: handle.containerName },
         'Pool: idle timeout, reclaiming container',
       );
       this.reclaim(agentId);
-    }, this.idleTimeoutMs);
+    }, timeout);
 
     // Monitor for unexpected exit while idle
     handle.exitPromise.then(({ code }) => {
@@ -170,7 +181,7 @@ export class ContainerPool {
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
 
     if (!entry.handle.exited) {
-      this.writeCloseSentinel(entry.handle.groupFolder);
+      this.writeCloseSentinel(entry.handle.groupFolder, entry.agentName);
       await entry.handle.exitPromise;
     }
 
@@ -190,7 +201,7 @@ export class ContainerPool {
     if (!entry) return;
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
     if (!entry.handle.exited) {
-      this.writeCloseSentinel(entry.handle.groupFolder);
+      this.writeCloseSentinel(entry.handle.groupFolder, entry.agentName);
     }
     this.removeEntry(agentId);
   }
@@ -245,9 +256,9 @@ export class ContainerPool {
     this.notifyCountChange();
   }
 
-  private writeCloseSentinel(groupFolder: string): void {
-    const inputDir = path.join(DATA_DIR, 'ipc', groupFolder, 'input');
+  private writeCloseSentinel(groupFolder: string, agentName: string): void {
     try {
+      const inputDir = resolveAgentIpcInputPath(groupFolder, agentName);
       fs.mkdirSync(inputDir, { recursive: true });
       fs.writeFileSync(path.join(inputDir, '_close'), '');
     } catch {

@@ -18,7 +18,11 @@ import {
   OLLAMA_ADMIN_TOOLS,
   TIMEZONE,
 } from './config.js';
-import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
+import {
+  resolveAgentIpcInputPath,
+  resolveGroupFolderPath,
+  resolveGroupIpcPath,
+} from './group-folder.js';
 import { logger } from './logger.js';
 import {
   CONTAINER_HOST_GATEWAY,
@@ -57,7 +61,8 @@ export interface ContainerInput {
   agentId?: string; // '{group_folder}/{agent_name}' — used for session isolation
   agentName?: string; // agent name within the group
   canDelegate?: boolean; // true for coordinator agents (no trigger)
-  isDelegation?: boolean; // true when running as a delegated task (shorter timeout)
+  isDelegation?: boolean; // delegation semantics (output routing, completion signaling)
+  poolManaged?: boolean; // true = stay alive for follow-up queries (warm pool)
   script?: string;
   achievements?: { id: string; name: string; description: string }[];
 }
@@ -217,11 +222,29 @@ function buildVolumeMounts(
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'credentials'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'delegations'), { recursive: true });
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
+    readonly: false,
+  });
+
+  // Per-container input namespace: each agent gets its own input/ directory
+  // so multiple warm containers in one group don't race on IPC polling.
+  // The overlay mount makes the agent-runner see only its own input dir
+  // at /workspace/ipc/input while shared dirs remain at /workspace/ipc/*.
+  const effectiveAgentName = agentName || 'default';
+  const agentInputDir = resolveAgentIpcInputPath(
+    group.folder,
+    effectiveAgentName,
+  );
+  fs.mkdirSync(agentInputDir, { recursive: true });
+  // Write marker so agent-runner can assert it's reading the right namespace
+  const markerPath = path.join(agentInputDir, '.agent-name');
+  fs.writeFileSync(markerPath, effectiveAgentName);
+  mounts.push({
+    hostPath: agentInputDir,
+    containerPath: '/workspace/ipc/input',
     readonly: false,
   });
 
@@ -545,6 +568,21 @@ function createQueryOnce(
 
       const onOutputEvent = async (output: ContainerOutput) => {
         if (resolved) return;
+
+        // Skip session-update markers: the agent-runner emits a second
+        // {status:'success', result:null} after entering waitForIpcMessage.
+        // These are bookkeeping, not real query responses. Without this
+        // check, a stale marker from the previous query cycle can resolve
+        // the next queryOnce immediately with no actual content.
+        if (
+          output.status === 'success' &&
+          output.result === null &&
+          !output.usage
+        ) {
+          if (output.newSessionId) handle.sessionId = output.newSessionId;
+          return; // Skip — wait for the real response
+        }
+
         resolved = true;
         cleanup();
         if (output.newSessionId) handle.sessionId = output.newSessionId;

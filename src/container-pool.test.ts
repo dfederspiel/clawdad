@@ -12,6 +12,12 @@ vi.mock('./config.js', () => ({
   DATA_DIR: '/tmp/test-pool-data',
 }));
 
+// Mock group-folder — resolveAgentIpcInputPath returns a predictable path
+vi.mock('./group-folder.js', () => ({
+  resolveAgentIpcInputPath: (folder: string, agentName: string) =>
+    `/tmp/test-pool-data/ipc/${folder}/${agentName}/input`,
+}));
+
 // Mock fs — track writeFileSync calls for _close sentinel detection
 const mockWriteFileSync = vi.fn();
 const mockMkdirSync = vi.fn();
@@ -87,7 +93,7 @@ describe('ContainerPool', () => {
   it('release + acquire returns the same handle', () => {
     const handle = createMockHandle();
     activeHandles.push(handle);
-    pool.release('web_test/default', handle, 'web:test');
+    pool.release('web_test/default', handle, 'web:test', 'default');
     expect(pool.idleCount).toBe(1);
 
     const acquired = pool.acquire('web_test/default');
@@ -98,7 +104,7 @@ describe('ContainerPool', () => {
   it('acquire for wrong agentId returns null', () => {
     const handle = createMockHandle();
     activeHandles.push(handle);
-    pool.release('web_test/default', handle, 'web:test');
+    pool.release('web_test/default', handle, 'web:test', 'default');
 
     expect(pool.acquire('web_other/default')).toBeNull();
     expect(pool.idleCount).toBe(1);
@@ -107,7 +113,7 @@ describe('ContainerPool', () => {
   it('double acquire returns null (container already acquired)', () => {
     const handle = createMockHandle();
     activeHandles.push(handle);
-    pool.release('web_test/default', handle, 'web:test');
+    pool.release('web_test/default', handle, 'web:test', 'default');
 
     pool.acquire('web_test/default');
     expect(pool.acquire('web_test/default')).toBeNull();
@@ -115,7 +121,7 @@ describe('ContainerPool', () => {
 
   it('acquire returns null for exited container', () => {
     const handle = createMockHandle({ exited: true });
-    pool.release('web_test/default', handle, 'web:test');
+    pool.release('web_test/default', handle, 'web:test', 'default');
     // Should not be added since exited
     expect(pool.idleCount).toBe(0);
   });
@@ -126,7 +132,7 @@ describe('ContainerPool', () => {
     activeHandles.push(handle);
     mockWriteFileSync.mockClear();
 
-    disabledPool.release('web_test/default', handle, 'web:test');
+    disabledPool.release('web_test/default', handle, 'web:test', 'default');
 
     expect(disabledPool.idleCount).toBe(0);
     expect(mockWriteFileSync).toHaveBeenCalled();
@@ -137,9 +143,9 @@ describe('ContainerPool', () => {
     const handle2 = createMockHandle({ containerName: 'container-2' });
     activeHandles.push(handle1, handle2);
 
-    pool.release('agent/a', handle1, 'web:a');
+    pool.release('agent/a', handle1, 'web:a', 'a');
     // Slight delay to ensure different idleSince
-    pool.release('agent/b', handle2, 'web:b');
+    pool.release('agent/b', handle2, 'web:b', 'b');
 
     expect(pool.idleCount).toBe(2);
     const evicted = pool.evictOldest();
@@ -159,7 +165,7 @@ describe('ContainerPool', () => {
     const handle = createMockHandle();
     activeHandles.push(handle);
 
-    pool.release('web_test/default', handle, 'web:test');
+    pool.release('web_test/default', handle, 'web:test', 'default');
     expect(pool.idleCount).toBe(1);
 
     // Simulate unexpected exit
@@ -176,7 +182,7 @@ describe('ContainerPool', () => {
     activeHandles.push(handle);
     mockWriteFileSync.mockClear();
 
-    pool.release('web_test/default', handle, 'web:test');
+    pool.release('web_test/default', handle, 'web:test', 'default');
     expect(pool.idleCount).toBe(1);
 
     const reclaimPromise = pool.reclaim('web_test/default');
@@ -211,7 +217,7 @@ describe('ContainerPool', () => {
   it('getSnapshot returns current pool state', () => {
     const handle = createMockHandle({ containerName: 'snap-container' });
     activeHandles.push(handle);
-    pool.release('web_test/default', handle, 'web:test');
+    pool.release('web_test/default', handle, 'web:test', 'default');
 
     const snapshot = pool.getSnapshot();
     expect(snapshot.idleCount).toBe(1);
@@ -227,11 +233,70 @@ describe('ContainerPool', () => {
 
     const handle = createMockHandle();
     activeHandles.push(handle);
-    pool.release('web_test/default', handle, 'web:test');
+    pool.release('web_test/default', handle, 'web:test', 'default');
     expect(countChangeFn).toHaveBeenCalledWith(1);
 
     pool.acquire('web_test/default');
     expect(countChangeFn).toHaveBeenCalledWith(0);
+  });
+
+  it('specialist pool: release and acquire with specialist agentId', () => {
+    const handle = createMockHandle({ groupFolder: 'web_team' });
+    activeHandles.push(handle);
+    pool.release('web_team/analyst', handle, 'web:team', 'analyst');
+    expect(pool.idleCount).toBe(1);
+
+    const acquired = pool.acquire('web_team/analyst');
+    expect(acquired).toBe(handle);
+    expect(pool.idleCount).toBe(0);
+  });
+
+  it('specialist pool: two specialists in same group do not cross-acquire', () => {
+    const handle1 = createMockHandle({ groupFolder: 'web_team' });
+    const handle2 = createMockHandle({ groupFolder: 'web_team' });
+    activeHandles.push(handle1, handle2);
+
+    pool.release('web_team/analyst', handle1, 'web:team', 'analyst');
+    pool.release('web_team/reviewer', handle2, 'web:team', 'reviewer');
+    expect(pool.idleCount).toBe(2);
+
+    // Each agent acquires only its own container
+    expect(pool.acquire('web_team/analyst')).toBe(handle1);
+    expect(pool.acquire('web_team/reviewer')).toBe(handle2);
+    expect(pool.acquire('web_team/analyst')).toBeNull();
+  });
+
+  it('specialist pool: per-role idle timeout', async () => {
+    vi.useFakeTimers();
+    const handle = createMockHandle({ groupFolder: 'web_team' });
+    activeHandles.push(handle);
+
+    // Release with 50ms specialist timeout
+    pool.release('web_team/analyst', handle, 'web:team', 'analyst', 50);
+    expect(pool.idleCount).toBe(1);
+
+    // Advance past specialist timeout
+    vi.advanceTimersByTime(60);
+    handle._exitResolve({ code: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    vi.useRealTimers();
+
+    expect(pool.idleCount).toBe(0);
+  });
+
+  it('specialist pool: _close sentinel targets agent-specific path', () => {
+    const disabledPool = new ContainerPool(5000, false);
+    const handle = createMockHandle({ groupFolder: 'web_team' });
+    activeHandles.push(handle);
+    mockWriteFileSync.mockClear();
+
+    disabledPool.release('web_team/analyst', handle, 'web:team', 'analyst');
+
+    // Should write to agent-specific path
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      '/tmp/test-pool-data/ipc/web_team/analyst/input/_close',
+      '',
+    );
   });
 
   it('shutdown reclaims all containers', async () => {
@@ -239,8 +304,8 @@ describe('ContainerPool', () => {
     const handle2 = createMockHandle();
     activeHandles.push(handle1, handle2);
 
-    pool.release('agent/a', handle1, 'web:a');
-    pool.release('agent/b', handle2, 'web:b');
+    pool.release('agent/a', handle1, 'web:a', 'a');
+    pool.release('agent/b', handle2, 'web:b', 'b');
     expect(pool.idleCount).toBe(2);
 
     const shutdownPromise = pool.shutdown();

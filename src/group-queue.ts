@@ -2,7 +2,8 @@ import { ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
+import { MAX_CONCURRENT_CONTAINERS } from './config.js';
+import { resolveAgentIpcInputPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { WorkPhase, WorkStateEvent } from './types.js';
 
@@ -25,6 +26,8 @@ interface GroupState {
   process: ChildProcess | null;
   containerName: string | null;
   groupFolder: string | null;
+  agentName: string | null;
+  noPipe: boolean; // Pool-managed: don't pipe via sendMessage
   retryCount: number;
   // Parallel delegation tracking — delegations bypass per-group serialization
   activeDelegations: number;
@@ -54,6 +57,8 @@ export class GroupQueue {
         process: null,
         containerName: null,
         groupFolder: null,
+        agentName: null,
+        noPipe: false,
         retryCount: 0,
         activeDelegations: 0,
         pendingDelegations: [],
@@ -195,11 +200,17 @@ export class GroupQueue {
     proc: ChildProcess,
     containerName: string,
     groupFolder?: string,
+    agentName?: string,
   ): void {
     const state = this.getGroup(groupJid);
     state.process = proc;
     state.containerName = containerName;
     if (groupFolder) state.groupFolder = groupFolder;
+    if (agentName) state.agentName = agentName;
+  }
+
+  setNoPipe(groupJid: string, noPipe: boolean): void {
+    this.getGroup(groupJid).noPipe = noPipe;
   }
 
   /**
@@ -226,9 +237,13 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     if (!state.active || !state.groupFolder || state.isTaskContainer)
       return false;
+    // Pool-managed: don't pipe. Messages re-enter through enqueueMessageCheck
+    // → processGroupMessages → pool.acquire on the next queue turn.
+    if (state.noPipe) return false;
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 
-    const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
+    const agentName = state.agentName || 'default';
+    const inputDir = resolveAgentIpcInputPath(state.groupFolder, agentName);
     try {
       fs.mkdirSync(inputDir, { recursive: true });
       const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
@@ -249,7 +264,8 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     if (!state.active || !state.groupFolder) return;
 
-    const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
+    const agentName = state.agentName || 'default';
+    const inputDir = resolveAgentIpcInputPath(state.groupFolder, agentName);
     try {
       fs.mkdirSync(inputDir, { recursive: true });
       fs.writeFileSync(path.join(inputDir, '_close'), '');
@@ -419,6 +435,8 @@ export class GroupQueue {
       state.process = null;
       state.containerName = null;
       state.groupFolder = null;
+      state.agentName = null;
+      state.noPipe = false;
       this.activeWorkCount--;
       this.emitWorkState(groupJid, 'idle');
       this.drainGroup(groupJid);
@@ -454,6 +472,8 @@ export class GroupQueue {
       state.process = null;
       state.containerName = null;
       state.groupFolder = null;
+      state.agentName = null;
+      state.noPipe = false;
       this.activeWorkCount--;
       this.emitWorkState(groupJid, 'idle');
       this.drainGroup(groupJid);
@@ -563,6 +583,7 @@ export class GroupQueue {
       pendingDelegationCount: number;
       containerName: string | null;
       groupFolder: string | null;
+      agentName: string | null;
     }>;
     waitingCount: number;
   } {
@@ -587,6 +608,7 @@ export class GroupQueue {
           pendingDelegationCount: state.pendingDelegations.length,
           containerName: state.containerName,
           groupFolder: state.groupFolder,
+          agentName: state.agentName,
         });
       }
     }

@@ -12,6 +12,10 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'OLLAMA_ADMIN_TOOLS',
   'TZ',
+  'WARM_POOL_ENABLED',
+  'WARM_SPECIALISTS_ENABLED',
+  'POOL_IDLE_TIMEOUT',
+  'SPECIALIST_IDLE_TIMEOUT',
   'WEB_UI_ENABLED',
   'WEB_UI_PORT',
 ]);
@@ -75,11 +79,21 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
-export const WARM_POOL_ENABLED = process.env.WARM_POOL_ENABLED === 'true';
+export const WARM_POOL_ENABLED =
+  (process.env.WARM_POOL_ENABLED || envConfig.WARM_POOL_ENABLED) === 'true';
+export const WARM_SPECIALISTS_ENABLED =
+  (process.env.WARM_SPECIALISTS_ENABLED ||
+    envConfig.WARM_SPECIALISTS_ENABLED) === 'true';
 export const POOL_IDLE_TIMEOUT = parseInt(
-  process.env.POOL_IDLE_TIMEOUT || '300000',
+  process.env.POOL_IDLE_TIMEOUT || envConfig.POOL_IDLE_TIMEOUT || '300000',
   10,
 ); // 5min default — how long to keep a coordinator warm in the pool
+export const SPECIALIST_IDLE_TIMEOUT = parseInt(
+  process.env.SPECIALIST_IDLE_TIMEOUT ||
+    envConfig.SPECIALIST_IDLE_TIMEOUT ||
+    '90000',
+  10,
+); // 90s default — shorter warmth window for specialists
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
