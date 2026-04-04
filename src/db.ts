@@ -413,6 +413,17 @@ export function storeMessageDirect(msg: {
   );
 }
 
+/** Update only the content of an existing message (preserves timestamp and rowid). */
+export function updateMessageContent(
+  id: string,
+  chatJid: string,
+  content: string,
+): void {
+  db.prepare(
+    `UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ?`,
+  ).run(content, id, chatJid);
+}
+
 export function getNewMessages(
   jids: string[],
   lastTimestamp: string,

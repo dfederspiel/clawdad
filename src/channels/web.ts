@@ -25,6 +25,7 @@ import { getHealthStatus } from '../health.js';
 import {
   getMessagesSince,
   storeMessageDirect,
+  updateMessageContent,
   clearMessages,
   getAllTasks,
   getTaskById,
@@ -206,30 +207,18 @@ export class WebChannel implements Channel {
     jid: string,
     messageId: string,
     text: string,
-    threadId?: string,
+    _threadId?: string,
   ): Promise<void> {
-    const timestamp = new Date().toISOString();
     const senderName = getActiveAgentName(jid) || ASSISTANT_NAME;
 
-    // Overwrite existing row (INSERT OR REPLACE on id + chat_jid)
-    storeMessageDirect({
-      id: messageId,
-      chat_jid: jid,
-      sender: senderName,
-      sender_name: senderName,
-      content: text,
-      timestamp,
-      is_from_me: true,
-      is_bot_message: true,
-      thread_id: threadId,
-    });
+    // Update content only — preserve original timestamp and rowid so
+    // message order stays stable on page refresh.
+    updateMessageContent(messageId, jid, text);
 
     this.broadcast('message_update', {
       jid,
       message_id: messageId,
       text,
-      timestamp,
-      thread_id: threadId,
       sender_name: senderName,
     });
   }
