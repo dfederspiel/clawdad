@@ -900,9 +900,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       chatJid,
       async (result) => {
         if (result.result) {
-          // If intermediate texts were already streamed to the user, skip
+          // If intermediate texts were actually delivered to the user, skip
           // re-sending the final result to avoid duplicate content.
-          if (result.textsAlreadyStreamed && result.textsAlreadyStreamed > 0) {
+          // Check our local streamedMessageId (not just textsAlreadyStreamed) because
+          // the container may have emitted TEXT markers whose content was stripped
+          // by <internal> tag removal — those don't count as "sent to user".
+          if (streamedMessageId) {
             logger.info(
               {
                 agent: agent.id,
