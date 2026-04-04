@@ -170,7 +170,8 @@ export class WebChannel implements Channel {
     jid: string,
     text: string,
     threadId?: string,
-  ): Promise<void> {
+  ): Promise<string> {
+    const id = randomUUID();
     const timestamp = new Date().toISOString();
 
     // Use active agent name if set (multi-agent groups), else default
@@ -178,7 +179,7 @@ export class WebChannel implements Channel {
 
     // Persist agent response so it survives page reloads
     storeMessageDirect({
-      id: randomUUID(),
+      id,
       chat_jid: jid,
       sender: senderName,
       sender_name: senderName,
@@ -191,12 +192,46 @@ export class WebChannel implements Channel {
 
     this.broadcast('message', {
       jid,
+      message_id: id,
       text,
       timestamp,
       thread_id: threadId,
       sender_name: senderName,
     });
     logger.info({ jid, length: text.length, threadId }, 'Web message sent');
+    return id;
+  }
+
+  async updateMessage(
+    jid: string,
+    messageId: string,
+    text: string,
+    threadId?: string,
+  ): Promise<void> {
+    const timestamp = new Date().toISOString();
+    const senderName = getActiveAgentName(jid) || ASSISTANT_NAME;
+
+    // Overwrite existing row (INSERT OR REPLACE on id + chat_jid)
+    storeMessageDirect({
+      id: messageId,
+      chat_jid: jid,
+      sender: senderName,
+      sender_name: senderName,
+      content: text,
+      timestamp,
+      is_from_me: true,
+      is_bot_message: true,
+      thread_id: threadId,
+    });
+
+    this.broadcast('message_update', {
+      jid,
+      message_id: messageId,
+      text,
+      timestamp,
+      thread_id: threadId,
+      sender_name: senderName,
+    });
   }
 
   async setTyping(

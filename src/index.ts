@@ -551,7 +551,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     triggerPattern: getTriggerPattern(group.trigger),
     timezone: TIMEZONE,
     deps: {
-      sendMessage: (text) => channel.sendMessage(chatJid, text),
+      sendMessage: (text) => channel.sendMessage(chatJid, text).then(() => {}),
       setTyping: (typing) =>
         channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
       runAgent: (prompt, onOutput) => {
@@ -735,6 +735,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
           setActiveAgentName(responseJid, agent.displayName);
           await responseChannel.setTyping?.(responseJid, true, threadId);
+          let mentionStreamedId: string | undefined;
+          let mentionStreamedContent = '';
 
           const status = await runAgent(
             group,
@@ -776,7 +778,22 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
                 .trim();
               if (!text) return;
               setActiveAgentName(responseJid, agent.displayName);
-              await responseChannel.sendMessage(responseJid, text, threadId);
+              if (!mentionStreamedId) {
+                mentionStreamedContent = text;
+                mentionStreamedId = await responseChannel.sendMessage(
+                  responseJid,
+                  text,
+                  threadId,
+                );
+              } else {
+                mentionStreamedContent += '\n\n' + text;
+                await responseChannel.updateMessage?.(
+                  responseJid,
+                  mentionStreamedId,
+                  mentionStreamedContent,
+                  threadId,
+                );
+              }
             },
             agent,
             true, // isDelegation
@@ -874,6 +891,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     let outputSentForCurrentQuery = false;
     let outputSentToUser = false;
     let automationFiredForAgent = false;
+    let streamedMessageId: string | undefined;
+    let streamedContent = '';
 
     const output = await runAgent(
       group,
@@ -977,13 +996,28 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         broadcastProgress(responseJid, event);
       },
       async (rawText) => {
-        // Intermediate text block — deliver immediately
+        // Intermediate text block — append to a single growing message
         const text = rawText
           .replace(/<internal>[\s\S]*?<\/internal>/g, '')
           .trim();
         if (!text) return;
         setActiveAgentName(responseJid, agent.displayName);
-        await responseChannel.sendMessage(responseJid, text, threadId);
+        if (!streamedMessageId) {
+          streamedContent = text;
+          streamedMessageId = await responseChannel.sendMessage(
+            responseJid,
+            text,
+            threadId,
+          );
+        } else {
+          streamedContent += '\n\n' + text;
+          await responseChannel.updateMessage?.(
+            responseJid,
+            streamedMessageId,
+            streamedContent,
+            threadId,
+          );
+        }
         outputSentToUser = true;
         outputSentForCurrentQuery = true;
         resetIdleTimer();
@@ -1913,7 +1947,7 @@ async function main(): Promise<void> {
           ? stripped
           : formatOutbound(stripped, channel.name as ChannelType);
       if (!text) return Promise.resolve();
-      return channel.sendMessage(jid, text);
+      return channel.sendMessage(jid, text).then(() => {});
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
@@ -2061,6 +2095,8 @@ async function main(): Promise<void> {
 
         setActiveAgentName(chatJid, agent.displayName);
         await channel.setTyping?.(chatJid, true);
+        let delegationStreamedId: string | undefined;
+        let delegationStreamedContent = '';
 
         const status = await runAgent(
           group,
@@ -2105,7 +2141,17 @@ async function main(): Promise<void> {
               .trim();
             if (!text) return;
             setActiveAgentName(chatJid, agent.displayName);
-            await channel.sendMessage(chatJid, text);
+            if (!delegationStreamedId) {
+              delegationStreamedContent = text;
+              delegationStreamedId = await channel.sendMessage(chatJid, text);
+            } else {
+              delegationStreamedContent += '\n\n' + text;
+              await channel.updateMessage?.(
+                chatJid,
+                delegationStreamedId,
+                delegationStreamedContent,
+              );
+            }
           },
           agent,
           true, // isDelegation — use shorter timeout
