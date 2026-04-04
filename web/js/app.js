@@ -40,6 +40,7 @@ export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group la
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
 export const typingAgentName = signal({}); // { [jid]: string } — which agent is typing
 export const agentProgress = signal({}); // { [jid]: { tool, summary, history[] } }
+export const activeAgents = signal({}); // { [jid]: string[] } — agent names currently working
 export const workState = signal({}); // { [jid]: WorkStateEvent }
 export const currentWorkState = computed(() => workState.value[selectedJid.value] || null);
 
@@ -120,6 +121,11 @@ api.onSSE('typing', (data) => {
     }
     if (data.agent_name) {
       typingAgentName.value = { ...typingAgentName.value, [data.jid]: data.agent_name };
+      // Track per-agent activity for multi-agent groups
+      const current = activeAgents.value[data.jid] || [];
+      if (!current.includes(data.agent_name)) {
+        activeAgents.value = { ...activeAgents.value, [data.jid]: [...current, data.agent_name] };
+      }
     }
   } else {
     const next = { ...typingStartTime.value };
@@ -132,6 +138,14 @@ api.onSSE('typing', (data) => {
     const prog = { ...agentProgress.value };
     delete prog[data.jid];
     agentProgress.value = prog;
+    // Remove specific agent from active set, or clear all if no name
+    if (data.agent_name) {
+      const current = activeAgents.value[data.jid] || [];
+      const filtered = current.filter(n => n !== data.agent_name);
+      activeAgents.value = { ...activeAgents.value, [data.jid]: filtered };
+    } else {
+      activeAgents.value = { ...activeAgents.value, [data.jid]: [] };
+    }
   }
 });
 

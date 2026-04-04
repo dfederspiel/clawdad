@@ -146,7 +146,12 @@ export interface Channel {
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
-  setTyping?(jid: string, isTyping: boolean, threadId?: string): Promise<void>;
+  setTyping?(
+    jid: string,
+    isTyping: boolean,
+    threadId?: string,
+    agentName?: string,
+  ): Promise<void>;
   // Optional: update a previously sent message in-place.
   updateMessage?(
     jid: string,

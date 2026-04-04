@@ -39,10 +39,14 @@ export function TypingIndicator() {
         <div class="mt-2 flex flex-col gap-1">
           ${recentTools.map((t, i) => {
             const isLatest = i === recentTools.length - 1;
+            const isText = t.tool === 'text';
             return html`
-              <div class="flex items-center gap-1.5 text-[11px] ${isLatest ? 'text-txt-2' : 'text-txt-muted opacity-50'}">
-                <span class="font-mono text-[10px] ${isLatest ? 'text-accent' : ''}">${t.tool || '>'}</span>
-                <span class="truncate">${t.summary}</span>
+              <div class="flex items-start gap-1.5 text-[11px] ${isLatest ? 'text-txt-2' : 'text-txt-muted opacity-50'}">
+                ${isText
+                  ? html`<span class="text-[10px] mt-px shrink-0">\u25B8</span>`
+                  : html`<span class="font-mono text-[10px] ${isLatest ? 'text-accent' : ''} shrink-0">${t.tool || '>'}</span>`
+                }
+                <span class="${isText ? '' : 'truncate'}">${t.summary}</span>
               </div>
             `;
           })}

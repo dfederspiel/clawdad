@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
-import { useState } from 'preact/hooks';
-import { unread, typingGroups, tasks } from '../app.js';
+import { useState, useEffect } from 'preact/hooks';
+import { unread, typingGroups, tasks, activeAgents } from '../app.js';
 
 function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -14,14 +14,19 @@ function saveDrawerState(jid, open) {
   else localStorage.removeItem(getDrawerKey(jid));
 }
 
-function AgentRow({ agent }) {
+function AgentRow({ agent, jid }) {
+  const isWorking = (activeAgents.value[jid] || []).includes(agent.displayName);
   const triggerLabel = agent.trigger
     ? agent.trigger.replace(/[\\^$.*+?()[\]{}|]/g, '').trim()
     : null;
 
+  const dotClass = isWorking
+    ? 'w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-shrink-0'
+    : 'w-1 h-1 rounded-full bg-txt-muted/40 flex-shrink-0';
+
   return html`
     <div class="flex items-center gap-2 pl-8 pr-4 py-1.5 text-xs text-txt-2 border-l-2 border-border/50 ml-4">
-      <span class="w-1 h-1 rounded-full bg-txt-muted/40 flex-shrink-0" />
+      <span class="${dotClass}" />
       <span class="truncate flex-1">${esc(agent.displayName)}</span>
       ${triggerLabel && html`
         <span class="text-[9px] px-1 py-0.5 rounded bg-bg-3 text-txt-muted font-mono shrink-0">${esc(triggerLabel)}</span>
@@ -39,7 +44,17 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
 
   const count = unread.value[group.jid] || 0;
   const isThinking = typingGroups.value[group.jid] || false;
+  const activeList = activeAgents.value[group.jid] || [];
+  const hasActiveAgents = isMultiAgent && activeList.length > 0;
   const taskCount = tasks.value.filter(t => t.group_folder === group.folder && t.status === 'active').length;
+
+  // Auto-expand drawer when specialists activate (don't auto-collapse — that's jarring)
+  useEffect(() => {
+    if (hasActiveAgents && !expanded) {
+      setExpanded(true);
+      saveDrawerState(group.jid, true);
+    }
+  }, [hasActiveAgents]);
   const base =
     'flex items-center gap-2.5 px-4 py-2.5 cursor-pointer transition-colors text-sm group/item';
   const active = isActive ? 'bg-bg-3 text-txt' : 'text-txt-2 hover:bg-bg-hover';
@@ -122,7 +137,7 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
       </div>
       ${isMultiAgent && expanded && html`
         <div class="pb-1">
-          ${specialists.map(a => html`<${AgentRow} key=${a.id} agent=${a} />`)}
+          ${specialists.map(a => html`<${AgentRow} key=${a.id} agent=${a} jid=${group.jid} />`)}
         </div>
       `}
     </div>

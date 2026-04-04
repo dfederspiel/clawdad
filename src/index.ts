@@ -740,8 +740,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
           setActiveAgentName(responseJid, agent.displayName);
           await responseChannel.setTyping?.(responseJid, true, threadId);
-          let mentionStreamedId: string | undefined;
-          let mentionStreamedContent = '';
+          // Intermediate TEXT blocks are shown as status in the typing indicator
 
           const status = await runAgent(
             group,
@@ -773,7 +772,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
                 }
               }
               if (result.status === 'success' || result.status === 'error') {
-                await responseChannel.setTyping?.(responseJid, false, threadId);
+                await responseChannel.setTyping?.(
+                  responseJid,
+                  false,
+                  threadId,
+                  agent.displayName,
+                );
               }
             },
             (event) => broadcastProgress(responseJid, event),
@@ -783,22 +787,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
                 .trim();
               if (!text) return;
               setActiveAgentName(responseJid, agent.displayName);
-              if (!mentionStreamedId) {
-                mentionStreamedContent = text;
-                mentionStreamedId = await responseChannel.sendMessage(
-                  responseJid,
-                  text,
-                  threadId,
-                );
-              } else {
-                mentionStreamedContent += '\n\n' + text;
-                await responseChannel.updateMessage?.(
-                  responseJid,
-                  mentionStreamedId,
-                  mentionStreamedContent,
-                  threadId,
-                );
-              }
+              const summary =
+                text.length > 120 ? text.slice(0, 117) + '...' : text;
+              broadcastProgress(responseJid, {
+                tool: 'text',
+                summary,
+                timestamp: new Date().toISOString(),
+              });
             },
             agent,
             true, // isDelegation
@@ -806,7 +801,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
           group.containerConfig = savedConfig;
           clearActiveAgentName(responseJid);
-          await responseChannel.setTyping?.(responseJid, false, threadId);
+          await responseChannel.setTyping?.(
+            responseJid,
+            false,
+            threadId,
+            agent.displayName,
+          );
 
           // Evaluate automation rules on agent result (Phase 1: logging only)
           if (status === 'success') {
@@ -896,7 +896,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     let outputSentForCurrentQuery = false;
     let outputSentToUser = false;
     let automationFiredForAgent = false;
-    let textsDelivered = 0;
 
     const output = await runAgent(
       group,
@@ -904,56 +903,38 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       chatJid,
       async (result) => {
         if (result.result) {
-          // If intermediate texts were actually delivered to the user, skip
-          // re-sending the final result to avoid duplicate content.
-          // Check our local textsDelivered (not just textsAlreadyStreamed) because
-          // the container may have emitted TEXT markers whose content was stripped
-          // by <internal> tag removal — those don't count as "sent to user".
-          if (textsDelivered > 0) {
+          const raw =
+            typeof result.result === 'string'
+              ? result.result
+              : JSON.stringify(result.result);
+          const text = raw
+            .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+            .trim();
+          logger.info(
+            { agent: agent.id, responseJid, threadId: threadId || null },
+            `Agent output: ${raw.length} chars → ${threadId ? 'thread' : 'main'}`,
+          );
+          if (raw.length > 0 && text.length === 0) {
+            logger.warn(
+              { agent: agent.id, responseJid, rawLen: raw.length },
+              'Agent output entirely stripped by <internal> tag removal — user sees nothing',
+            );
+          } else if (raw.length - text.length > 500) {
             logger.info(
               {
                 agent: agent.id,
                 responseJid,
-                textsStreamed: result.textsAlreadyStreamed,
+                rawLen: raw.length,
+                strippedLen: text.length,
               },
-              'Final result skipped — text already streamed via intermediate markers',
+              `<internal> tags stripped ${raw.length - text.length} chars from agent output`,
             );
+          }
+          if (text) {
+            setActiveAgentName(responseJid, agent.displayName);
+            await responseChannel.sendMessage(responseJid, text, threadId);
             outputSentToUser = true;
             outputSentForCurrentQuery = true;
-          } else {
-            const raw =
-              typeof result.result === 'string'
-                ? result.result
-                : JSON.stringify(result.result);
-            const text = raw
-              .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-              .trim();
-            logger.info(
-              { agent: agent.id, responseJid, threadId: threadId || null },
-              `Agent output: ${raw.length} chars → ${threadId ? 'thread' : 'main'}`,
-            );
-            if (raw.length > 0 && text.length === 0) {
-              logger.warn(
-                { agent: agent.id, responseJid, rawLen: raw.length },
-                'Agent output entirely stripped by <internal> tag removal — user sees nothing',
-              );
-            } else if (raw.length - text.length > 500) {
-              logger.info(
-                {
-                  agent: agent.id,
-                  responseJid,
-                  rawLen: raw.length,
-                  strippedLen: text.length,
-                },
-                `<internal> tags stripped ${raw.length - text.length} chars from agent output`,
-              );
-            }
-            if (text) {
-              setActiveAgentName(responseJid, agent.displayName);
-              await responseChannel.sendMessage(responseJid, text, threadId);
-              outputSentToUser = true;
-              outputSentForCurrentQuery = true;
-            }
           }
           resetIdleTimer();
         }
@@ -988,14 +969,24 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
               'Agent returned null result after retry — silent completion',
             );
           }
-          await responseChannel.setTyping?.(responseJid, false, threadId);
+          await responseChannel.setTyping?.(
+            responseJid,
+            false,
+            threadId,
+            agent.displayName,
+          );
           if (result.result) {
             outputSentForCurrentQuery = false;
           }
         }
 
         if (result.status === 'error') {
-          await responseChannel.setTyping?.(responseJid, false, threadId);
+          await responseChannel.setTyping?.(
+            responseJid,
+            false,
+            threadId,
+            agent.displayName,
+          );
           hadError = true;
         }
       },
@@ -1003,22 +994,31 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         broadcastProgress(responseJid, event);
       },
       async (rawText) => {
-        // Intermediate text block — send as its own message
+        // Intermediate text — show as status in typing indicator, not a chat message.
+        // The final result will be sent as the real message.
         const text = rawText
           .replace(/<internal>[\s\S]*?<\/internal>/g, '')
           .trim();
         if (!text) return;
         setActiveAgentName(responseJid, agent.displayName);
-        await responseChannel.sendMessage(responseJid, text, threadId);
-        textsDelivered++;
-        outputSentToUser = true;
-        outputSentForCurrentQuery = true;
+        // Truncate for status display — full content comes in the final result
+        const summary = text.length > 120 ? text.slice(0, 117) + '...' : text;
+        broadcastProgress(responseJid, {
+          tool: 'text',
+          summary,
+          timestamp: new Date().toISOString(),
+        });
         resetIdleTimer();
       },
       agent,
     );
 
-    await responseChannel.setTyping?.(responseJid, false, threadId);
+    await responseChannel.setTyping?.(
+      responseJid,
+      false,
+      threadId,
+      agent.displayName,
+    );
     broadcastWorkState({
       jid: responseJid,
       phase: hadError ? 'error' : 'completed',
@@ -2249,8 +2249,7 @@ async function main(): Promise<void> {
 
         setActiveAgentName(chatJid, agent.displayName);
         await channel.setTyping?.(chatJid, true);
-        let delegationStreamedId: string | undefined;
-        let delegationStreamedContent = '';
+        // Intermediate TEXT blocks are shown as status in the typing indicator
 
         const status = await runAgent(
           group,
@@ -2282,10 +2281,20 @@ async function main(): Promise<void> {
             // Delegation containers exit on their own (isDelegation skips
             // the idle loop in agent-runner) — no notifyIdle needed.
             if (result.status === 'success') {
-              await channel.setTyping?.(chatJid, false);
+              await channel.setTyping?.(
+                chatJid,
+                false,
+                undefined,
+                agent.displayName,
+              );
             }
             if (result.status === 'error') {
-              await channel.setTyping?.(chatJid, false);
+              await channel.setTyping?.(
+                chatJid,
+                false,
+                undefined,
+                agent.displayName,
+              );
             }
           },
           (event) => broadcastProgress(chatJid, event),
@@ -2295,17 +2304,13 @@ async function main(): Promise<void> {
               .trim();
             if (!text) return;
             setActiveAgentName(chatJid, agent.displayName);
-            if (!delegationStreamedId) {
-              delegationStreamedContent = text;
-              delegationStreamedId = await channel.sendMessage(chatJid, text);
-            } else {
-              delegationStreamedContent += '\n\n' + text;
-              await channel.updateMessage?.(
-                chatJid,
-                delegationStreamedId,
-                delegationStreamedContent,
-              );
-            }
+            const summary =
+              text.length > 120 ? text.slice(0, 117) + '...' : text;
+            broadcastProgress(chatJid, {
+              tool: 'text',
+              summary,
+              timestamp: new Date().toISOString(),
+            });
           },
           agent,
           true, // isDelegation — use shorter timeout
@@ -2313,7 +2318,7 @@ async function main(): Promise<void> {
 
         group.containerConfig = savedConfig; // restore original config
         clearActiveAgentName(chatJid);
-        await channel.setTyping?.(chatJid, false);
+        await channel.setTyping?.(chatJid, false, undefined, agent.displayName);
 
         // Evaluate automation rules on delegation result (Phase 1: logging only)
         if (status === 'success') {

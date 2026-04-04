@@ -231,8 +231,14 @@ function buildVolumeMounts(
 
   // Per-container input namespace: each agent gets its own input/ directory
   // so multiple warm containers in one group don't race on IPC polling.
-  // The overlay mount makes the agent-runner see only its own input dir
-  // at /workspace/ipc/input while shared dirs remain at /workspace/ipc/*.
+  // We pre-create the directory and write a marker, then pass the agent name
+  // via IPC_AGENT_NAME env var so the agent-runner reads from the correct
+  // subdirectory within the parent /workspace/ipc mount.
+  //
+  // NOTE: We intentionally do NOT overlay-mount this as a child bind mount.
+  // Docker Desktop for Mac (VirtioFS) has a known issue where nested bind
+  // mounts create a stale filesystem view — host writes become invisible
+  // to the container, breaking _close sentinels and IPC message delivery.
   const effectiveAgentName = agentName || 'default';
   const agentInputDir = resolveAgentIpcInputPath(
     group.folder,
@@ -242,11 +248,6 @@ function buildVolumeMounts(
   // Write marker so agent-runner can assert it's reading the right namespace
   const markerPath = path.join(agentInputDir, '.agent-name');
   fs.writeFileSync(markerPath, effectiveAgentName);
-  mounts.push({
-    hostPath: agentInputDir,
-    containerPath: '/workspace/ipc/input',
-    readonly: false,
-  });
 
   // Mount agent-specific directory (for multi-agent groups with explicit agents/)
   // The agent's CLAUDE.md lives here, mounted at /workspace/agent
@@ -327,6 +328,7 @@ async function buildContainerArgs(
   containerName: string,
   isMain: boolean,
   group?: RegisteredGroup,
+  agentName?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -412,6 +414,11 @@ async function buildContainerArgs(
   }
   // Always set HOME=/home/node — .claude/ settings are mounted there.
   args.push('-e', 'HOME=/home/node');
+
+  // Tell the agent-runner which subdirectory to use for IPC input.
+  // The parent mount at /workspace/ipc exposes the full IPC tree;
+  // the agent-runner uses this to find its agent-specific input dir.
+  args.push('-e', `IPC_AGENT_NAME=${agentName || 'default'}`);
 
   for (const mount of mounts) {
     if (mount.readonly) {
@@ -680,6 +687,7 @@ export async function spawnContainer(
     containerName,
     input.isMain,
     group,
+    input.agentName,
   );
 
   logger.info(

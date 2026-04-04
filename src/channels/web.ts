@@ -227,13 +227,14 @@ export class WebChannel implements Channel {
     jid: string,
     isTyping: boolean,
     threadId?: string,
+    agentName?: string,
   ): Promise<void> {
-    const agentName = isTyping ? getActiveAgentName(jid) : undefined;
+    const name = agentName || getActiveAgentName(jid);
     this.broadcast('typing', {
       jid,
       isTyping,
       thread_id: threadId,
-      agent_name: agentName,
+      agent_name: name,
     });
   }
 

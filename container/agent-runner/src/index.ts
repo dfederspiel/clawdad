@@ -75,7 +75,13 @@ interface SDKUserMessage {
   session_id: string;
 }
 
-const IPC_INPUT_DIR = '/workspace/ipc/input';
+// IPC input directory: agent-specific subdirectory within the parent /workspace/ipc mount.
+// IPC_AGENT_NAME env var tells us which agent's input dir to use (e.g., 'coordinator').
+// Falls back to the legacy /workspace/ipc/input for backward compatibility.
+const IPC_AGENT_NAME = process.env.IPC_AGENT_NAME;
+const IPC_INPUT_DIR = IPC_AGENT_NAME
+  ? `/workspace/ipc/${IPC_AGENT_NAME}/input`
+  : '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
 
