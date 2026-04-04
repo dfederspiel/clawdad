@@ -1231,12 +1231,8 @@ async function runAgent(
     }
 
     // Deliver text to user via onText — bypasses the caller's onOutput
-    // which bundles piping-loop lifecycle signals (notifyIdle, idle timer).
-    // Skip if intermediate text was already streamed via TEXT markers.
-    if (
-      output.result &&
-      !(output.textsAlreadyStreamed && output.textsAlreadyStreamed > 0)
-    ) {
+    // which bundles piping-loop lifecycle signals (notifyIdle, idle timer)
+    if (output.result) {
       const raw =
         typeof output.result === 'string'
           ? output.result
