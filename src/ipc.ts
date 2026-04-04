@@ -207,6 +207,8 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     {
                       sourceGroup,
                       sourceAgent: data.sourceAgent,
+                      sourceAgentId: data.sourceAgentId,
+                      sourceSessionId: data.sourceSessionId,
                       targetAgent: data.targetAgent,
                     },
                     'Agent delegation requested',

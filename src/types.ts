@@ -88,6 +88,9 @@ export type WorkPhase =
   | 'completed'
   | 'pool_idle'
   | 'pool_acquired'
+  | 'pool_released'
+  | 'pool_reclaimed'
+  | 'pool_cold_start'
   | 'error'
   | 'idle';
 

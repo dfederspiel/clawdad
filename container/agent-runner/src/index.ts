@@ -32,6 +32,7 @@ interface ContainerInput {
   agentName?: string;
   canDelegate?: boolean;
   isDelegation?: boolean;
+  poolManaged?: boolean;
   script?: string;
   achievements?: { id: string; name: string; description: string }[];
 }
@@ -529,6 +530,8 @@ async function runQuery(
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
             NANOCLAW_AGENT_NAME: containerInput.agentName || 'default',
+            NANOCLAW_AGENT_ID: containerInput.agentId || '',
+            NANOCLAW_SESSION_ID: sessionId || '',
             NANOCLAW_CAN_DELEGATE: containerInput.canDelegate ? '1' : '0',
             NANOCLAW_ACHIEVEMENTS: JSON.stringify(containerInput.achievements || []),
           },
@@ -881,9 +884,12 @@ async function main(): Promise<void> {
       // Emit session update so host can track it
       writeOutput({ status: 'success', result: null, newSessionId: sessionId });
 
-      // Delegation containers exit immediately after first response —
-      // no idle wait, no follow-up messages. Frees the concurrency slot.
-      if (containerInput.isDelegation) {
+      // Container lifetime decision:
+      // - poolManaged containers stay alive for follow-up queries (warm pool)
+      // - Non-poolManaged delegations exit immediately (fire-and-exit)
+      // Note: isDelegation controls delegation *semantics* (output routing,
+      // completion signaling). poolManaged controls container *lifetime*.
+      if (containerInput.isDelegation && !containerInput.poolManaged) {
         log('Delegation complete, exiting (no idle wait)');
         break;
       }

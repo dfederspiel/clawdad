@@ -42,3 +42,26 @@ export function resolveGroupIpcPath(folder: string): string {
   ensureWithinBase(ipcBaseDir, ipcPath);
   return ipcPath;
 }
+
+const AGENT_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+export function resolveAgentIpcInputPath(
+  folder: string,
+  agentName: string,
+): string {
+  assertValidGroupFolder(folder);
+
+  if (!agentName || typeof agentName !== 'string') {
+    throw new Error('agentName is required');
+  }
+  if (!AGENT_NAME_PATTERN.test(agentName)) {
+    throw new Error(
+      `Unsafe agent name for IPC path: ${JSON.stringify(agentName)}`,
+    );
+  }
+
+  const groupIpcBase = resolveGroupIpcPath(folder);
+  const inputPath = path.resolve(groupIpcBase, agentName, 'input');
+  ensureWithinBase(groupIpcBase, inputPath);
+  return inputPath;
+}

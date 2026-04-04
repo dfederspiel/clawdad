@@ -53,6 +53,8 @@ server.tool(
       text: args.text,
       sender: args.sender || undefined,
       groupFolder,
+      agentId: process.env.NANOCLAW_AGENT_ID || undefined,
+      sessionId: process.env.NANOCLAW_SESSION_ID || undefined,
       timestamp: new Date().toISOString(),
     };
 
@@ -600,6 +602,8 @@ Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the thre
         targetAgent: args.agent,
         message: args.message,
         sourceAgent: process.env.NANOCLAW_AGENT_NAME || 'default',
+        sourceAgentId: process.env.NANOCLAW_AGENT_ID || '',
+        sourceSessionId: process.env.NANOCLAW_SESSION_ID || '',
         chatJid,
         groupFolder,
         timestamp: new Date().toISOString(),
