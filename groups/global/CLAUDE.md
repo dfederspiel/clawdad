@@ -105,67 +105,20 @@ The `conversations/` folder contains searchable markdown snapshots of past sessi
 - Remove memories that are no longer true
 - Keep `MEMORY.md` under 50 lines
 
-## Credential Registration
+## API Access & Credentials
 
-If you need API credentials for a service, use the `mcp__nanoclaw__request_credential` tool. It opens a secure popup in the user's browser — you never see the secret.
+**All external API calls MUST go through `/workspace/scripts/api.sh`** — it routes through the credential proxy which injects real secrets at request time. Your environment variables contain placeholders, not real secrets. Never use raw `curl`, `gh` CLI, or `git clone` with SSH.
 
-**CRITICAL: Never ask users to paste secrets, API keys, or tokens in chat.** Always use `request_credential`.
+The `credential-proxy` skill has full documentation: auth patterns for every service, repo cloning, troubleshooting 401s, and examples. Read it before making any API call.
 
-```
-Use mcp__nanoclaw__request_credential with:
-- service: "github" (or "atlassian", "gitlab", "launchdarkly", or a custom name)
-- description: "Why this credential is needed — shown to the user in the popup"
-```
-
-The tool returns immediately — it does NOT block waiting for the user. The flow is:
-1. Tool opens a popup in the user's browser
-2. Tool returns right away — continue with other work
-3. User enters their secret in the form (you never see it)
-4. Secret is saved and available immediately via the credential proxy — no restart needed
-5. A `[credential_registered]` message appears in the chat — that's your signal to proceed
-
-### Using registered credentials
-
-Credentials are injected by the credential proxy. Always use `/workspace/scripts/api.sh` for service API calls — it routes through the proxy automatically:
-
+**Quick reference:**
 ```bash
 /workspace/scripts/api.sh <service_label> <METHOD> <URL> [CURL_ARGS...]
 ```
 
-The first argument is a **service label** — a short name for logging and error tracking. Common labels: `github`, `gitlab`, `atlassian`, `harness`, `blackduck`, `launchdarkly`. Use any label for custom services.
+You MUST pass auth headers explicitly — the proxy substitutes placeholder values but doesn't add headers for you.
 
-**How auth works:** Your environment variables (e.g. `$GITHUB_TOKEN`, `$ATLASSIAN_API_TOKEN`) contain **placeholders**, not real secrets. The credential proxy substitutes real values at request time. You MUST pass auth headers/flags explicitly on every call — the proxy only replaces the placeholder values, it doesn't add headers for you.
-
-**Common auth patterns:**
-```bash
-# Bearer token:  -H "Authorization: token $SERVICE_TOKEN"
-# Private token: -H "PRIVATE-TOKEN: $SERVICE_TOKEN"
-# Basic auth:    -u "$SERVICE_EMAIL:$SERVICE_API_TOKEN"
-# API key:       -H "x-api-key: $SERVICE_API_KEY"
-```
-
-The proxy replaces credential placeholders with real values at request time. Newly registered credentials work immediately — no container restart needed.
-
-**IMPORTANT: Try the API call first** using `api.sh`. If the call returns 401, THEN use `request_credential` to ask the user.
-
-**Do NOT use `gh` CLI or raw `curl` for authenticated requests** — use `api.sh` so credentials are injected by the proxy.
-
-**Security rules:**
-- NEVER ask the user to paste tokens, keys, or passwords in chat
-- NEVER echo, log, or print credential values — they contain placeholders, not real secrets
-- NEVER use raw curl for authenticated API calls — always use `api.sh`
-- If an API call fails with 401/403, call `request_credential` — the token may have expired
-
-### Service-specific configuration
-
-Service URLs and auth details are provided as environment variables. Check what's available with `env | grep -E '(URL|EMAIL|ACCOUNT)' | sort` — this shows base URLs, emails, and account IDs for connected services. Your group's CLAUDE.md should document specific API endpoints and patterns relevant to your domain.
-
-### API pitfalls to avoid
-
-- **Deprecated endpoints:** Some service APIs deprecate endpoints over time (returning 410 Gone). If you get a 410, check the service's current API docs for the replacement endpoint. Do not retry the same URL.
-- **URL encoding in GET queries:** URL-encode JQL, CQL, or other query strings. Use `--data-urlencode` for complex query params or switch to POST with a JSON body.
-- **Rate limits:** If you get 429 responses, back off and retry with increasing delays. Log the rate limit event.
-- **Pagination:** Most APIs return paginated results. Check for `nextPage`, `startAt`/`total`, or `cursor` fields in responses and paginate as needed.
+**Requesting new credentials:** Use `mcp__nanoclaw__request_credential` — it opens a secure popup in the user's browser. Never ask users to paste secrets in chat. Try the API call first; only request credentials if you get a 401.
 
 ## Event Logging
 
