@@ -22,15 +22,22 @@ function AgentRow({ agent, jid }) {
 
   const dotClass = isWorking
     ? 'w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-shrink-0'
-    : 'w-1 h-1 rounded-full bg-txt-muted/40 flex-shrink-0';
+    : 'w-1.5 h-1.5 rounded-full bg-txt-muted/40 flex-shrink-0';
 
   return html`
-    <div class="flex items-center gap-2 pl-8 pr-4 py-1.5 text-xs text-txt-2 border-l-2 border-border/50 ml-4">
-      <span class="${dotClass}" />
-      <span class="truncate flex-1">${esc(agent.displayName)}</span>
-      ${triggerLabel && html`
-        <span class="text-[9px] px-1 py-0.5 rounded bg-bg-3 text-txt-muted font-mono shrink-0">${esc(triggerLabel)}</span>
-      `}
+    <div class="flex items-start gap-2.5 pl-8 pr-4 py-1.5 text-xs text-txt-2 border-l-2 border-border/50 ml-4">
+      <span class="${dotClass} mt-1.5" />
+      <div class="min-w-0 flex-1">
+        <div class="flex items-start gap-2">
+          <span class="truncate flex-1">${esc(agent.displayName)}</span>
+          ${triggerLabel && html`
+            <span class="text-[9px] leading-none px-1.5 py-1 rounded bg-bg-3 text-txt-muted font-mono shrink-0 mt-0.5">${esc(triggerLabel)}</span>
+          `}
+        </div>
+        ${agent.status && html`
+          <div class="text-[10px] text-txt-muted truncate leading-snug mt-1">${esc(agent.status)}</div>
+        `}
+      </div>
     </div>
   `;
 }
@@ -56,7 +63,7 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
     }
   }, [hasActiveAgents]);
   const base =
-    'flex items-center gap-2.5 px-4 py-2.5 cursor-pointer transition-colors text-sm group/item';
+    'flex items-start gap-2.5 px-4 py-2.5 cursor-pointer transition-colors text-sm group/item';
   const active = isActive ? 'bg-bg-3 text-txt' : 'text-txt-2 hover:bg-bg-hover';
 
   // Dot color: green pulsing if thinking, accent if active, muted otherwise
@@ -82,11 +89,11 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
   return html`
     <div>
       <div class="${base} ${active}" onClick=${handleClick}>
-        <span class="w-2 h-2 rounded-full flex-shrink-0 ${dotClass}" />
+        <span class="w-2 h-2 rounded-full flex-shrink-0 ${dotClass} mt-1.5" />
         <div class="flex-1 min-w-0">
           <div class="truncate">${esc(group.name)}</div>
           ${group.subtitle && html`
-            <div class="text-[10px] text-txt-muted truncate leading-tight">${esc(group.subtitle)}</div>
+            <div class="text-[10px] text-txt-muted truncate leading-snug mt-0.5">${esc(group.subtitle)}</div>
           `}
         </div>
         ${group.isSystem && html`
@@ -103,7 +110,7 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
             ${count}
           </span>
         `}
-        <div class="flex items-center gap-0.5 opacity-0 group-hover/item:opacity-100 transition-all shrink-0">
+        <div class="flex items-center gap-0.5 opacity-0 group-hover/item:opacity-100 transition-all shrink-0 mt-0.5">
           ${isMultiAgent && html`
             <button
               class="w-5 h-5 flex items-center justify-center rounded text-txt-muted hover:text-txt hover:bg-bg-hover text-xs"

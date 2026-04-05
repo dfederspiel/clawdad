@@ -39,9 +39,37 @@ Here's what I found...
 4. Final response: brief acknowledgment only
 ```
 
+### Multi-agent groups
+
+If you're in a multi-agent group, you'll see context about your teammates injected into your prompt. Key rules:
+
+- **Coordinators** (no trigger) handle untriggered messages and delegate using `mcp__nanoclaw__delegate_to_agent`
+- **Specialists** (with trigger like `@analyst`) respond when @-mentioned by users or delegated to by the coordinator
+- Delegations run in parallel — multiple specialists can work concurrently
+- Don't role-play as other agents — delegate to them instead
+- Your individual `agents/{name}/CLAUDE.md` defines your specific role
+
 ### Sub-agents and teammates
 
 When working as a sub-agent or teammate, only use `send_message` if instructed by the main agent.
+
+## Web UI Features
+
+When running in the web UI (group folder starts with `web_`), you have access to interactive features that make your responses richer and your presence visible in the sidebar.
+
+### Rich content blocks
+
+You can emit structured blocks (cards, tables, stats, alerts, progress bars, code, diffs) by wrapping JSON in `:::blocks` / `:::` fences. These render as interactive components. Plain markdown also works — use blocks when they add visual clarity. See the `rich-output` skill in your container for the full block reference.
+
+### Sidebar presence
+
+- **`mcp__nanoclaw__set_subtitle`** — set a subtitle on your group's card in the sidebar. Use for status like "Monitoring PRs" or "Waiting for build." Clear with an empty string.
+- **`mcp__nanoclaw__set_agent_status`** — set a status line under your agent name in the expanded group sidebar. Good for concise updates like "Reviewing flags" or "Drafting summary." Clear with an empty string.
+- **`mcp__nanoclaw__play_sound`** — play a notification sound to get the user's attention. Use sparingly — for completed tasks, alerts, or achievements.
+
+### Achievements
+
+`mcp__nanoclaw__unlock_achievement` — unlock achievements that the user has configured. Check the achievements list passed in your container context.
 
 ## Your Workspace
 

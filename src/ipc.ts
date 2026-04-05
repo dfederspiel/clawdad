@@ -48,6 +48,7 @@ export interface IpcDeps {
     label?: string,
   ) => void;
   onSetSubtitle?: (jid: string, subtitle: string) => void;
+  onSetAgentStatus?: (jid: string, agentName: string, status: string) => void;
   onDelegateToAgent?: (request: {
     sourceGroup: string;
     chatJid: string;
@@ -825,6 +826,16 @@ export async function processTaskIpc(
         data.chatJid as string,
         (data.subtitle as string) || '',
       );
+      break;
+
+    case 'set_agent_status':
+      if (data.chatJid && 'agentName' in data && data.agentName) {
+        deps.onSetAgentStatus?.(
+          data.chatJid as string,
+          data.agentName as string,
+          ('status' in data ? (data.status as string) : '') || '',
+        );
+      }
       break;
 
     default:

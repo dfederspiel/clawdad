@@ -2025,6 +2025,7 @@ async function main(): Promise<void> {
         name: a.name,
         displayName: a.displayName,
         trigger: a.trigger,
+        status: a.status,
       })),
     refreshGroupAgents: (jid: string) =>
       refreshGroupAgents(jid).map((a) => ({
@@ -2032,6 +2033,7 @@ async function main(): Promise<void> {
         name: a.name,
         displayName: a.displayName,
         trigger: a.trigger,
+        status: a.status,
       })),
     getStatus: () => ({
       containers: queue.getSnapshot(),
@@ -2414,6 +2416,62 @@ async function main(): Promise<void> {
         }
         logger.info({ jid, subtitle }, 'Group subtitle updated via MCP');
       }
+    },
+    onSetAgentStatus: (jid, agentName, status) => {
+      const group = registeredGroups[jid];
+      if (!group) return;
+
+      const agent = (groupAgents[jid] || []).find((a) => a.name === agentName);
+      if (!agent) {
+        logger.warn(
+          { jid, agentName },
+          'Agent status update for unknown agent',
+        );
+        return;
+      }
+
+      const agentDir = path.join(
+        resolveGroupFolderPath(group.folder),
+        'agents',
+        agentName,
+      );
+      if (!fs.existsSync(agentDir)) {
+        logger.warn(
+          { jid, agentName },
+          'Ignoring agent status update for non-explicit agent',
+        );
+        return;
+      }
+
+      const configPath = path.join(agentDir, 'agent.json');
+      let config: Record<string, unknown> = {};
+      if (fs.existsSync(configPath)) {
+        try {
+          config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        } catch (err) {
+          logger.warn(
+            { jid, agentName, err },
+            'Failed to parse agent.json while setting agent status',
+          );
+        }
+      }
+
+      const trimmed = status.trim();
+      if (trimmed) config.status = trimmed;
+      else delete config.status;
+
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+      refreshGroupAgents(jid);
+      for (const ch of channels) {
+        if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
+          (ch as any).broadcastGroupsChanged();
+          break;
+        }
+      }
+      logger.info(
+        { jid, agentName, status: trimmed },
+        'Agent status updated via MCP',
+      );
     },
   });
   queue.setProcessMessagesFn(processGroupMessages);

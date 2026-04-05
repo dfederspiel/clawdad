@@ -104,6 +104,7 @@ function loadAgentFromDir(
       const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
       if (config.displayName) agent.displayName = config.displayName;
       if (config.trigger) agent.trigger = config.trigger;
+      if (config.status) agent.status = String(config.status);
       if (config.containerConfig)
         agent.containerConfig = config.containerConfig as ContainerConfig;
     } catch (err) {

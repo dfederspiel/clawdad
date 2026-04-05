@@ -15,12 +15,14 @@ export interface ChannelOpts {
     name: string;
     displayName: string;
     trigger?: string;
+    status?: string;
   }>;
   refreshGroupAgents?: (jid: string) => Array<{
     id: string;
     name: string;
     displayName: string;
     trigger?: string;
+    status?: string;
   }>;
   onRegisterGroup?: (jid: string, group: RegisteredGroup) => void;
   onDeleteGroup?: (jid: string, group: RegisteredGroup) => void;

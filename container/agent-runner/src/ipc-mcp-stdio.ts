@@ -610,6 +610,44 @@ Set to empty string to clear.`,
   },
 );
 
+server.tool(
+  'set_agent_status',
+  `Set a status line for your own agent row in the expanded group sidebar. Use this for concise updates like:
+- "Reviewing flags"
+- "Waiting on build"
+- "Drafting summary"
+Set to empty string to clear.`,
+  {
+    status: z
+      .string()
+      .describe(
+        'Short status text to show under your agent name in the sidebar. Empty string clears it.',
+      ),
+  },
+  async (args) => {
+    writeIpcFile(TASKS_DIR, {
+      type: 'set_agent_status',
+      status: args.status,
+      chatJid,
+      groupFolder,
+      agentId: process.env.NANOCLAW_AGENT_ID || undefined,
+      agentName: process.env.NANOCLAW_AGENT_NAME || undefined,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: args.status
+            ? `Agent status set to: "${args.status}"`
+            : 'Agent status cleared.',
+        },
+      ],
+    };
+  },
+);
+
 // Only coordinators (agents without triggers) can delegate to other agents.
 // Specialists should hand back to the coordinator via their output text.
 if (process.env.NANOCLAW_CAN_DELEGATE === '1') {

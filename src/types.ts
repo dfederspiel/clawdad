@@ -75,6 +75,7 @@ export interface Agent {
   name: string;
   displayName: string;
   trigger?: string; // Agent-specific trigger pattern (overrides group trigger)
+  status?: string; // Agent-settable status line shown under the agent row
   containerConfig?: ContainerConfig; // Agent-specific overrides
 }
 
