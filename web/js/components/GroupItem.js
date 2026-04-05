@@ -16,6 +16,7 @@ function saveDrawerState(jid, open) {
 
 function AgentRow({ agent, jid }) {
   const isWorking = (activeAgents.value[jid] || []).includes(agent.displayName);
+  const isCoordinator = !agent.trigger;
   const triggerLabel = agent.trigger
     ? agent.trigger.replace(/[\\^$.*+?()[\]{}|]/g, '').trim()
     : null;
@@ -30,6 +31,9 @@ function AgentRow({ agent, jid }) {
       <div class="min-w-0 flex-1">
         <div class="flex items-start gap-2">
           <span class="truncate flex-1">${esc(agent.displayName)}</span>
+          ${isCoordinator && html`
+            <span class="text-[9px] leading-none px-1.5 py-1 rounded bg-accent-dim text-accent font-medium shrink-0 mt-0.5">coord</span>
+          `}
           ${triggerLabel && html`
             <span class="text-[9px] leading-none px-1.5 py-1 rounded bg-bg-3 text-txt-muted font-mono shrink-0 mt-0.5">${esc(triggerLabel)}</span>
           `}
@@ -44,9 +48,12 @@ function AgentRow({ agent, jid }) {
 
 export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
   const agents = group.agents || [];
-  // Specialists only — coordinator is the group itself, not a sub-agent
-  const specialists = agents.filter(a => a.trigger);
-  const isMultiAgent = specialists.length > 0;
+  const coordinator = agents.find((a) => !a.trigger);
+  const specialists = agents.filter((a) => a.trigger);
+  const visibleAgents = coordinator
+    ? [coordinator, ...specialists]
+    : specialists;
+  const isMultiAgent = visibleAgents.length > 1 || (visibleAgents.length === 1 && specialists.length > 0);
   const [expanded, setExpanded] = useState(() => isMultiAgent && loadDrawerState(group.jid));
 
   const count = unread.value[group.jid] || 0;
@@ -144,7 +151,7 @@ export function GroupItem({ group, isActive, onSelect, onDelete, onSettings }) {
       </div>
       ${isMultiAgent && expanded && html`
         <div class="pb-1">
-          ${specialists.map(a => html`<${AgentRow} key=${a.id} agent=${a} jid=${group.jid} />`)}
+          ${visibleAgents.map(a => html`<${AgentRow} key=${a.id} agent=${a} jid=${group.jid} />`)}
         </div>
       `}
     </div>
