@@ -108,7 +108,10 @@ import {
   loadPackAchievements,
   getAchievementsForContainer,
 } from './achievements.js';
-import { evaluateAutomationRules } from './automation-rules.js';
+import {
+  evaluateAutomationRules,
+  AutomationTraceEntry,
+} from './automation-rules.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -559,6 +562,250 @@ export function _setRegisteredGroups(
   registeredGroups = groups;
 }
 
+// ── Automation rule executor (Phase 2) ────────────────────────────
+// Takes evaluated traces and executes their actions using existing
+// delegation infrastructure. Returns true if any delegation was enqueued
+// (caller should short-circuit normal routing).
+
+async function executeAutomationActions(
+  traces: AutomationTraceEntry[],
+  chatJid: string,
+  group: RegisteredGroup,
+  agents: Agent[],
+  channel: Channel,
+  prompt: string,
+): Promise<boolean> {
+  let delegated = false;
+
+  for (const trace of traces) {
+    for (const action of trace.actions) {
+      switch (action.type) {
+        case 'delegate_to_agent': {
+          const agent = agents.find((a) => a.name === action.targetAgent);
+          if (!agent) {
+            logger.warn(
+              { ruleId: trace.ruleId, agent: action.targetAgent },
+              '[automation] target agent not found, skipping action',
+            );
+            break;
+          }
+
+          if (!action.silent) {
+            logger.info(
+              { ruleId: trace.ruleId, agent: agent.name },
+              `[automation] auto-routing to ${agent.displayName}`,
+            );
+          }
+
+          const savedConfig = group.containerConfig;
+          const AUTOMATION_TIMEOUT = 120_000;
+          const taskId = `automation-${agent.name}-${Date.now()}`;
+          queue.enqueueDelegation(
+            chatJid,
+            taskId,
+            async () => {
+              group.containerConfig = {
+                ...savedConfig,
+                timeout: Math.min(
+                  savedConfig?.timeout || Infinity,
+                  AUTOMATION_TIMEOUT,
+                ),
+              };
+              const multiAgentCtx = buildMultiAgentContext(agent, agents);
+              const recentMessages = getMessagesSince(
+                chatJid,
+                '',
+                ASSISTANT_NAME,
+                MAX_MESSAGES_PER_PROMPT,
+                true,
+              );
+              const conversationCtx = formatMessages(recentMessages, TIMEZONE);
+              const delegationPrompt =
+                multiAgentCtx +
+                conversationCtx +
+                `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n`;
+
+              setActiveAgentName(chatJid, agent.displayName);
+              await channel.setTyping?.(chatJid, true);
+
+              const status = await runAgent(
+                group,
+                delegationPrompt,
+                chatJid,
+                async (result) => {
+                  if (result.result) {
+                    if (
+                      result.textsAlreadyStreamed &&
+                      result.textsAlreadyStreamed > 0
+                    ) {
+                      // Text already delivered via onText → sendMessage
+                    } else {
+                      const raw =
+                        typeof result.result === 'string'
+                          ? result.result
+                          : JSON.stringify(result.result);
+                      const text = raw
+                        .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                        .trim();
+                      if (text) {
+                        setActiveAgentName(chatJid, agent.displayName);
+                        await channel.sendMessage(chatJid, text);
+                      }
+                    }
+                  }
+                  if (
+                    result.status === 'success' ||
+                    result.status === 'error'
+                  ) {
+                    await channel.setTyping?.(
+                      chatJid,
+                      false,
+                      undefined,
+                      agent.displayName,
+                    );
+                  }
+                },
+                (event) => broadcastProgress(chatJid, event),
+                async (rawText) => {
+                  // TEXT markers deliver the actual message content AND
+                  // broadcast a progress summary for the typing indicator.
+                  const text = rawText
+                    .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                    .trim();
+                  if (!text) return;
+                  setActiveAgentName(chatJid, agent.displayName);
+                  await channel.sendMessage(chatJid, text);
+                  const summary =
+                    text.length > 120 ? text.slice(0, 117) + '...' : text;
+                  broadcastProgress(chatJid, {
+                    tool: 'text',
+                    summary,
+                    timestamp: new Date().toISOString(),
+                  });
+                },
+                agent,
+                true, // isDelegation
+                async (text) => {
+                  setActiveAgentName(chatJid, agent.displayName);
+                  await channel.sendMessage(chatJid, text);
+                },
+              );
+
+              group.containerConfig = savedConfig;
+              clearActiveAgentName(chatJid);
+              await channel.setTyping?.(
+                chatJid,
+                false,
+                undefined,
+                agent.displayName,
+              );
+              if (persistExplicitAgentStatus(chatJid, agent.name, '')) {
+                logger.info(
+                  { jid: chatJid, agentName: agent.name },
+                  'Cleared agent status after automation delegation',
+                );
+              }
+
+              // Evaluate automation rules on result (enables chaining)
+              if (status === 'success') {
+                const chainTraces = evaluateAutomationRules(
+                  group.folder,
+                  {
+                    type: 'agent_result',
+                    groupJid: chatJid,
+                    groupFolder: group.folder,
+                    agentName: agent.name,
+                  },
+                  agents.map((a) => a.name),
+                );
+                if (chainTraces.length > 0) {
+                  await executeAutomationActions(
+                    chainTraces,
+                    chatJid,
+                    group,
+                    agents,
+                    channel,
+                    prompt,
+                  );
+                }
+              }
+
+              logger.info(
+                { ruleId: trace.ruleId, agent: agent.name, status },
+                '[automation] delegation complete',
+              );
+            },
+            agent.displayName,
+            true, // skipRetrigger — automation handles routing, coordinator not needed
+          );
+          delegated = true;
+          break;
+        }
+
+        case 'fan_out': {
+          const targetNames = action.targetAgent?.split(', ') || [];
+          for (const targetName of targetNames) {
+            const fanTrace: AutomationTraceEntry = {
+              ...trace,
+              actions: [
+                {
+                  type: 'delegate_to_agent',
+                  targetAgent: targetName,
+                  silent: action.silent,
+                },
+              ],
+            };
+            await executeAutomationActions(
+              [fanTrace],
+              chatJid,
+              group,
+              agents,
+              channel,
+              prompt,
+            );
+          }
+          delegated = true;
+          break;
+        }
+
+        case 'post_system_note': {
+          if (action.text) {
+            storeMessage({
+              id: `automation-note-${trace.ruleId}-${Date.now()}`,
+              chat_jid: chatJid,
+              sender: 'system',
+              sender_name: 'System',
+              content: action.text,
+              timestamp: new Date().toISOString(),
+              is_from_me: false,
+              is_bot_message: false,
+            });
+          }
+          break;
+        }
+
+        case 'set_subtitle': {
+          if (action.text) {
+            group.subtitle = action.text;
+            setGroupSubtitle(chatJid, action.text);
+            broadcastWebGroupsChanged();
+          }
+          break;
+        }
+      }
+    }
+
+    // Mark as fired
+    trace.outcome = 'fired';
+    logger.info(
+      { ruleId: trace.ruleId, groupFolder: trace.groupFolder },
+      '[automation] rule fired',
+    );
+  }
+
+  return delegated;
+}
+
 /**
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
@@ -667,15 +914,39 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       return true;
     }
   }
-  // Evaluate automation rules on inbound messages (Phase 1: logging only)
+  // Evaluate automation rules on inbound messages — Phase 2 executes matched actions
+  const agentsForAutomation = groupAgents[chatJid] || [];
+  const agentNamesForAutomation = agentsForAutomation.map((a) => a.name);
   for (const msg of missedMessages) {
-    evaluateAutomationRules(group.folder, {
-      type: 'message',
-      groupJid: chatJid,
-      groupFolder: group.folder,
-      messageContent: msg.content,
-      senderType: msg.is_bot_message ? 'assistant' : 'user',
-    });
+    const traces = evaluateAutomationRules(
+      group.folder,
+      {
+        type: 'message',
+        groupJid: chatJid,
+        groupFolder: group.folder,
+        messageContent: msg.content,
+        senderType: msg.is_bot_message ? 'assistant' : 'user',
+      },
+      agentNamesForAutomation,
+    );
+    if (traces.length > 0) {
+      const delegated = await executeAutomationActions(
+        traces,
+        chatJid,
+        group,
+        agentsForAutomation,
+        channel,
+        formatMessages(missedMessages, TIMEZONE),
+      );
+      if (delegated) {
+        // Automation handled routing — skip normal agent trigger path.
+        // Advance cursor so these messages aren't reprocessed.
+        lastAgentTimestamp[chatJid] =
+          missedMessages[missedMessages.length - 1].timestamp;
+        saveState();
+        return true;
+      }
+    }
   }
 
   const originJid = pendingOrigin?.originJid;
@@ -874,14 +1145,28 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
               agent.displayName,
             );
 
-            // Evaluate automation rules on agent result (Phase 1: logging only)
+            // Evaluate and execute automation rules on agent result
             if (status === 'success') {
-              evaluateAutomationRules(group.folder, {
-                type: 'agent_result',
-                groupJid: chatJid,
-                groupFolder: group.folder,
-                agentName: agent.name,
-              });
+              const resultTraces = evaluateAutomationRules(
+                group.folder,
+                {
+                  type: 'agent_result',
+                  groupJid: chatJid,
+                  groupFolder: group.folder,
+                  agentName: agent.name,
+                },
+                agents.map((a) => a.name),
+              );
+              if (resultTraces.length > 0) {
+                await executeAutomationActions(
+                  resultTraces,
+                  chatJid,
+                  group,
+                  agents,
+                  channel,
+                  prompt,
+                );
+              }
             }
 
             const resultNote =
@@ -1016,18 +1301,32 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         }
 
         if (result.status === 'success') {
-          // Evaluate automation rules on first success (Phase 1: logging only).
+          // Evaluate and execute automation rules on first success.
           // Must fire here (not after runAgent returns) because non-delegation
           // containers stay open in the piping loop — runAgent won't resolve
           // until the container eventually exits.
           if (!automationFiredForAgent) {
             automationFiredForAgent = true;
-            evaluateAutomationRules(group.folder, {
-              type: 'agent_result',
-              groupJid: chatJid,
-              groupFolder: group.folder,
-              agentName: agent.name,
-            });
+            const resultTraces = evaluateAutomationRules(
+              group.folder,
+              {
+                type: 'agent_result',
+                groupJid: chatJid,
+                groupFolder: group.folder,
+                agentName: agent.name,
+              },
+              agents.map((a) => a.name),
+            );
+            if (resultTraces.length > 0) {
+              await executeAutomationActions(
+                resultTraces,
+                chatJid,
+                group,
+                agents,
+                responseChannel,
+                prompt,
+              );
+            }
           }
 
           queue.notifyIdle(chatJid);
@@ -2432,14 +2731,28 @@ async function main(): Promise<void> {
             );
           }
 
-          // Evaluate automation rules on delegation result (Phase 1: logging only)
+          // Evaluate and execute automation rules on delegation result
           if (status === 'success') {
-            evaluateAutomationRules(group.folder, {
-              type: 'agent_result',
-              groupJid: chatJid,
-              groupFolder: group.folder,
-              agentName: agent.name,
-            });
+            const resultTraces = evaluateAutomationRules(
+              group.folder,
+              {
+                type: 'agent_result',
+                groupJid: chatJid,
+                groupFolder: group.folder,
+                agentName: agent.name,
+              },
+              agents.map((a) => a.name),
+            );
+            if (resultTraces.length > 0) {
+              await executeAutomationActions(
+                resultTraces,
+                chatJid,
+                group,
+                agents,
+                channel,
+                '',
+              );
+            }
           }
 
           // Store a system message so the coordinator sees the result attribution.

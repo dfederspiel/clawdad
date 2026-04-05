@@ -12,6 +12,7 @@ interface QueuedTask {
   groupJid: string;
   agentName?: string;
   fn: () => Promise<void>;
+  skipRetrigger?: boolean;
 }
 
 const MAX_RETRIES = 5;
@@ -35,6 +36,7 @@ interface GroupState {
   activeDelegations: number;
   activeDelegationAgents: string[];
   pendingDelegations: QueuedTask[];
+  completedDelegationRetriggers: boolean[]; // Per-delegation: true = needs retrigger, false = skip
 }
 
 export class GroupQueue {
@@ -67,6 +69,7 @@ export class GroupQueue {
         activeDelegations: 0,
         activeDelegationAgents: [],
         pendingDelegations: [],
+        completedDelegationRetriggers: [],
       };
       this.groups.set(groupJid, state);
     }
@@ -313,6 +316,7 @@ export class GroupQueue {
     taskId: string,
     fn: () => Promise<void>,
     agentName?: string,
+    skipRetrigger?: boolean,
   ): void {
     if (this.shuttingDown) return;
 
@@ -328,7 +332,13 @@ export class GroupQueue {
       this.activeWorkCount + this.idlePoolCount >=
       MAX_CONCURRENT_CONTAINERS
     ) {
-      state.pendingDelegations.push({ id: taskId, groupJid, agentName, fn });
+      state.pendingDelegations.push({
+        id: taskId,
+        groupJid,
+        agentName,
+        fn,
+        skipRetrigger,
+      });
       logger.debug(
         { groupJid, taskId, activeCount: this.activeWorkCount },
         'At concurrency limit, delegation queued',
@@ -341,6 +351,7 @@ export class GroupQueue {
       groupJid,
       agentName,
       fn,
+      skipRetrigger,
     }).catch((err) =>
       logger.error(
         { groupJid, taskId, err },
@@ -388,6 +399,10 @@ export class GroupQueue {
         if (idx !== -1) state.activeDelegationAgents.splice(idx, 1);
       }
       this.activeWorkCount--;
+
+      // Record whether this delegation needs coordinator re-trigger
+      state.completedDelegationRetriggers.push(!task.skipRetrigger);
+
       if (state.activeDelegations > 0) {
         this.emitWorkState(groupJid, 'delegating', {
           summary: `${state.activeDelegations} delegation(s) still active`,
@@ -398,12 +413,28 @@ export class GroupQueue {
         state.activeDelegations === 0 &&
         state.pendingDelegations.length === 0
       ) {
-        // All delegations complete — re-trigger coordinator
-        logger.info(
-          { groupJid },
-          'All delegations complete, re-triggering coordinator',
+        // All delegations complete — only re-trigger coordinator if at least
+        // one delegation needs it (i.e., was NOT automation-only)
+        const needsRetrigger = state.completedDelegationRetriggers.some(
+          (r) => r,
         );
-        this.enqueueMessageCheck(groupJid);
+        state.completedDelegationRetriggers = [];
+
+        if (needsRetrigger) {
+          logger.info(
+            { groupJid },
+            'All delegations complete, re-triggering coordinator',
+          );
+          this.enqueueMessageCheck(groupJid);
+        } else {
+          logger.info(
+            { groupJid },
+            'All delegations complete, skipping coordinator re-trigger (automation-only)',
+          );
+          this.emitWorkState(groupJid, 'completed', {
+            summary: 'Automation delegations complete',
+          });
+        }
       } else {
         // More delegations pending — drain them
         this.drainDelegations(groupJid);

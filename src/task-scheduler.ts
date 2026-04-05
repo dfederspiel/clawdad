@@ -233,7 +233,8 @@ async function runTask(
       'Task completed',
     );
 
-    // Evaluate automation rules on task completion (Phase 1: logging only)
+    // Evaluate automation rules on task completion (traces logged; execution
+    // of task_completed actions deferred to Phase 3 when scheduler has channel access)
     if (!error) {
       evaluateAutomationRules(task.group_folder, {
         type: 'task_completed',

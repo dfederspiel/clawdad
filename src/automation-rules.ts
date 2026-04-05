@@ -55,8 +55,9 @@ export interface AutomationTraceEntry {
     type: string;
     targetAgent?: string;
     silent: boolean;
+    text?: string;
   }>;
-  outcome: 'would_fire';
+  outcome: 'would_fire' | 'fired';
   eventSummary: string;
 }
 
@@ -65,7 +66,7 @@ export interface AutomationTraceEntry {
 const MAX_CHAIN_DEPTH = 3;
 const DEFAULT_COOLDOWN_MS = 5_000;
 
-// Track recent rule fires for cooldown: ruleId → last fire timestamp
+// Track recent rule fires for cooldown: "groupFolder:ruleId" → last fire timestamp
 const ruleCooldowns = new Map<string, number>();
 
 // Track chain depth per evaluation pass: groupFolder → depth
@@ -85,14 +86,22 @@ function incrementChainDepth(groupFolder: string): number {
   return depth;
 }
 
-function isOnCooldown(ruleId: string, cooldownMs?: number): boolean {
-  const last = ruleCooldowns.get(ruleId);
+function cooldownKey(groupFolder: string, ruleId: string): string {
+  return `${groupFolder}:${ruleId}`;
+}
+
+function isOnCooldown(
+  groupFolder: string,
+  ruleId: string,
+  cooldownMs?: number,
+): boolean {
+  const last = ruleCooldowns.get(cooldownKey(groupFolder, ruleId));
   if (!last) return false;
   return Date.now() - last < (cooldownMs ?? DEFAULT_COOLDOWN_MS);
 }
 
-function recordFire(ruleId: string): void {
-  ruleCooldowns.set(ruleId, Date.now());
+function recordFire(groupFolder: string, ruleId: string): void {
+  ruleCooldowns.set(cooldownKey(groupFolder, ruleId), Date.now());
 }
 
 // ── Rule loading ───────────────────────────────────────────────────
@@ -242,6 +251,7 @@ function mapActions(
     type: a.type,
     targetAgent: a.type === 'fan_out' ? a.agents?.join(', ') : a.agent,
     silent: a.silent ?? false,
+    text: a.text,
   }));
 }
 
@@ -261,8 +271,8 @@ export function evaluateRules(
 
   const traces: AutomationTraceEntry[] = [];
   for (const rule of rules) {
-    // Per-rule cooldown
-    if (isOnCooldown(rule.id)) {
+    // Per-rule cooldown (scoped per group to prevent cross-group interference)
+    if (isOnCooldown(event.groupFolder, rule.id)) {
       logger.debug(
         { ruleId: rule.id, groupFolder: event.groupFolder },
         '[automation] rule on cooldown, skipping',
@@ -271,7 +281,7 @@ export function evaluateRules(
     }
 
     if (matchesTrigger(rule.when, event)) {
-      recordFire(rule.id);
+      recordFire(event.groupFolder, rule.id);
       traces.push({
         timestamp: new Date().toISOString(),
         groupJid: event.groupJid,
@@ -311,16 +321,17 @@ export function evaluateAutomationRules(
   groupFolder: string,
   event: AutomationEvent,
   knownAgents?: string[],
-): void {
+): AutomationTraceEntry[] {
   // Reset chain depth on user-initiated events (messages start a new chain)
   if (event.type === 'message') {
     resetChainDepth(groupFolder);
   }
 
   const rules = loadGroupAutomationRules(groupFolder, knownAgents);
-  if (rules.length === 0) return;
+  if (rules.length === 0) return [];
   const traces = evaluateRules(rules, event);
   if (traces.length > 0) {
     emitTraces(traces);
   }
+  return traces;
 }

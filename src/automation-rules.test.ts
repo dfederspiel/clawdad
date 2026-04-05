@@ -7,6 +7,7 @@ import {
   AutomationEvent,
   AutomationRule,
   emitTraces,
+  evaluateAutomationRules,
   evaluateRules,
   loadGroupAutomationRules,
   resetChainDepth,
@@ -346,8 +347,13 @@ describe('trace structure', () => {
     expect(trace.outcome).toBe('would_fire');
     expect(trace.eventSummary).toBe('message from user');
     expect(trace.actions).toEqual([
-      { type: 'delegate_to_agent', targetAgent: 'reviewer', silent: true },
-      { type: 'fan_out', targetAgent: 'a, b', silent: false },
+      {
+        type: 'delegate_to_agent',
+        targetAgent: 'reviewer',
+        silent: true,
+        text: undefined,
+      },
+      { type: 'fan_out', targetAgent: 'a, b', silent: false, text: undefined },
     ]);
   });
 });
@@ -420,6 +426,26 @@ describe('safety controls', () => {
     resetChainDepth('web_test-team');
     // Second fire within cooldown should be skipped
     expect(evaluateRules([rule], event)).toHaveLength(0);
+  });
+
+  it('cooldown is scoped per group — same ruleId in different groups fire independently', () => {
+    const rule = makeRule({ id: 'shared-rule-id' });
+    const eventGroupA = makeEvent({ groupFolder: 'web_group-a' });
+    const eventGroupB = makeEvent({ groupFolder: 'web_group-b' });
+
+    resetChainDepth('web_group-a');
+    resetChainDepth('web_group-b');
+
+    // Fire in group A
+    expect(evaluateRules([rule], eventGroupA)).toHaveLength(1);
+
+    resetChainDepth('web_group-b');
+    // Same rule ID in group B should still fire (not on cooldown)
+    expect(evaluateRules([rule], eventGroupB)).toHaveLength(1);
+
+    resetChainDepth('web_group-a');
+    // Group A should still be on cooldown
+    expect(evaluateRules([rule], eventGroupA)).toHaveLength(0);
   });
 
   it('validates target agents at load time', () => {
@@ -498,5 +524,101 @@ describe('emitTraces', () => {
   it('does not throw with valid traces', () => {
     const [trace] = evaluateRules([makeRule()], makeEvent());
     expect(() => emitTraces([trace])).not.toThrow();
+  });
+});
+
+describe('Phase 2: evaluateAutomationRules returns traces', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('returns traces array instead of void', () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readFileSync.mockReturnValue(
+      JSON.stringify({
+        automation: [
+          {
+            id: 'r1',
+            enabled: true,
+            when: { event: 'message', pattern: '@review' },
+            then: [{ type: 'delegate_to_agent', agent: 'reviewer' }],
+          },
+        ],
+      }),
+    );
+    const traces = evaluateAutomationRules('web_test-team', {
+      type: 'message',
+      groupJid: 'web:test',
+      groupFolder: 'web_test-team',
+      messageContent: 'please @review this',
+      senderType: 'user',
+    });
+    expect(Array.isArray(traces)).toBe(true);
+    expect(traces).toHaveLength(1);
+    expect(traces[0].ruleId).toBe('r1');
+    expect(traces[0].outcome).toBe('would_fire');
+  });
+
+  it('returns empty array when no rules match', () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readFileSync.mockReturnValue(
+      JSON.stringify({
+        automation: [
+          {
+            id: 'r1',
+            enabled: true,
+            when: { event: 'message', pattern: '@deploy' },
+            then: [{ type: 'delegate_to_agent', agent: 'deployer' }],
+          },
+        ],
+      }),
+    );
+    const traces = evaluateAutomationRules('web_test-team', {
+      type: 'message',
+      groupJid: 'web:test',
+      groupFolder: 'web_test-team',
+      messageContent: 'just chatting',
+      senderType: 'user',
+    });
+    expect(traces).toEqual([]);
+  });
+
+  it('returns empty array when no rules exist', () => {
+    mockFs.existsSync.mockReturnValue(false);
+    const traces = evaluateAutomationRules('web_test-team', {
+      type: 'message',
+      groupJid: 'web:test',
+      groupFolder: 'web_test-team',
+      messageContent: 'hello',
+      senderType: 'user',
+    });
+    expect(traces).toEqual([]);
+  });
+
+  it('outcome can be mutated to fired after execution', () => {
+    const [trace] = evaluateRules([makeRule()], makeEvent());
+    expect(trace.outcome).toBe('would_fire');
+    trace.outcome = 'fired';
+    expect(trace.outcome).toBe('fired');
+  });
+});
+
+describe('Phase 2: trace action fields', () => {
+  it('carries text field from post_system_note action', () => {
+    const rule = makeRule({
+      then: [
+        { type: 'post_system_note', text: 'Routing started', silent: false },
+      ],
+    });
+    const [trace] = evaluateRules([rule], makeEvent());
+    expect(trace.actions[0].text).toBe('Routing started');
+  });
+
+  it('text is undefined when not provided', () => {
+    const rule = makeRule({
+      then: [{ type: 'delegate_to_agent', agent: 'reviewer', silent: true }],
+    });
+    const [trace] = evaluateRules([rule], makeEvent());
+    expect(trace.actions[0].text).toBeUndefined();
   });
 });

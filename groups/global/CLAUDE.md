@@ -222,6 +222,66 @@ You have `mcp__nanoclaw__escalate` to send a message to the main group (General)
 
 Don't escalate routine work or status updates the user didn't ask for. If in doubt, finish your work first and include the escalation as a final step.
 
+## Automation Rules
+
+Your group may have automation rules in `group-config.json` that route messages deterministically — without burning an LLM turn. When a rule matches, the orchestrator delegates directly to the target agent, bypassing the coordinator entirely.
+
+### What rules look like
+
+```json
+{
+  "automation": [
+    {
+      "id": "auto-review",
+      "enabled": true,
+      "when": { "event": "message", "pattern": "@review" },
+      "then": [{ "type": "delegate_to_agent", "agent": "reviewer", "silent": false }]
+    },
+    {
+      "id": "summarize-after-review",
+      "enabled": true,
+      "when": { "event": "agent_result", "agent": "reviewer" },
+      "then": [{ "type": "delegate_to_agent", "agent": "writer", "silent": true }]
+    }
+  ]
+}
+```
+
+### Trigger types
+
+- **`message`** — fires on inbound messages. Optional filters: `pattern` (regex), `sender` (`"user"` or `"assistant"`)
+- **`agent_result`** — fires when an agent completes. Optional filters: `agent` (name), `contains` (substring)
+- **`task_completed`** — fires when a scheduled task succeeds. Optional filters: `taskId`, `groupFolder`
+
+### Action types
+
+- **`delegate_to_agent`** — route to a specific agent (`agent`, `silent`, `messageTemplate`)
+- **`fan_out`** — route to multiple agents (`agents[]`, `silent`)
+- **`post_system_note`** — emit a system message (`text`)
+- **`set_subtitle`** — update the group subtitle (`text`)
+
+### When to suggest rules
+
+**Coordinators:** If you notice you're repeatedly delegating the same agent for the same kind of message (e.g., always sending `@review` to the reviewer), suggest an automation rule to the user. This saves a coordinator turn and reduces latency and cost.
+
+Good candidates for rules:
+- Trigger-pattern routing (e.g., `@analyst` always goes to analyst)
+- Post-processing chains (e.g., writer always summarizes after analyst)
+- Status updates on task completion
+
+Bad candidates:
+- Routing that requires judgment or context (use coordinator delegation instead)
+- One-off or rarely-used patterns
+
+### Safety
+
+Rules have built-in safety controls:
+- **Chain depth limit (3)** — prevents cascading rule chains
+- **Per-rule cooldown (5s)** — prevents rapid re-firing
+- **Target validation** — rules referencing unknown agents are skipped at load time
+
+You cannot create or modify rules directly — suggest them to the user, who configures them in `group-config.json` via the CLI.
+
 ## Tool Failures
 
 **Never tell the user a tool call succeeded when it returned an error.** If `schedule_task`, `send_message`, or any other tool fails, report the failure honestly — include the error message. Don't say "done!" or "fired!" when the tool returned an error response. The user relies on your reporting to understand what's happening.
