@@ -467,6 +467,58 @@ function refreshGroupAgents(jid: string): Agent[] {
   return groupAgents[jid];
 }
 
+function broadcastWebGroupsChanged(): void {
+  for (const ch of channels) {
+    if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
+      (ch as any).broadcastGroupsChanged();
+      break;
+    }
+  }
+}
+
+function persistExplicitAgentStatus(
+  jid: string,
+  agentName: string,
+  status: string,
+): boolean {
+  const group = registeredGroups[jid];
+  if (!group) return false;
+
+  const agent = (groupAgents[jid] || []).find((a) => a.name === agentName);
+  if (!agent) return false;
+
+  const agentDir = path.join(
+    resolveGroupFolderPath(group.folder),
+    'agents',
+    agentName,
+  );
+  if (!fs.existsSync(agentDir)) {
+    return false;
+  }
+
+  const configPath = path.join(agentDir, 'agent.json');
+  let config: Record<string, unknown> = {};
+  if (fs.existsSync(configPath)) {
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    } catch (err) {
+      logger.warn(
+        { jid, agentName, err },
+        'Failed to parse agent.json while updating agent status',
+      );
+    }
+  }
+
+  const trimmed = status.trim();
+  if (trimmed) config.status = trimmed;
+  else delete config.status;
+
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  refreshGroupAgents(jid);
+  broadcastWebGroupsChanged();
+  return true;
+}
+
 /**
  * Get available groups list for the agent.
  * Returns groups ordered by most recent activity.
@@ -1057,6 +1109,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       updated_at: new Date().toISOString(),
     });
     if (idleTimer) clearTimeout(idleTimer);
+    if (persistExplicitAgentStatus(chatJid, agent.name, '')) {
+      logger.info(
+        { jid: chatJid, agentName: agent.name },
+        'Cleared agent status after run completed',
+      );
+    }
     clearActiveAgentName(responseJid);
 
     if (outputSentToUser) anyOutputSent = true;
@@ -2367,6 +2425,12 @@ async function main(): Promise<void> {
             undefined,
             agent.displayName,
           );
+          if (persistExplicitAgentStatus(chatJid, agent.name, '')) {
+            logger.info(
+              { jid: chatJid, agentName: agent.name },
+              'Cleared agent status after delegation completed',
+            );
+          }
 
           // Evaluate automation rules on delegation result (Phase 1: logging only)
           if (status === 'success') {
@@ -2408,68 +2472,21 @@ async function main(): Promise<void> {
       if (group) {
         group.subtitle = subtitle || undefined;
         setGroupSubtitle(jid, subtitle);
-        for (const ch of channels) {
-          if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
-            (ch as any).broadcastGroupsChanged();
-            break;
-          }
-        }
+        broadcastWebGroupsChanged();
         logger.info({ jid, subtitle }, 'Group subtitle updated via MCP');
       }
     },
     onSetAgentStatus: (jid, agentName, status) => {
-      const group = registeredGroups[jid];
-      if (!group) return;
-
-      const agent = (groupAgents[jid] || []).find((a) => a.name === agentName);
-      if (!agent) {
+      const updated = persistExplicitAgentStatus(jid, agentName, status);
+      if (!updated) {
         logger.warn(
           { jid, agentName },
           'Agent status update for unknown agent',
         );
         return;
       }
-
-      const agentDir = path.join(
-        resolveGroupFolderPath(group.folder),
-        'agents',
-        agentName,
-      );
-      if (!fs.existsSync(agentDir)) {
-        logger.warn(
-          { jid, agentName },
-          'Ignoring agent status update for non-explicit agent',
-        );
-        return;
-      }
-
-      const configPath = path.join(agentDir, 'agent.json');
-      let config: Record<string, unknown> = {};
-      if (fs.existsSync(configPath)) {
-        try {
-          config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-        } catch (err) {
-          logger.warn(
-            { jid, agentName, err },
-            'Failed to parse agent.json while setting agent status',
-          );
-        }
-      }
-
-      const trimmed = status.trim();
-      if (trimmed) config.status = trimmed;
-      else delete config.status;
-
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
-      refreshGroupAgents(jid);
-      for (const ch of channels) {
-        if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
-          (ch as any).broadcastGroupsChanged();
-          break;
-        }
-      }
       logger.info(
-        { jid, agentName, status: trimmed },
+        { jid, agentName, status: status.trim() },
         'Agent status updated via MCP',
       );
     },

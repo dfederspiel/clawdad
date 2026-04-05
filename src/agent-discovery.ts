@@ -169,6 +169,8 @@ export function buildMultiAgentContext(
   if (isCoordinator) {
     lines.push(
       `You are the coordinator. You handle general questions directly and delegate specialist work.`,
+      `For meaningful ongoing work, keep sidebar presence current: use mcp__nanoclaw__set_subtitle for the team-level summary, and use mcp__nanoclaw__set_agent_status for your own row if you have one.`,
+      `Set concise, high-signal statuses when work starts ("Reviewing PRs", "Waiting on Scout") and clear them when the work is done.`,
       `To delegate, use the mcp__nanoclaw__delegate_to_agent tool:`,
       `  delegate_to_agent({ agent: "${others[0]?.name || 'agent'}", message: "Specific instructions..." })`,
       `The target agent runs after your turn and responds in the chat.`,
@@ -178,6 +180,7 @@ export function buildMultiAgentContext(
   } else {
     lines.push(
       `You are a specialist. Focus on your role and respond directly.`,
+      `For meaningful ongoing work, set your own sidebar status with mcp__nanoclaw__set_agent_status using a short phrase like "Reviewing flags" or "Drafting summary", then clear it when you are done.`,
       `If work falls outside your expertise, say so in your response — the coordinator will handle routing.`,
       `Do NOT try to act as other agents or delegate work yourself.`,
       `Write any artifacts to /workspace/group/ so other agents can access them.`,

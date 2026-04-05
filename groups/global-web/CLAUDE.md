@@ -12,6 +12,9 @@ You can play notification sounds and set your sidebar status using MCP tools:
 
 - `mcp__nanoclaw__play_sound` — play a named tone (e.g. `treasure`, `levelup`, `encounter`) or compose a custom sound
 - `mcp__nanoclaw__set_subtitle` — set a status line under your group name (e.g. "Monitoring 3 PRs")
+- `mcp__nanoclaw__set_agent_status` — set a short status line under your own agent row in the expanded sidebar (e.g. "Reviewing flags" or "Drafting summary")
+
+When you start meaningful ongoing work, prefer setting one of these statuses so the sidebar reflects what you're doing. Clear it with an empty string when the work is done.
 
 You can also embed sounds inline in your message output:
 ```
