@@ -78,6 +78,7 @@ export interface SchedulerDependencies {
   sendMessage: (jid: string, text: string) => Promise<void>;
   setTyping?: (jid: string, isTyping: boolean) => Promise<void>;
   onProgress?: (jid: string, event: ProgressEvent) => void;
+  getMainChatJid?: () => string | undefined;
 }
 
 async function runTask(
@@ -188,6 +189,7 @@ async function runTask(
         isMain,
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
+        mainChatJid: isMain ? undefined : deps.getMainChatJid?.(),
         script: task.script || undefined,
         achievements: getAchievementsForContainer(),
       },

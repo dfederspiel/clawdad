@@ -19,6 +19,7 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const mainJid = process.env.NANOCLAW_MAIN_JID || '';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -63,6 +64,34 @@ server.tool(
     return { content: [{ type: 'text' as const, text: 'Message sent.' }] };
   },
 );
+
+// escalate: non-main agents can send a message to the main/general group.
+// Main agents already have cross-group messaging via send_message.
+if (!isMain && mainJid) {
+  server.tool(
+    'escalate',
+    'Send a message to the main group (General). Use this to report findings, escalate issues, or deliver results from cross-group tasks. The message appears in the General chat.',
+    {
+      text: z.string().describe('The message to send to the main group'),
+    },
+    async (args) => {
+      const data: Record<string, string | undefined> = {
+        type: 'message',
+        chatJid: mainJid,
+        text: `[From ${groupFolder}] ${args.text}`,
+        sender: undefined,
+        groupFolder,
+        agentId: process.env.NANOCLAW_AGENT_ID || undefined,
+        sessionId: process.env.NANOCLAW_SESSION_ID || undefined,
+        timestamp: new Date().toISOString(),
+      };
+
+      writeIpcFile(MESSAGES_DIR, data);
+
+      return { content: [{ type: 'text' as const, text: 'Message sent to main group.' }] };
+    },
+  );
+}
 
 server.tool(
   'schedule_task',

@@ -107,11 +107,15 @@ export function startIpcWatcher(deps: IpcDeps): void {
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               if (data.type === 'message' && data.chatJid && data.text) {
-                // Authorization: verify this group can send to this chatJid
+                // Authorization: verify this group can send to this chatJid.
+                // Main can send anywhere. Others can send to themselves
+                // or escalate to the main group.
                 const targetGroup = registeredGroups[data.chatJid];
+                const targetIsMain = targetGroup?.isMain === true;
                 if (
                   isMain ||
-                  (targetGroup && targetGroup.folder === sourceGroup)
+                  (targetGroup && targetGroup.folder === sourceGroup) ||
+                  targetIsMain
                 ) {
                   await deps.sendMessage(data.chatJid, data.text);
                   logger.info(

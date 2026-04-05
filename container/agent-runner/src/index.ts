@@ -33,6 +33,7 @@ interface ContainerInput {
   canDelegate?: boolean;
   isDelegation?: boolean;
   poolManaged?: boolean;
+  mainChatJid?: string;
   script?: string;
   achievements?: { id: string; name: string; description: string }[];
 }
@@ -464,6 +465,7 @@ async function runQuery(
   let nullResultRetries = 0;
   const MAX_NULL_RESULT_RETRIES = 1;
   const assistantTexts: string[] = [];
+  let lastTurnHadTools = false;
 
   // Accumulate usage across all result messages in this query
   const accumulatedUsage: UsageData = {
@@ -539,6 +541,7 @@ async function runQuery(
             NANOCLAW_AGENT_ID: containerInput.agentId || '',
             NANOCLAW_SESSION_ID: sessionId || '',
             NANOCLAW_CAN_DELEGATE: containerInput.canDelegate ? '1' : '0',
+            NANOCLAW_MAIN_JID: containerInput.mainChatJid || '',
             NANOCLAW_ACHIEVEMENTS: JSON.stringify(containerInput.achievements || []),
           },
         },
@@ -558,6 +561,13 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+      // When we get a new assistant message after tool calls, the tools have
+      // finished executing and the model is thinking again — emit a progress
+      // event so the UI doesn't go silent during the gap.
+      if (lastTurnHadTools) {
+        writeProgress({ summary: 'Thinking\u2026', timestamp: new Date().toISOString() });
+      }
+      lastTurnHadTools = false;
       // Collect text and emit progress for tool_use blocks
       const assistantMsg = message as { message?: { content?: { type: string; text?: string; name?: string; input?: Record<string, unknown> }[] } };
       if (assistantMsg.message?.content) {
@@ -567,6 +577,7 @@ async function runQuery(
             writeText(block.text);
           }
           if (block.type === 'tool_use' && block.name) {
+            lastTurnHadTools = true;
             const summary = summarizeTool(block.name, block.input);
             writeProgress({ tool: block.name, summary, timestamp: new Date().toISOString() });
           }

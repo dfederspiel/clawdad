@@ -44,6 +44,28 @@ export const activeAgents = signal({}); // { [jid]: string[] } — agent names c
 export const workState = signal({}); // { [jid]: WorkStateEvent }
 export const currentWorkState = computed(() => workState.value[selectedJid.value] || null);
 
+function clearTypingStateForJid(jid) {
+  if (!jid) return;
+  const nextTyping = { ...typingGroups.value };
+  delete nextTyping[jid];
+  typingGroups.value = nextTyping;
+
+  const nextStartTimes = { ...typingStartTime.value };
+  delete nextStartTimes[jid];
+  typingStartTime.value = nextStartTimes;
+
+  const nextNames = { ...typingAgentName.value };
+  delete nextNames[jid];
+  typingAgentName.value = nextNames;
+}
+
+function clearAgentProgressForJid(jid) {
+  if (!jid) return;
+  const next = { ...agentProgress.value };
+  delete next[jid];
+  agentProgress.value = next;
+}
+
 // --- SSE ---
 
 const clientId = crypto.randomUUID();
@@ -73,8 +95,10 @@ api.onSSE('message', (data) => {
     return;
   }
 
-  // Clear typing for this group regardless of selection
-  typingGroups.value = { ...typingGroups.value, [data.jid]: false };
+  // A visible assistant message means the active "thinking" bubble should
+  // collapse, even if the warm container stays alive behind the scenes.
+  clearTypingStateForJid(data.jid);
+  clearAgentProgressForJid(data.jid);
 
   if (data.jid === selectedJid.value) {
     messages.value = [
@@ -131,13 +155,12 @@ api.onSSE('typing', (data) => {
     const next = { ...typingStartTime.value };
     delete next[data.jid];
     typingStartTime.value = next;
-    // Clear agent name and progress when agent stops typing
+    // Clear agent name when agent stops typing.
+    // Keep recent progress history so the UI can stay informative during
+    // work-state gaps between visible text turns.
     const names = { ...typingAgentName.value };
     delete names[data.jid];
     typingAgentName.value = names;
-    const prog = { ...agentProgress.value };
-    delete prog[data.jid];
-    agentProgress.value = prog;
     // Remove specific agent from active set, or clear all if no name
     if (data.agent_name) {
       const current = activeAgents.value[data.jid] || [];
@@ -193,6 +216,10 @@ api.onSSE('usage_update', (data) => {
 
 api.onSSE('work_state', (data) => {
   workState.value = { ...workState.value, [data.jid]: data };
+  if (['idle', 'completed', 'error'].includes(data.phase)) {
+    clearTypingStateForJid(data.jid);
+    clearAgentProgressForJid(data.jid);
+  }
 });
 
 api.onSSE('thread_created', async (data) => {
@@ -344,6 +371,8 @@ export async function selectGroup(jid) {
 export async function handleSend(content) {
   if (!content.trim() || !selectedJid.value) return;
 
+  clearAgentProgressForJid(selectedJid.value);
+
   // Optimistic update
   messages.value = [
     ...messages.value,
@@ -412,6 +441,8 @@ export async function toggleThread(threadId) {
 export async function handleThreadReply(threadId, content) {
   if (!content.trim() || !selectedJid.value) return;
 
+  clearAgentProgressForJid(selectedJid.value);
+
   // Optimistic update
   const threads = openThreads.value;
   if (threads[threadId]) {
@@ -469,28 +500,12 @@ async function pollStatus() {
     status.value = data;
 
     if (data?.containers?.groups) {
-      const newTyping = { ...typingGroups.value };
-      const newAgentNames = { ...typingAgentName.value };
-      const newStartTimes = { ...typingStartTime.value };
-      const newActiveAgentMap = { ...activeAgents.value };
-
-      const activeJids = new Set();
+      const newActiveAgentMap = {};
 
       for (const g of data.containers.groups) {
         if (g.isTask) continue;
         const hasWork = g.active || g.activeDelegations > 0;
         if (!hasWork) continue;
-        activeJids.add(g.jid);
-
-        // Hydrate typing state for active containers — covers
-        // page refresh while agents are working (bug-telemetry-gaps P1)
-        if (!newTyping[g.jid]) {
-          newTyping[g.jid] = true;
-          newStartTimes[g.jid] = Date.now();
-        }
-        if (g.agentName && !newAgentNames[g.jid]) {
-          newAgentNames[g.jid] = g.agentName;
-        }
         // Track active agents for per-agent activity dots in sidebar.
         // activeDelegationAgents carries displayNames (matches AgentRow).
         // agentName is the raw name — resolve to displayName via groups list.
@@ -509,20 +524,6 @@ async function pollStatus() {
           newActiveAgentMap[g.jid] = merged;
         }
       }
-
-      // Clear stale typing for containers that have stopped
-      for (const [jid, val] of Object.entries(newTyping)) {
-        if (val && !activeJids.has(jid)) {
-          delete newTyping[jid];
-          delete newAgentNames[jid];
-          delete newStartTimes[jid];
-          delete newActiveAgentMap[jid];
-        }
-      }
-
-      typingGroups.value = newTyping;
-      typingAgentName.value = newAgentNames;
-      typingStartTime.value = newStartTimes;
       activeAgents.value = newActiveAgentMap;
     }
   } catch { /* ignore */ }

@@ -1,13 +1,33 @@
 import { html } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
-import { selectedJid, typingStartTime, typingAgentName, agentProgress } from '../app.js';
+import {
+  selectedJid,
+  typing,
+  typingStartTime,
+  typingAgentName,
+  agentProgress,
+  currentWorkState,
+} from '../app.js';
+
+const PHASE_LABELS = {
+  queued: 'queued',
+  thinking: 'thinking',
+  working: 'working',
+  waiting: 'waiting',
+  delegating: 'coordinating',
+  task_running: 'running a task',
+  error: 'errored',
+};
 
 export function TypingIndicator() {
   const [elapsed, setElapsed] = useState(0);
   const jid = selectedJid.value;
+  const isTyping = typing.value;
   const startTime = typingStartTime.value[jid];
   const progress = agentProgress.value[jid];
   const agentName = typingAgentName.value[jid];
+  const work = currentWorkState.value;
+  const phase = isTyping ? 'thinking' : work?.phase;
 
   useEffect(() => {
     if (!startTime) { setElapsed(0); return; }
@@ -26,14 +46,21 @@ export function TypingIndicator() {
   // Show recent tool activity
   const history = progress?.history || [];
   const recentTools = history.slice(-3);
+  const label = phase ? (PHASE_LABELS[phase] || phase) : 'thinking';
+  const showDots = isTyping || ['working', 'delegating', 'task_running'].includes(phase || '');
+  const headline = agentName
+    ? html`<span class="font-medium text-txt-2">${agentName}</span> is ${label}`
+    : label.charAt(0).toUpperCase() + label.slice(1);
 
   return html`
     <div class="self-start bg-asstbg border border-border rounded-2xl rounded-bl-sm px-4 py-3 max-w-[90%]">
       <div class="flex items-center gap-2">
-        <span class="text-xs text-txt-muted mr-1">${agentName ? html`<span class="font-medium text-txt-2">${agentName}</span> is thinking` : 'Thinking'}${timeStr ? html`<span class="font-mono ml-1.5 text-txt-2">${timeStr}</span>` : ''}</span>
-        <span class="typing-dot" />
-        <span class="typing-dot" />
-        <span class="typing-dot" />
+        <span class="text-xs text-txt-muted mr-1">${headline}${timeStr ? html`<span class="font-mono ml-1.5 text-txt-2">${timeStr}</span>` : ''}</span>
+        ${showDots && html`
+          <span class="typing-dot" />
+          <span class="typing-dot" />
+          <span class="typing-dot" />
+        `}
       </div>
       ${progress && html`
         <div class="mt-2 flex flex-col gap-1">
@@ -44,7 +71,9 @@ export function TypingIndicator() {
               <div class="flex items-start gap-1.5 text-[11px] ${isLatest ? 'text-txt-2' : 'text-txt-muted opacity-50'}">
                 ${isText
                   ? html`<span class="text-[10px] mt-px shrink-0">\u25B8</span>`
-                  : html`<span class="font-mono text-[10px] ${isLatest ? 'text-accent' : ''} shrink-0">${t.tool || '>'}</span>`
+                  : !t.tool
+                    ? html`<span class="text-[10px] mt-px shrink-0">\u25CB</span>`
+                    : html`<span class="font-mono text-[10px] ${isLatest ? 'text-accent' : ''} shrink-0">${t.tool}</span>`
                 }
                 <span class="${isText ? '' : 'truncate'}">${t.summary}</span>
               </div>

@@ -124,6 +124,13 @@ let groupAgents: Record<string, Agent[]> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
+/** Find the main group's JID for escalation messaging. */
+function getMainChatJid(): string | undefined {
+  return Object.keys(registeredGroups).find(
+    (jid) => registeredGroups[jid].isMain,
+  );
+}
+
 // Maps triggered agent JID → origin info for cross-chat response routing
 const pendingOrigins: Record<string, { originJid: string; threadId?: string }> =
   {};
@@ -800,6 +807,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
               },
               agent,
               true, // isDelegation
+              async (text) => {
+                setActiveAgentName(responseJid, agent.displayName);
+                await responseChannel.sendMessage(responseJid, text, threadId);
+              },
             );
 
             group.containerConfig = savedConfig;
@@ -867,8 +878,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     const multiAgentCtx = buildMultiAgentContext(agent, agents);
     const agentPrompt = multiAgentCtx ? multiAgentCtx + prompt : prompt;
 
-    // Set active agent name so the channel uses it as sender_name on bot messages
-    setActiveAgentName(responseJid, agent.displayName);
+    // Set active agent name so the channel uses it as sender_name on bot messages.
+    // Only set for multi-agent groups — single-agent groups don't need "X is thinking".
+    if (isMultiAgent) {
+      setActiveAgentName(responseJid, agent.displayName);
+    }
 
     // Track idle timer for closing stdin when agent is idle
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -936,7 +950,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             );
           }
           if (text) {
-            setActiveAgentName(responseJid, agent.displayName);
+            if (isMultiAgent)
+              setActiveAgentName(responseJid, agent.displayName);
             await responseChannel.sendMessage(responseJid, text, threadId);
             outputSentToUser = true;
             outputSentForCurrentQuery = true;
@@ -1005,7 +1020,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           .replace(/<internal>[\s\S]*?<\/internal>/g, '')
           .trim();
         if (!text) return;
-        setActiveAgentName(responseJid, agent.displayName);
+        if (isMultiAgent) setActiveAgentName(responseJid, agent.displayName);
         // Truncate for status display — full content comes in the final result
         const summary = text.length > 120 ? text.slice(0, 117) + '...' : text;
         broadcastProgress(responseJid, {
@@ -1016,6 +1031,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         resetIdleTimer();
       },
       agent,
+      undefined, // isDelegation
+      async (text) => {
+        if (isMultiAgent) setActiveAgentName(responseJid, agent.displayName);
+        await responseChannel.sendMessage(responseJid, text, threadId);
+        outputSentToUser = true;
+        outputSentForCurrentQuery = true;
+      },
     );
 
     await responseChannel.setTyping?.(
@@ -1075,6 +1097,7 @@ async function runAgent(
   onText?: (text: string) => Promise<void>,
   agent?: Agent,
   isDelegation?: boolean,
+  sendMessage?: (text: string) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
@@ -1235,22 +1258,25 @@ async function runAgent(
       setSession(agentId, output.newSessionId);
     }
 
-    // Deliver text to user via onText — bypasses the caller's onOutput
-    // which bundles piping-loop lifecycle signals (notifyIdle, idle timer).
-    // Always deliver the final result — TEXT markers route to the typing
-    // indicator as ephemeral progress, not to chat as messages.
+    // Deliver final result as a chat message via sendMessage callback.
+    // onText is for intermediate TEXT markers (ephemeral typing indicator).
     if (output.result) {
       const raw =
         typeof output.result === 'string'
           ? output.result
           : JSON.stringify(output.result);
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      if (text && onText) {
+      if (text) {
         logger.info(
           { agent: agentId, chatJid },
           `Agent output: ${raw.length} chars (pool path)`,
         );
-        await onText(text);
+        if (sendMessage) {
+          await sendMessage(text);
+        } else if (onText) {
+          // Fallback for callers that don't provide sendMessage
+          await onText(text);
+        }
       }
     }
 
@@ -1414,6 +1440,7 @@ async function runAgent(
         canDelegate: agent ? !agent.trigger : false,
         isDelegation: isDelegation || false,
         poolManaged: true,
+        mainChatJid: isMain ? undefined : getMainChatJid(),
         achievements: getAchievementsForContainer(),
       };
 
@@ -1485,6 +1512,7 @@ async function runAgent(
       canDelegate: agent ? !agent.trigger : false,
       isDelegation: isDelegation || false,
       poolManaged: false,
+      mainChatJid: isMain ? undefined : getMainChatJid(),
       achievements: getAchievementsForContainer(),
     };
 
@@ -2083,6 +2111,7 @@ async function main(): Promise<void> {
       await channel?.setTyping?.(jid, isTyping);
     },
     onProgress: (jid, event) => broadcastProgress(jid, event),
+    getMainChatJid,
   });
   startIpcWatcher({
     sendMessage: (jid, rawText) => {
@@ -2322,6 +2351,10 @@ async function main(): Promise<void> {
             },
             agent,
             true, // isDelegation — use shorter timeout
+            async (text) => {
+              setActiveAgentName(chatJid, agent.displayName);
+              await channel.sendMessage(chatJid, text);
+            },
           );
 
           group.containerConfig = savedConfig; // restore original config

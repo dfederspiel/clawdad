@@ -63,6 +63,7 @@ export interface ContainerInput {
   canDelegate?: boolean; // true for coordinator agents (no trigger)
   isDelegation?: boolean; // delegation semantics (output routing, completion signaling)
   poolManaged?: boolean; // true = stay alive for follow-up queries (warm pool)
+  mainChatJid?: string; // JID of the main group (for escalation messaging)
   script?: string;
   achievements?: { id: string; name: string; description: string }[];
 }

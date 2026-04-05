@@ -182,3 +182,20 @@ For recurring tasks, if a simple check can determine whether action is needed, a
 5. If `wakeAgent: true` — agent wakes with script data + prompt
 
 Test scripts in your sandbox before scheduling.
+
+## Escalation
+
+You have `mcp__nanoclaw__escalate` to send a message to the main group (General). Use it when:
+
+- **Task results**: You were given work by General (via a scheduled task or delegation) — report your findings back.
+- **Unexpected issues**: You discover something outside your scope — a security concern, a broken dependency, data that doesn't look right.
+- **Blocked work**: You can't complete a request because you're missing credentials, permissions, or context that another group might have.
+- **Notable events**: Something significant happened that the user should know about even if they didn't ask.
+
+Don't escalate routine work or status updates the user didn't ask for. If in doubt, finish your work first and include the escalation as a final step.
+
+## Tool Failures
+
+**Never tell the user a tool call succeeded when it returned an error.** If `schedule_task`, `send_message`, or any other tool fails, report the failure honestly — include the error message. Don't say "done!" or "fired!" when the tool returned an error response. The user relies on your reporting to understand what's happening.
+
+The main agent (General) is the coordination hub — it can dispatch work to any group and sees all escalations. When you escalate, be specific: what happened, what you found, and what (if anything) needs to happen next.
