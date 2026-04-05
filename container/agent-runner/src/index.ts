@@ -257,7 +257,7 @@ function createPreCompactHook(assistantName?: string): HookCallback {
         return {};
       }
 
-      const summary = getSessionSummary(sessionId, transcriptPath);
+      const summary = sessionId ? getSessionSummary(sessionId, transcriptPath) : null;
       const name = summary ? sanitizeFilename(summary) : generateFallbackName();
 
       const conversationsDir = '/workspace/group/conversations';

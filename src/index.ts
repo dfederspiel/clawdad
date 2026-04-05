@@ -620,10 +620,11 @@ async function executeAutomationActions(
                 true,
               );
               const conversationCtx = formatMessages(recentMessages, TIMEZONE);
+              const routingNote = action.messageTemplate
+                ? `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n${action.messageTemplate}\n`
+                : `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n`;
               const delegationPrompt =
-                multiAgentCtx +
-                conversationCtx +
-                `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n`;
+                multiAgentCtx + conversationCtx + routingNote;
 
               setActiveAgentName(chatJid, agent.displayName);
               await channel.setTyping?.(chatJid, true);
@@ -1594,7 +1595,7 @@ async function runAgent(
   // Coordinators always pool when enabled. Specialists pool when both
   // WARM_POOL_ENABLED and WARM_SPECIALISTS_ENABLED are set.
   const shouldPool =
-    WARM_POOL_ENABLED && (isCoordinator || WARM_SPECIALISTS_ENABLED) && !isMain;
+    WARM_POOL_ENABLED && (isCoordinator || WARM_SPECIALISTS_ENABLED);
 
   // ── Pool output handler ─────────────────────────────────────────
   // Pool-managed containers use a dedicated output handler that does
@@ -2568,6 +2569,7 @@ async function main(): Promise<void> {
         targetAgent,
         message,
         sourceAgent,
+        completionPolicy,
       } = request;
 
       // Find the group JID from the source folder
@@ -2700,6 +2702,7 @@ async function main(): Promise<void> {
                 .trim();
               if (!text) return;
               setActiveAgentName(chatJid, agent.displayName);
+              await channel.sendMessage(chatJid, text);
               const summary =
                 text.length > 120 ? text.slice(0, 117) + '...' : text;
               broadcastProgress(chatJid, {
@@ -2777,6 +2780,7 @@ async function main(): Promise<void> {
           );
         },
         agent.displayName,
+        completionPolicy !== 'retrigger_coordinator',
       );
     },
     onSetSubtitle: (jid, subtitle) => {

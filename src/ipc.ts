@@ -55,6 +55,7 @@ export interface IpcDeps {
     targetAgent: string;
     message: string;
     sourceAgent: string;
+    completionPolicy?: 'final_response' | 'retrigger_coordinator';
   }) => void;
 }
 
@@ -207,6 +208,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     targetAgent: data.targetAgent,
                     message: data.message,
                     sourceAgent: data.sourceAgent || 'unknown',
+                    completionPolicy: data.completionPolicy || 'final_response',
                   });
                   logger.info(
                     {

@@ -426,7 +426,7 @@ Example:
 
     writeIpcFile(TASKS_DIR, data);
 
-    const specNames = args.specialists.map((s) => s.displayName || s.name).join(', ');
+    const specNames = args.specialists.map((s: any) => s.displayName || s.name).join(', ');
     return {
       content: [{ type: 'text' as const, text: `Team "${args.name}" created with coordinator + specialists: ${specNames}. It will appear in the sidebar immediately.` }],
     };
@@ -661,6 +661,7 @@ Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the thre
     {
       agent: z.string().describe('Name of the target agent (e.g. "analyst", "greeter"). Must be an agent in this group.'),
       message: z.string().describe('Instructions or context for the target agent. Be specific about what you want them to do.'),
+      completion_policy: z.enum(['final_response', 'retrigger_coordinator']).default('final_response').describe('What happens after the specialist responds. "final_response" (default): the specialist\'s output is the final answer, you do NOT get a follow-up turn. "retrigger_coordinator": you get a follow-up turn to review and synthesize. Use retrigger_coordinator only when delegating to multiple agents and you need to combine their outputs.'),
     },
     async (args) => {
       const DELEGATIONS_DIR = path.join(IPC_DIR, 'delegations');
@@ -668,6 +669,7 @@ Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the thre
         type: 'delegate',
         targetAgent: args.agent,
         message: args.message,
+        completionPolicy: args.completion_policy || 'final_response',
         sourceAgent: process.env.NANOCLAW_AGENT_NAME || 'default',
         sourceAgentId: process.env.NANOCLAW_AGENT_ID || '',
         sourceSessionId: process.env.NANOCLAW_SESSION_ID || '',

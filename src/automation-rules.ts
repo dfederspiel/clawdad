@@ -56,6 +56,7 @@ export interface AutomationTraceEntry {
     targetAgent?: string;
     silent: boolean;
     text?: string;
+    messageTemplate?: string;
   }>;
   outcome: 'would_fire' | 'fired';
   eventSummary: string;
@@ -252,6 +253,7 @@ function mapActions(
     targetAgent: a.type === 'fan_out' ? a.agents?.join(', ') : a.agent,
     silent: a.silent ?? false,
     text: a.text,
+    messageTemplate: a.messageTemplate,
   }));
 }
 
