@@ -43,6 +43,9 @@ export const agentProgress = signal({}); // { [jid]: { tool, summary, history[] 
 export const activeAgents = signal({}); // { [jid]: string[] } — agent names currently working
 export const workState = signal({}); // { [jid]: WorkStateEvent }
 export const currentWorkState = computed(() => workState.value[selectedJid.value] || null);
+export const contextPressure = signal({}); // { [jid]: PressureEvent }
+export const currentContextPressure = computed(() => contextPressure.value[selectedJid.value] || null);
+export const dismissedPressure = signal({}); // { [jid]: true } — user dismissed the banner
 
 function clearTypingStateForJid(jid) {
   if (!jid) return;
@@ -220,6 +223,20 @@ api.onSSE('work_state', (data) => {
     clearTypingStateForJid(data.jid);
     clearAgentProgressForJid(data.jid);
   }
+});
+
+api.onSSE('context_pressure', (data) => {
+  contextPressure.value = { ...contextPressure.value, [data.jid]: data };
+});
+
+api.onSSE('context_pressure_cleared', (data) => {
+  const next = { ...contextPressure.value };
+  delete next[data.jid];
+  contextPressure.value = next;
+  // Also clear dismissed state so the banner can re-appear if pressure builds again
+  const nextDismissed = { ...dismissedPressure.value };
+  delete nextDismissed[data.jid];
+  dismissedPressure.value = nextDismissed;
 });
 
 api.onSSE('thread_created', async (data) => {

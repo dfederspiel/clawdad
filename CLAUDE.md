@@ -226,6 +226,20 @@ Four types of skills exist in ClawDad. See [CONTRIBUTING.md](CONTRIBUTING.md) fo
 
 Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, SKILL.md format rules, PR requirements, and the pre-submission checklist (searching for existing PRs/issues, testing, description format).
 
+## Validating Changes
+
+After modifying delegation logic, automation rules, or agent behavior, validate with the send → poll → verify cycle:
+
+1. **Capture timestamp** before sending: `SINCE=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)`
+2. **Send** a test message via the API: `curl -sf -X POST http://localhost:3456/api/send -H 'Content-Type: application/json' -d '{"jid":"web:test-team","content":"...","sender":"David"}'`
+3. **Poll** for responses using the `since` param (avoids the 100-message default cap): `curl -sf "http://localhost:3456/api/messages/web:test-team?since=${SINCE}"`
+4. **Check logs** for delegation routing, retrigger decisions, and cost: `tail -50 logs/nanoclaw.log | grep -iE "delegation|retrigger|automation|usage stored"`
+5. **Verify cost** per agent run in the log lines tagged `Agent run usage stored` (fields: `agent`, `cost`, `turns`, `containerReuse`)
+
+When changing a group's CLAUDE.md, the warm pool container still has the old instructions. Kill it to force a cold start: `docker ps --format '{{.Names}}' | grep <agent> | xargs -r docker stop`
+
+Use `/test-agent` for the full automated cycle, or run the steps manually when you need finer control.
+
 ## Development
 
 Run commands directly—don't tell the user to run them.

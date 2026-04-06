@@ -5,6 +5,7 @@ import { MessageList } from './MessageList.js';
 import { ChatInput } from './ChatInput.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 import { WorkStatusBanner } from './WorkStatusBanner.js';
+import { ContextPressureBanner } from './ContextPressureBanner.js';
 
 export function ChatView({ onOpenSidebar }) {
   const group = selectedGroup.value;
@@ -39,6 +40,7 @@ export function ChatView({ onOpenSidebar }) {
         `}
       </div>
       <${WorkStatusBanner} />
+      <${ContextPressureBanner} />
       <${MessageList} />
       <${ChatInput} />
     </div>

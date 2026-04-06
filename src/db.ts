@@ -1319,6 +1319,91 @@ export function getUsageStats(periodHours: number = 24): {
   };
 }
 
+export interface SessionPressure {
+  groupFolder: string;
+  sessionId: string | null;
+  turnCount: number;
+  cumulativeCost: number;
+  avgCostPerTurn: number;
+  avgCacheWriteTokens: number;
+  lastRunAt: string | null;
+}
+
+/**
+ * Get session pressure metrics for a group's current session.
+ * Aggregates cost and token data from the most recent session_id for the group.
+ */
+export function getSessionPressure(groupFolder: string): SessionPressure {
+  const stats = db
+    .prepare(
+      `SELECT
+        session_id,
+        COUNT(*) as turn_count,
+        COALESCE(SUM(cost_usd), 0) as cumulative_cost,
+        COALESCE(AVG(cost_usd), 0) as avg_cost,
+        COALESCE(AVG(cache_write_tokens), 0) as avg_cache_writes,
+        MAX(timestamp) as last_run_at
+       FROM agent_runs
+       WHERE group_folder = ?
+         AND session_id = (
+           SELECT session_id FROM agent_runs
+           WHERE group_folder = ? AND session_id IS NOT NULL
+           ORDER BY timestamp DESC LIMIT 1
+         )`,
+    )
+    .get(groupFolder, groupFolder) as
+    | {
+        session_id: string | null;
+        turn_count: number;
+        cumulative_cost: number;
+        avg_cost: number;
+        avg_cache_writes: number;
+        last_run_at: string | null;
+      }
+    | undefined;
+
+  if (!stats || stats.turn_count === 0) {
+    return {
+      groupFolder,
+      sessionId: null,
+      turnCount: 0,
+      cumulativeCost: 0,
+      avgCostPerTurn: 0,
+      avgCacheWriteTokens: 0,
+      lastRunAt: null,
+    };
+  }
+
+  return {
+    groupFolder,
+    sessionId: stats.session_id,
+    turnCount: stats.turn_count,
+    cumulativeCost: stats.cumulative_cost,
+    avgCostPerTurn: stats.avg_cost,
+    avgCacheWriteTokens: stats.avg_cache_writes,
+    lastRunAt: stats.last_run_at,
+  };
+}
+
+/**
+ * Get session pressure for all groups with runs in the last N hours.
+ */
+export function getAllSessionPressure(
+  periodHours: number = 24,
+): SessionPressure[] {
+  const since = new Date(
+    Date.now() - periodHours * 60 * 60 * 1000,
+  ).toISOString();
+
+  const groups = db
+    .prepare(`SELECT DISTINCT group_folder FROM agent_runs WHERE timestamp > ?`)
+    .all(since) as Array<{ group_folder: string }>;
+
+  return groups
+    .map((g) => getSessionPressure(g.group_folder))
+    .filter((p) => p.turnCount > 0);
+}
+
 export function getLatestRunForChat(chatJid: string): AgentRunRecord | null {
   const row = db
     .prepare(

@@ -23,6 +23,7 @@ import {
   MAX_MESSAGES_PER_PROMPT,
   POLL_INTERVAL,
   TIMEZONE,
+  CONTEXT_PRESSURE_THRESHOLD,
   WARM_POOL_ENABLED,
   WARM_SPECIALISTS_ENABLED,
 } from './config.js';
@@ -72,6 +73,7 @@ import {
   storeChatMetadata,
   storeAgentRun,
   attachUsageToLastBotMessage,
+  getSessionPressure,
   setGroupSubtitle,
   storeMessage,
 } from './db.js';
@@ -154,6 +156,44 @@ function broadcastWorkState(event: import('./types.js').WorkStateEvent): void {
     if (ch.name === 'web' && 'broadcastWorkState' in ch) {
       (ch as any).broadcastWorkState(event);
       break;
+    }
+  }
+}
+
+/**
+ * Check session cost pressure after each agent run and broadcast if over threshold.
+ * Provider-agnostic: uses only cost/token data from agent_runs, not SDK internals.
+ */
+function checkContextPressure(groupFolder: string, chatJid: string): void {
+  if (CONTEXT_PRESSURE_THRESHOLD <= 0) return; // disabled
+
+  const pressure = getSessionPressure(groupFolder);
+  if (pressure.turnCount < 3) return; // not enough data
+
+  if (pressure.avgCostPerTurn >= CONTEXT_PRESSURE_THRESHOLD) {
+    logger.info(
+      {
+        groupFolder,
+        avgCostPerTurn: pressure.avgCostPerTurn.toFixed(4),
+        turnCount: pressure.turnCount,
+        cumulativeCost: pressure.cumulativeCost.toFixed(2),
+        threshold: CONTEXT_PRESSURE_THRESHOLD,
+      },
+      'Context pressure threshold exceeded',
+    );
+    for (const ch of channels) {
+      if (ch.name === 'web' && 'broadcast' in ch) {
+        (ch as any).broadcast('context_pressure', {
+          jid: chatJid,
+          groupFolder,
+          avgCostPerTurn: pressure.avgCostPerTurn,
+          turnCount: pressure.turnCount,
+          cumulativeCost: pressure.cumulativeCost,
+          avgCacheWriteTokens: pressure.avgCacheWriteTokens,
+          threshold: CONTEXT_PRESSURE_THRESHOLD,
+        });
+        break;
+      }
     }
   }
 }
@@ -1587,6 +1627,7 @@ async function runAgent(
             },
             'Agent run usage stored',
           );
+          checkContextPressure(group.folder, chatJid);
         }
       }
     : undefined;
@@ -1678,6 +1719,7 @@ async function runAgent(
         },
         'Agent run usage stored',
       );
+      checkContextPressure(group.folder, chatJid);
     }
   };
 
@@ -2340,6 +2382,35 @@ async function main(): Promise<void> {
     },
     onDeleteGroup: (jid: string, group: RegisteredGroup) => {
       unregisterGroup(jid, group);
+    },
+    onResetSession: async (groupFolder: string) => {
+      logger.info({ groupFolder }, 'Resetting session');
+
+      // 1. Evict warm pool containers for this group
+      const agentIds = Object.keys(sessions).filter((id) =>
+        id.startsWith(groupFolder + '/'),
+      );
+      for (const agentId of agentIds) {
+        await pool.reclaim(agentId);
+      }
+
+      // 2. Clear session IDs from memory and DB
+      for (const agentId of agentIds) {
+        delete sessions[agentId];
+      }
+      deleteSession(groupFolder);
+
+      // 3. Delete session files on disk
+      const sessionsDir = path.join(DATA_DIR, 'sessions', groupFolder);
+      if (fs.existsSync(sessionsDir)) {
+        fs.rmSync(sessionsDir, { recursive: true, force: true });
+        logger.info({ sessionsDir }, 'Deleted session files');
+      }
+
+      logger.info(
+        { groupFolder, evictedAgents: agentIds },
+        'Session reset complete',
+      );
     },
     onMessage: (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage

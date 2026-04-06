@@ -24,7 +24,7 @@ If not provided, ask using AskUserQuestion.
 curl -sf http://localhost:3456/api/groups | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-groups = [g for g in data if isinstance(g, dict)]
+groups = data.get('groups', data) if isinstance(data, dict) else data
 for g in groups:
     print(f\"{g.get('jid','?')}  {g.get('name','?')}  folder={g.get('folder','?')}\")
 "
@@ -32,19 +32,12 @@ for g in groups:
 
 Match the user's group name/folder to a JID. If ambiguous, ask.
 
-### 2. Capture pre-test message count
+### 2. Record the timestamp before sending
+
+Capture an ISO timestamp right before sending. This is used with the `since` query param to fetch only messages from the test run — avoids the default 100-message limit.
 
 ```bash
-curl -sf "http://localhost:3456/api/messages/${JID}" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-if isinstance(data, dict):
-    for v in data.values():
-        if isinstance(v, list):
-            data = v
-            break
-print(len(data))
-"
+SINCE=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 ```
 
 ### 3. Send the message
@@ -59,54 +52,61 @@ Verify `{"ok": true}` response.
 
 ### 4. Wait and poll for responses
 
-Poll every 5 seconds for up to 60 seconds. Check if new messages have appeared beyond the pre-test count. Stop polling once the message count stabilizes (same count for two consecutive checks) or timeout is reached.
+Poll every 5 seconds for up to 90 seconds. Fetch messages since the pre-test timestamp. Stop polling once the message count stabilizes (same count for two consecutive checks and at least 1 response exists) or timeout is reached.
 
 ```bash
-# Poll loop — check for new messages
-for i in $(seq 1 12); do
+PREV=0
+for i in $(seq 1 18); do
   sleep 5
-  NEW_COUNT=$(curl -sf "http://localhost:3456/api/messages/${JID}" | python3 -c "
+  COUNT=$(curl -sf "http://localhost:3456/api/messages/${JID}?since=${SINCE}" | python3 -c "
 import sys, json
-data = json.load(sys.stdin)
-if isinstance(data, dict):
-    for v in data.values():
-        if isinstance(v, list):
-            data = v
-            break
-print(len(data))
+msgs = json.load(sys.stdin).get('messages', [])
+print(len(msgs))
 ")
-  echo "Poll $i: $NEW_COUNT messages"
-  # Break if count stabilized
+  echo "Poll $i (${i}*5s): $COUNT msgs"
+  if [ "$COUNT" = "$PREV" ] && [ "$COUNT" -gt 1 ]; then
+    echo "Stabilized at $COUNT"
+    break
+  fi
+  PREV=$COUNT
 done
 ```
 
 ### 5. Report the message chain
 
-Fetch all messages since the test message and display them:
+Fetch all messages since the test timestamp and display with sender, content preview, and cost:
 
 ```bash
-curl -sf "http://localhost:3456/api/messages/${JID}" | python3 -c "
+curl -sf "http://localhost:3456/api/messages/${JID}?since=${SINCE}" | python3 -c "
 import sys, json
-data = json.load(sys.stdin)
-if isinstance(data, dict):
-    for v in data.values():
-        if isinstance(v, list):
-            data = v
-            break
-# Show only messages after pre-test count
-for m in data[${PRE_COUNT}:]:
-    if isinstance(m, dict):
-        s = m.get('sender_name') or m.get('sender', '?')
-        c = (m.get('content') or '')[:300]
-        print(f'[{s}] {c}')
-        print()
+msgs = json.load(sys.stdin).get('messages', [])
+total_cost = 0
+for m in msgs:
+    s = m.get('sender_name') or m.get('sender', '?')
+    c = (m.get('content') or '')[:300]
+    u = m.get('usage')
+    cost_str = ''
+    if u and isinstance(u, dict):
+        cost = u.get('costUsd', 0)
+        total_cost += cost
+        cost_str = f'  [\${cost:.4f} | {u.get(\"numTurns\", \"?\")} turns | {u.get(\"durationMs\", \"?\")}ms | {u.get(\"containerReuse\", \"?\")}]'
+    print(f'[{s}] {c}{cost_str}')
+    print()
+if total_cost > 0:
+    print(f'--- Total cost: \${total_cost:.4f} ---')
 "
 ```
 
-### 6. Check automation logs
+### 6. Check logs for delegation routing and cost
 
 ```bash
-tail -200 logs/nanoclaw.log | grep -iE "automation|rule fired|rule matched|delegation complete|retrigger|skip.*retrigger" | tail -20
+tail -200 logs/nanoclaw.log | grep -iE "automation|rule fired|rule matched|delegation complete|retrigger|skip.*retrigger|completion_policy|usage stored" | tail -20
+```
+
+Also check for per-agent cost breakdown:
+
+```bash
+tail -200 logs/nanoclaw.log | grep -A6 "usage stored" | grep -E "agent|cost|turns|containerReuse" | tail -20
 ```
 
 ### 7. Summarize
@@ -118,14 +118,15 @@ Test: "@analyst explain recursion" → web:test-team
 
 Message chain:
   1. [David] @analyst explain recursion in one sentence
-  2. [Analyst] Recursion is...
-  3. [Writer] In short...
+  2. [Analyst] Recursion is...  [$0.38 | 1 turn | cold_start]
+  3. [Writer] In short...  [$0.12 | 1 turn | cold_start]
 
 Automation:
   - route-analyst fired → delegated to Analyst
   - summarize-after-analyst chained → delegated to Writer
   - Coordinator re-trigger: skipped (automation-only)
 
+Cost: $0.50 total (2 agent runs)
 Timing: 18s total (Analyst 12s, Writer 6s)
 Status: ✓ Clean run — no errors, no duplicates
 ```
@@ -134,5 +135,7 @@ Flag any issues:
 - Duplicate messages
 - Missing agent responses
 - Coordinator running when it shouldn't (or not running when it should)
+- Unnecessary synthesis turns (coordinator re-triggered without adding value)
 - Error logs
 - Unexpectedly long response times (>30s per agent)
+- High cost per turn (>$0.50 for a simple delegation)

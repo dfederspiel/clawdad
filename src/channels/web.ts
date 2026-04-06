@@ -39,6 +39,8 @@ import {
   getUsageStats,
   getLatestRunForChat,
   getSession,
+  getSessionPressure,
+  getAllSessionPressure,
   setGroupSubtitle,
 } from '../db.js';
 import { logger } from '../logger.js';
@@ -1358,6 +1360,47 @@ export class WebChannel implements Channel {
       if (!jid) return this.json(res, 400, { error: 'jid required' });
       const run = getLatestRunForChat(jid);
       return this.json(res, 200, { run });
+    }
+
+    // POST /api/session/reset/:groupFolder — reset session for a group
+    const resetMatch = url.pathname.match(/^\/api\/session\/reset\/(.+)$/);
+    if (method === 'POST' && resetMatch) {
+      const groupFolder = decodeURIComponent(resetMatch[1]);
+      if (!this.opts.onResetSession) {
+        return this.json(res, 501, { error: 'Session reset not available' });
+      }
+      try {
+        await this.opts.onResetSession(groupFolder);
+        // Clear pressure signal for this group's JID
+        const jid = Object.entries(this.opts.registeredGroups()).find(
+          ([, g]) => g.folder === groupFolder,
+        )?.[0];
+        if (jid) {
+          this.broadcast('context_pressure_cleared', { jid, groupFolder });
+        }
+        return this.json(res, 200, { ok: true, groupFolder });
+      } catch (err) {
+        return this.json(res, 500, {
+          error: err instanceof Error ? err.message : 'Reset failed',
+        });
+      }
+    }
+
+    // GET /api/session/pressure — context pressure for all active groups
+    if (method === 'GET' && url.pathname === '/api/session/pressure') {
+      const hours = parseInt(url.searchParams.get('hours') || '24', 10);
+      const pressure = getAllSessionPressure(hours);
+      return this.json(res, 200, { sessions: pressure });
+    }
+
+    // GET /api/session/pressure/:groupFolder — context pressure for a specific group
+    const pressureMatch = url.pathname.match(
+      /^\/api\/session\/pressure\/(.+)$/,
+    );
+    if (method === 'GET' && pressureMatch) {
+      const groupFolder = decodeURIComponent(pressureMatch[1]);
+      const pressure = getSessionPressure(groupFolder);
+      return this.json(res, 200, pressure);
     }
 
     // GET /api/telemetry — aggregated metrics

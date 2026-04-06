@@ -40,6 +40,8 @@ export interface ChannelOpts {
     threadId: string,
     agentName: string,
   ) => void;
+  /** Reset session for a group (clears SDK session, evicts warm pool) */
+  onResetSession?: (groupFolder: string) => Promise<void>;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;
