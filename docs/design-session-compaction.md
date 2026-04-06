@@ -153,8 +153,49 @@ Before rotating the session, run a summarization pass with a cheap model to extr
 
 </details>
 
+## Phase 1.5: Session reset as a compaction opportunity (next)
+
+The "Reset Session" button shipped in Phase 1 is a hard purge — it clears everything. But a session reset is the natural moment to ask: *what should survive?*
+
+### Vision: Interactive session retrospective
+
+When the user clicks "Reset Session" (or the system suggests it via the pressure banner), instead of immediately clearing, present a **session retrospective flow**:
+
+1. **Session summary** — show what the agent did this session: turn count, cost, key topics, decisions made. This is an auto-generated overview (provider-agnostic — derived from stored messages and agent_runs, not SDK transcripts).
+
+2. **Capture to persistent memory** — surface things worth keeping permanently:
+   - User preferences the agent learned ("David prefers concise responses")
+   - Decisions made ("We chose Sonnet over Opus for cost reasons")
+   - Ongoing context ("Working on the multi-provider abstraction")
+   - The user picks what to promote to the group's CLAUDE.md or a persistent memory store
+
+3. **Choose reset mode:**
+   - **Hard reset** — clear everything, start fresh (current behavior)
+   - **Slim reset** — keep the last N minutes of conversation, drop the rest
+   - **Smart reset** — generate a summary preamble for the new session so the agent has context without the full transcript weight
+
+4. **Confirm** — execute the chosen mode, persist captured memories
+
+### Why this matters
+
+Session reset is currently a lossy operation — the agent forgets everything. That's fine for test groups but painful for production agents that have accumulated real context about user preferences, project state, and ongoing work.
+
+The retrospective flow turns a maintenance chore into a **calibration moment** — the user spends 30 seconds reviewing what the agent learned and decides what's worth keeping. This is directly analogous to the `/retrospect` pattern we use in Claude Code sessions: a small time investment that keeps important context bubbled to the top.
+
+### Implementation notes
+
+- The summary and capture steps are provider-agnostic — they work with messages and agent_runs data, not SDK internals
+- "Promote to CLAUDE.md" is a file write, not a session operation
+- "Smart reset" with a summary preamble DOES touch the session layer — this is where the provider abstraction boundary lives. Defer this mode until the `ContextLifecycle` interface exists.
+- "Hard reset" and "Slim reset" are implementable now with the existing session reset API
+
+### Relationship to full compaction (Phases 2-4)
+
+This is a stepping stone. The interactive retrospective flow establishes the UX pattern and the memory capture workflow without requiring the full provider-neutral compaction engine. When that engine arrives, the retrospective flow becomes the UI layer on top of it.
+
 ## Open questions
 
-- **Session reset as a stopgap**: Users can already get a "poor man's compaction" by deleting the session directory and restarting. Should the UI offer a "reset session" button as an interim measure before proper compaction exists?
-- **Memory classes**: The design mixes persistent context (CLAUDE.md), session context (SDK transcript), and archived context (conversations/). The ownership boundaries between these need definition as part of the provider abstraction work.
+- **Memory store**: Where do captured insights go? CLAUDE.md is the obvious place for agent-level context, but group-level decisions and user preferences may want a separate store that survives agent reconfigurations.
+- **Summary quality**: Auto-generated session summaries need experimentation. Too terse and users don't know what to keep. Too verbose and it defeats the purpose.
 - **Warm pool interaction**: Any future compaction needs to coordinate with the warm container pool — the pooled container has the old session cached in memory.
+- **Multi-agent compaction**: Should all agents in a group reset together, or independently? The coordinator's session is the most expensive, but specialists accumulate too. The retrospective flow should probably be per-agent within a group.

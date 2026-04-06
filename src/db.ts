@@ -1415,3 +1415,47 @@ export function getLatestRunForChat(chatJid: string): AgentRunRecord | null {
   if (!row) return null;
   return { ...row, is_error: row.is_error === 1 };
 }
+
+export interface SessionSummaryMessage {
+  sender_name: string;
+  content: string;
+  timestamp: string;
+  is_bot_message: boolean;
+}
+
+/**
+ * Get recent messages for a session retrospective summary.
+ * Returns a lightweight projection with truncated content.
+ */
+export function getSessionSummaryMessages(
+  chatJid: string,
+  limit: number = 20,
+): SessionSummaryMessage[] {
+  const rows = db
+    .prepare(
+      `SELECT sender_name, content, timestamp, is_bot_message
+       FROM (
+         SELECT sender_name, content, timestamp, is_bot_message
+         FROM messages
+         WHERE chat_jid = ?
+           AND content != '' AND content IS NOT NULL
+           AND thread_id IS NULL
+         ORDER BY timestamp DESC
+         LIMIT ?
+       ) ORDER BY timestamp`,
+    )
+    .all(chatJid, limit) as Array<{
+    sender_name: string | null;
+    content: string;
+    timestamp: string;
+    is_bot_message: number;
+  }>;
+
+  return rows.map((r) => ({
+    sender_name: r.sender_name || (r.is_bot_message ? 'Assistant' : 'User'),
+    content:
+      r.content.length > 200 ? r.content.slice(0, 200) + '...' : r.content,
+    timestamp: r.timestamp,
+    is_bot_message: r.is_bot_message === 1,
+  }));
+}

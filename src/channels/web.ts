@@ -42,6 +42,7 @@ import {
   getSessionPressure,
   getAllSessionPressure,
   setGroupSubtitle,
+  getSessionSummaryMessages,
 } from '../db.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -1362,6 +1363,57 @@ export class WebChannel implements Channel {
       return this.json(res, 200, { run });
     }
 
+    // GET /api/session/summary/:groupFolder — retrospective summary for reset dialog
+    const summaryMatch = url.pathname.match(/^\/api\/session\/summary\/(.+)$/);
+    if (method === 'GET' && summaryMatch) {
+      const groupFolder = decodeURIComponent(summaryMatch[1]);
+      const pressure = getSessionPressure(groupFolder);
+
+      // Find JID for this group to query messages
+      const entry = Object.entries(this.opts.registeredGroups()).find(
+        ([, g]) => g.folder === groupFolder,
+      );
+      const jid = entry?.[0];
+      const recentMessages = jid ? getSessionSummaryMessages(jid) : [];
+
+      // Read current CLAUDE.md so user can see what's already persisted
+      const group = entry?.[1];
+      let claudeMd = '';
+      if (group) {
+        const agents = discoverAgents(group);
+        const coordinator = agents.find((a) => !a.trigger) || agents[0];
+        if (coordinator) {
+          const mdPath = resolveAgentClaudeMdPath(coordinator);
+          try {
+            claudeMd = fs.readFileSync(mdPath, 'utf-8');
+          } catch {
+            // file may not exist yet
+          }
+        }
+      }
+
+      return this.json(res, 200, { pressure, recentMessages, claudeMd });
+    }
+
+    // POST /api/session/reflect/:groupFolder — AI-generated retrospective suggestions
+    const reflectMatch = url.pathname.match(/^\/api\/session\/reflect\/(.+)$/);
+    if (method === 'POST' && reflectMatch) {
+      const groupFolder = decodeURIComponent(reflectMatch[1]);
+      const entry = Object.entries(this.opts.registeredGroups()).find(
+        ([, g]) => g.folder === groupFolder,
+      );
+      const jid = entry?.[0];
+      const messages = jid ? getSessionSummaryMessages(jid, 30) : [];
+      try {
+        const { generateReflection } = await import('../session-reflection.js');
+        const suggestions = await generateReflection(messages);
+        return this.json(res, 200, { suggestions });
+      } catch (err) {
+        logger.warn({ err, groupFolder }, 'Session reflection failed');
+        return this.json(res, 200, { suggestions: [] });
+      }
+    }
+
     // POST /api/session/reset/:groupFolder — reset session for a group
     const resetMatch = url.pathname.match(/^\/api\/session\/reset\/(.+)$/);
     if (method === 'POST' && resetMatch) {
@@ -1370,6 +1422,33 @@ export class WebChannel implements Channel {
         return this.json(res, 501, { error: 'Session reset not available' });
       }
       try {
+        // If notes provided, append to CLAUDE.md before resetting
+        const body = await this.readBody(req);
+        const notes = body?.notes as string | undefined;
+        if (notes && notes.trim()) {
+          const entry = Object.entries(this.opts.registeredGroups()).find(
+            ([, g]) => g.folder === groupFolder,
+          );
+          const group = entry?.[1];
+          if (group) {
+            const agents = discoverAgents(group);
+            const coordinator = agents.find((a) => !a.trigger) || agents[0];
+            if (coordinator) {
+              const mdPath = resolveAgentClaudeMdPath(coordinator);
+              const existing = fs.existsSync(mdPath)
+                ? fs.readFileSync(mdPath, 'utf-8')
+                : '';
+              const dateStr = new Date().toISOString().split('T')[0];
+              const section = `\n\n## Session Notes (${dateStr})\n\n${notes.trim()}\n`;
+              fs.writeFileSync(mdPath, existing + section, 'utf-8');
+              logger.info(
+                { groupFolder, mdPath },
+                'Appended session notes to CLAUDE.md',
+              );
+            }
+          }
+        }
+
         await this.opts.onResetSession(groupFolder);
         // Clear pressure signal for this group's JID
         const jid = Object.entries(this.opts.registeredGroups()).find(
