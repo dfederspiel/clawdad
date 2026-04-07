@@ -128,6 +128,7 @@ import {
   AutomationTraceEntry,
 } from './automation-rules.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { startPolarisSessionKeepalive } from './polaris-session-keepalive.js';
 import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -2697,6 +2698,7 @@ async function main(): Promise<void> {
     onProgress: (jid, event) => broadcastProgress(jid, event),
     getMainChatJid,
   });
+  startPolarisSessionKeepalive();
   startIpcWatcher({
     sendMessage: (jid, rawText) => {
       const channel = findChannel(channels, jid);

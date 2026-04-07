@@ -87,6 +87,7 @@ export interface ContainerOutput {
   error?: string;
   usage?: UsageData;
   textsAlreadyStreamed?: number;
+  scriptSkipped?: boolean;
 }
 
 interface VolumeMount {
@@ -583,10 +584,13 @@ function createQueryOnce(
         // These are bookkeeping, not real query responses. Without this
         // check, a stale marker from the previous query cycle can resolve
         // the next queryOnce immediately with no actual content.
+        // Exception: scriptSkipped outputs are real "nothing to do" results
+        // from pre-check scripts and must resolve the promise.
         if (
           output.status === 'success' &&
           output.result === null &&
-          !output.usage
+          !output.usage &&
+          !output.scriptSkipped
         ) {
           if (output.newSessionId) handle.sessionId = output.newSessionId;
           return; // Skip — wait for the real response

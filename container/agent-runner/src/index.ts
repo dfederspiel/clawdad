@@ -57,6 +57,7 @@ interface ContainerOutput {
   error?: string;
   usage?: UsageData;
   textsAlreadyStreamed?: number;
+  scriptSkipped?: boolean;
 }
 
 interface SessionEntry {
@@ -869,6 +870,7 @@ async function main(): Promise<void> {
       writeOutput({
         status: 'success',
         result: null,
+        scriptSkipped: true,
       });
       return;
     }
