@@ -1409,8 +1409,9 @@ export class WebChannel implements Channel {
         const suggestions = await generateReflection(messages);
         return this.json(res, 200, { suggestions });
       } catch (err) {
-        logger.warn({ err, groupFolder }, 'Session reflection failed');
-        return this.json(res, 200, { suggestions: [] });
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn({ err: msg, groupFolder }, 'Session reflection failed');
+        return this.json(res, 200, { suggestions: [], error: msg });
       }
     }
 

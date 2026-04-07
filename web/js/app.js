@@ -342,7 +342,7 @@ async function loadSessionPressure() {
     const sessions = data.sessions || [];
     const pressureMap = {};
     for (const s of sessions) {
-      if (s.turnCount < 3 || s.avgCostPerTurn < 0.30) continue;
+      if (s.turnCount < 3) continue;
       const group = groups.value.find((g) => g.folder === s.groupFolder);
       if (!group) continue;
       pressureMap[group.jid] = {

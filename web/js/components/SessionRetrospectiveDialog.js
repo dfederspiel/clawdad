@@ -20,6 +20,7 @@ export function SessionRetrospectiveDialog({ open, groupFolder, jid, onClose }) 
   const [suggestions, setSuggestions] = useState([]); // [{text, category, checked}]
   const [reflecting, setReflecting] = useState(false);
   const [reflectDone, setReflectDone] = useState(false);
+  const [reflectError, setReflectError] = useState('');
   const [customNote, setCustomNote] = useState('');
 
   useEffect(() => {
@@ -31,6 +32,7 @@ export function SessionRetrospectiveDialog({ open, groupFolder, jid, onClose }) 
       setSuggestions([]);
       setReflecting(false);
       setReflectDone(false);
+      setReflectError('');
       setCustomNote('');
       setError('');
       setClaudeMdOpen(false);
@@ -61,12 +63,12 @@ export function SessionRetrospectiveDialog({ open, groupFolder, jid, onClose }) 
       });
       if (!res.ok) throw new Error('Reflection failed');
       const data = await res.json();
+      if (data.error) setReflectError(data.error);
       setSuggestions(
         (data.suggestions || []).map((s) => ({ ...s, checked: true })),
       );
     } catch (err) {
-      console.warn('Reflection failed:', err);
-      // Non-fatal — user can still add custom notes
+      setReflectError(err.message || 'Reflection request failed');
     } finally {
       setReflecting(false);
       setReflectDone(true);
@@ -224,7 +226,8 @@ export function SessionRetrospectiveDialog({ open, groupFolder, jid, onClose }) 
         `}
 
         ${!reflecting && reflectDone && suggestions.length === 0 && html`
-          <p class="text-xs text-txt-muted py-2">No suggestions generated. Add your own notes below.</p>
+          <p class="text-xs text-txt-muted py-2">No suggestions generated — add your own notes below.</p>
+          ${reflectError && html`<p class="text-xs text-red-400/60">${reflectError}</p>`}
         `}
 
         <div>
