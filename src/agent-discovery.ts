@@ -176,6 +176,8 @@ export function buildMultiAgentContext(
       `The target agent runs after your turn and responds in the chat.`,
       `Be specific in your delegation message — tell the agent exactly what to do and what context it needs.`,
       `Artifacts should be written to /workspace/group/ so all agents can access them.`,
+      ``,
+      `Silent chaining: when a specialist just finished and you are simply passing the baton to the next one in a sequence, delegate without a visible message. Only respond visibly when synthesizing results, making a decision, or all specialists in the current batch have reported back. Do not narrate each handoff.`,
     );
   } else {
     lines.push(
