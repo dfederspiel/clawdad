@@ -336,6 +336,32 @@ export async function loadGroups() {
   }
 }
 
+async function loadSessionPressure() {
+  try {
+    const data = await api.getSessionPressure();
+    const sessions = data.sessions || [];
+    const pressureMap = {};
+    for (const s of sessions) {
+      if (s.turnCount < 3 || s.avgCostPerTurn < 0.30) continue;
+      const group = groups.value.find((g) => g.folder === s.groupFolder);
+      if (!group) continue;
+      pressureMap[group.jid] = {
+        jid: group.jid,
+        groupFolder: s.groupFolder,
+        avgCostPerTurn: s.avgCostPerTurn,
+        turnCount: s.turnCount,
+        cumulativeCost: s.cumulativeCost,
+        avgCacheWriteTokens: s.avgCacheWriteTokens,
+      };
+    }
+    if (Object.keys(pressureMap).length > 0) {
+      contextPressure.value = { ...contextPressure.value, ...pressureMap };
+    }
+  } catch {
+    // Non-critical — pressure will still appear via SSE after the next agent run
+  }
+}
+
 export async function selectGroup(jid) {
   selectedJid.value = jid;
   localStorage.setItem('clawdad-selected-jid', jid);
@@ -691,6 +717,6 @@ loadTheme();
 
 // --- Render ---
 
-loadGroups();
+loadGroups().then(loadSessionPressure);
 loadTriggers();
 render(html`<${App} />`, document.getElementById('app'));
