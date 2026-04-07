@@ -1407,11 +1407,26 @@ export class WebChannel implements Channel {
       try {
         const { generateReflection } = await import('../session-reflection.js');
         const suggestions = await generateReflection(messages);
-        return this.json(res, 200, { suggestions });
+        return this.json(res, 200, {
+          suggestions,
+          debug: {
+            groupFolder,
+            jid: jid || null,
+            messageCount: messages.length,
+          },
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn({ err: msg, groupFolder }, 'Session reflection failed');
-        return this.json(res, 200, { suggestions: [], error: msg });
+        return this.json(res, 200, {
+          suggestions: [],
+          error: msg,
+          debug: {
+            groupFolder,
+            jid: jid || null,
+            messageCount: messages.length,
+          },
+        });
       }
     }
 

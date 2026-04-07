@@ -53,11 +53,8 @@ export async function generateReflection(
         ),
     );
   } catch (err) {
-    logger.warn(
-      { err },
-      'Session reflection failed, returning empty suggestions',
-    );
-    return [];
+    logger.warn({ err }, 'Session reflection failed');
+    throw err;
   }
 }
 
