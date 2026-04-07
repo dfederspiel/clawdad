@@ -41,7 +41,12 @@ export async function generateReflection(
   const userPrompt = `Here is the recent conversation to reflect on:\n\n${conversation}`;
 
   try {
-    const text = await callModel(SYSTEM_PROMPT, userPrompt);
+    const raw = await callModel(SYSTEM_PROMPT, userPrompt);
+    // Haiku sometimes wraps output in ```json ... ``` fences despite instructions
+    const text = raw
+      .replace(/^```(?:json)?\s*\n?/i, '')
+      .replace(/\n?```\s*$/i, '')
+      .trim();
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
