@@ -7,6 +7,8 @@ import { resolveAgentIpcInputPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { WorkPhase, WorkStateEvent } from './types.js';
 
+export type MessageCheckMode = 'normal' | 'delegation_retrigger';
+
 interface QueuedTask {
   id: string;
   groupJid: string;
@@ -24,6 +26,7 @@ interface GroupState {
   isTaskContainer: boolean;
   runningTaskId: string | null;
   pendingMessages: boolean;
+  pendingMessageMode: MessageCheckMode;
   pendingTasks: QueuedTask[];
   process: ChildProcess | null;
   containerName: string | null;
@@ -37,6 +40,7 @@ interface GroupState {
   activeDelegationAgents: string[];
   pendingDelegations: QueuedTask[];
   completedDelegationRetriggers: boolean[]; // Per-delegation: true = needs retrigger, false = skip
+  suppressNextDelegationRetrigger: boolean;
   // Snapshotted coordinator identity for idle timer pause/resume.
   // Set when first delegation starts, cleared when all delegations complete.
   // Survives runForGroup() cleanup so resume can find it.
@@ -48,8 +52,9 @@ export class GroupQueue {
   private activeWorkCount = 0;
   private idlePoolCount = 0;
   private waitingGroups: string[] = [];
-  private processMessagesFn: ((groupJid: string) => Promise<boolean>) | null =
-    null;
+  private processMessagesFn:
+    | ((groupJid: string, mode: MessageCheckMode) => Promise<boolean>)
+    | null = null;
   private onWorkStateFn: ((event: WorkStateEvent) => void) | null = null;
   private onDelegationStateFn:
     | ((
@@ -70,6 +75,7 @@ export class GroupQueue {
         isTaskContainer: false,
         runningTaskId: null,
         pendingMessages: false,
+        pendingMessageMode: 'normal',
         pendingTasks: [],
         process: null,
         containerName: null,
@@ -82,6 +88,7 @@ export class GroupQueue {
         activeDelegationAgents: [],
         pendingDelegations: [],
         completedDelegationRetriggers: [],
+        suppressNextDelegationRetrigger: false,
         delegationCoordinatorId: null,
       };
       this.groups.set(groupJid, state);
@@ -89,8 +96,21 @@ export class GroupQueue {
     return state;
   }
 
-  setProcessMessagesFn(fn: (groupJid: string) => Promise<boolean>): void {
+  setProcessMessagesFn(
+    fn: (groupJid: string, mode: MessageCheckMode) => Promise<boolean>,
+  ): void {
     this.processMessagesFn = fn;
+  }
+
+  private mergeMessageMode(
+    current: MessageCheckMode,
+    next: MessageCheckMode,
+  ): MessageCheckMode {
+    // Fresh inbound messages should always supersede a stale delegation
+    // re-trigger, but a re-trigger should not downgrade fresh work.
+    return current === 'normal' || next === 'normal'
+      ? 'normal'
+      : 'delegation_retrigger';
   }
 
   setOnWorkState(fn: (event: WorkStateEvent) => void): void {
@@ -142,7 +162,10 @@ export class GroupQueue {
     this.waitingGroups = this.waitingGroups.filter((j) => j !== groupJid);
   }
 
-  enqueueMessageCheck(groupJid: string): void {
+  enqueueMessageCheck(
+    groupJid: string,
+    mode: MessageCheckMode = 'normal',
+  ): void {
     if (this.shuttingDown) return;
 
     const state = this.getGroup(groupJid);
@@ -150,6 +173,13 @@ export class GroupQueue {
     // Group is busy if coordinator is active OR delegations are running
     if (state.active || state.activeDelegations > 0) {
       state.pendingMessages = true;
+      state.pendingMessageMode = this.mergeMessageMode(
+        state.pendingMessageMode,
+        mode,
+      );
+      if (state.activeDelegations > 0 && mode === 'normal') {
+        state.suppressNextDelegationRetrigger = true;
+      }
       if (state.idleWaiting) {
         this.closeStdin(groupJid);
       }
@@ -165,6 +195,13 @@ export class GroupQueue {
       MAX_CONCURRENT_CONTAINERS
     ) {
       state.pendingMessages = true;
+      state.pendingMessageMode = this.mergeMessageMode(
+        state.pendingMessageMode,
+        mode,
+      );
+      if (state.activeDelegations > 0 && mode === 'normal') {
+        state.suppressNextDelegationRetrigger = true;
+      }
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
       }
@@ -178,7 +215,7 @@ export class GroupQueue {
       return;
     }
 
-    this.runForGroup(groupJid, 'messages').catch((err) =>
+    this.runForGroup(groupJid, 'messages', mode).catch((err) =>
       logger.error({ groupJid, err }, 'Unhandled error in runForGroup'),
     );
   }
@@ -475,12 +512,20 @@ export class GroupQueue {
         );
         state.completedDelegationRetriggers = [];
 
-        if (needsRetrigger) {
+        if (needsRetrigger && !state.suppressNextDelegationRetrigger) {
           logger.info(
             { groupJid },
             'All delegations complete, re-triggering coordinator',
           );
-          this.enqueueMessageCheck(groupJid);
+          this.enqueueMessageCheck(groupJid, 'delegation_retrigger');
+        } else if (needsRetrigger && state.suppressNextDelegationRetrigger) {
+          logger.info(
+            { groupJid },
+            'All delegations complete, suppressing stale coordinator retrigger in favor of newer messages',
+          );
+          this.emitWorkState(groupJid, 'completed', {
+            summary: 'Delegation batch superseded by newer messages',
+          });
         } else {
           logger.info(
             { groupJid },
@@ -490,6 +535,7 @@ export class GroupQueue {
             summary: 'Automation delegations complete',
           });
         }
+        state.suppressNextDelegationRetrigger = false;
       } else {
         // More delegations pending — drain them
         this.drainDelegations(groupJid);
@@ -520,12 +566,14 @@ export class GroupQueue {
   private async runForGroup(
     groupJid: string,
     reason: 'messages' | 'drain',
+    mode: MessageCheckMode,
   ): Promise<void> {
     const state = this.getGroup(groupJid);
     state.active = true;
     state.idleWaiting = false;
     state.isTaskContainer = false;
     state.pendingMessages = false;
+    state.pendingMessageMode = 'normal';
     this.activeWorkCount++;
 
     logger.debug(
@@ -536,11 +584,11 @@ export class GroupQueue {
 
     try {
       if (this.processMessagesFn) {
-        const success = await this.processMessagesFn(groupJid);
+        const success = await this.processMessagesFn(groupJid, mode);
         if (success) {
           state.retryCount = 0;
         } else {
-          this.scheduleRetry(groupJid, state);
+          this.scheduleRetry(groupJid, state, mode);
         }
       }
     } catch (err) {
@@ -548,7 +596,7 @@ export class GroupQueue {
       this.emitWorkState(groupJid, 'error', {
         summary: 'Error processing messages',
       });
-      this.scheduleRetry(groupJid, state);
+      this.scheduleRetry(groupJid, state, mode);
     } finally {
       state.active = false;
       state.process = null;
@@ -601,7 +649,11 @@ export class GroupQueue {
     }
   }
 
-  private scheduleRetry(groupJid: string, state: GroupState): void {
+  private scheduleRetry(
+    groupJid: string,
+    state: GroupState,
+    mode: MessageCheckMode,
+  ): void {
     state.retryCount++;
     if (state.retryCount > MAX_RETRIES) {
       logger.error(
@@ -619,7 +671,7 @@ export class GroupQueue {
     );
     setTimeout(() => {
       if (!this.shuttingDown) {
-        this.enqueueMessageCheck(groupJid);
+        this.enqueueMessageCheck(groupJid, mode);
       }
     }, delayMs);
   }
@@ -643,7 +695,8 @@ export class GroupQueue {
 
     // Then pending messages
     if (state.pendingMessages) {
-      this.runForGroup(groupJid, 'drain').catch((err) =>
+      const mode = state.pendingMessageMode;
+      this.runForGroup(groupJid, 'drain', mode).catch((err) =>
         logger.error(
           { groupJid, err },
           'Unhandled error in runForGroup (drain)',
@@ -677,7 +730,8 @@ export class GroupQueue {
           ),
         );
       } else if (state.pendingMessages) {
-        this.runForGroup(nextJid, 'drain').catch((err) =>
+        const mode = state.pendingMessageMode;
+        this.runForGroup(nextJid, 'drain', mode).catch((err) =>
           logger.error(
             { groupJid: nextJid, err },
             'Unhandled error in runForGroup (waiting)',

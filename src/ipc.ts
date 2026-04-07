@@ -55,6 +55,7 @@ export interface IpcDeps {
     targetAgent: string;
     message: string;
     sourceAgent: string;
+    sourceBatchId?: string;
     completionPolicy?: 'final_response' | 'retrigger_coordinator';
   }) => void;
 }
@@ -208,6 +209,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     targetAgent: data.targetAgent,
                     message: data.message,
                     sourceAgent: data.sourceAgent || 'unknown',
+                    sourceBatchId: data.sourceBatchId || '',
                     completionPolicy: data.completionPolicy || 'final_response',
                   });
                   logger.info(
@@ -215,6 +217,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                       sourceGroup,
                       sourceAgent: data.sourceAgent,
                       sourceAgentId: data.sourceAgentId,
+                      sourceBatchId: data.sourceBatchId,
                       sourceSessionId: data.sourceSessionId,
                       targetAgent: data.targetAgent,
                     },

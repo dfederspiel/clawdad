@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 
 import {
   DEFAULT_AGENT_NAME,
@@ -7,9 +8,17 @@ import {
   discoverAgents,
 } from './agent-discovery.js';
 import { setActiveAgentName, clearActiveAgentName } from './agent-state.js';
+import { getTriggeredAgentsForMessages } from './agent-routing.js';
+import {
+  beginDeliveryLease,
+  DeliveryLease,
+  markLeaseDelivered,
+  noteVisibleMessage,
+  resetChatSupersessionState,
+  shouldDeliverForLease,
+} from './message-supersession.js';
 import {
   ASSISTANT_NAME,
-  buildAgentTriggerPattern,
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
@@ -77,7 +86,7 @@ import {
   setGroupSubtitle,
   storeMessage,
 } from './db.js';
-import { GroupQueue } from './group-queue.js';
+import { GroupQueue, MessageCheckMode } from './group-queue.js';
 import {
   resolveAgentIpcInputPath,
   resolveGroupFolderPath,
@@ -217,6 +226,30 @@ const activeThreads = new Map<
 let broadcastThreadCreated:
   | ((originJid: string, threadId: string, agentName: string) => void)
   | null = null;
+
+async function deliverAgentMessage(
+  channel: Channel,
+  jid: string,
+  text: string,
+  lease: DeliveryLease,
+  threadId?: string,
+): Promise<boolean> {
+  if (!shouldDeliverForLease(lease)) {
+    logger.info(
+      {
+        jid,
+        batchId: lease.batchId,
+        startEpoch: lease.startEpoch,
+      },
+      'Suppressing stale agent message at delivery time',
+    );
+    return false;
+  }
+
+  await channel.sendMessage(jid, text, threadId);
+  markLeaseDelivered(lease);
+  return true;
+}
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -650,10 +683,13 @@ async function executeAutomationActions(
           const savedConfig = group.containerConfig;
           const AUTOMATION_TIMEOUT = 120_000;
           const taskId = `automation-${agent.name}-${Date.now()}`;
+          const batchId = `automation-${trace.ruleId}-${randomUUID()}`;
           queue.enqueueDelegation(
             chatJid,
             taskId,
             async () => {
+              const lease = beginDeliveryLease(chatJid, batchId);
+              let deliveredToUser = false;
               group.containerConfig = {
                 ...savedConfig,
                 timeout: Math.min(
@@ -700,7 +736,16 @@ async function executeAutomationActions(
                         .trim();
                       if (text) {
                         setActiveAgentName(chatJid, agent.displayName);
-                        await channel.sendMessage(chatJid, text);
+                        if (
+                          await deliverAgentMessage(
+                            channel,
+                            chatJid,
+                            text,
+                            lease,
+                          )
+                        ) {
+                          deliveredToUser = true;
+                        }
                       }
                     }
                   }
@@ -725,7 +770,11 @@ async function executeAutomationActions(
                     .trim();
                   if (!text) return;
                   setActiveAgentName(chatJid, agent.displayName);
-                  await channel.sendMessage(chatJid, text);
+                  if (
+                    await deliverAgentMessage(channel, chatJid, text, lease)
+                  ) {
+                    deliveredToUser = true;
+                  }
                   const summary =
                     text.length > 120 ? text.slice(0, 117) + '...' : text;
                   broadcastProgress(chatJid, {
@@ -738,8 +787,13 @@ async function executeAutomationActions(
                 true, // isDelegation
                 async (text) => {
                   setActiveAgentName(chatJid, agent.displayName);
-                  await channel.sendMessage(chatJid, text);
+                  if (
+                    await deliverAgentMessage(channel, chatJid, text, lease)
+                  ) {
+                    deliveredToUser = true;
+                  }
                 },
+                batchId,
               );
 
               group.containerConfig = savedConfig;
@@ -861,7 +915,10 @@ async function executeAutomationActions(
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
  */
-async function processGroupMessages(chatJid: string): Promise<boolean> {
+async function processGroupMessages(
+  chatJid: string,
+  mode: MessageCheckMode = 'normal',
+): Promise<boolean> {
   const group = registeredGroups[chatJid];
   if (!group) return true;
 
@@ -1057,11 +1114,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // Determine which agents should respond to these messages
   const agents = groupAgents[chatJid] || [];
-  const triggeredAgents = agents.filter((agent) => {
-    if (!agent.trigger) return true; // No agent trigger → responds to all
-    const agentTrigger = buildAgentTriggerPattern(agent.trigger);
-    return missedMessages.some((m) => agentTrigger.test(m.content.trim()));
-  });
+  const triggeredAgents = getTriggeredAgentsForMessages(
+    agents,
+    missedMessages,
+    {
+      coordinatorOnly: isMultiAgent && mode === 'delegation_retrigger',
+    },
+  );
 
   if (triggeredAgents.length === 0) {
     // No explicit trigger matched — fall back to the group agent (the one
@@ -1095,6 +1154,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
     if (specialists.length > 1) {
       const MENTION_TIMEOUT = 120_000; // 2 minutes, same as coordinator delegations
+      const batchId = `fanout-${randomUUID()}`;
 
       logger.info(
         {
@@ -1112,6 +1172,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           chatJid,
           taskId,
           async () => {
+            const lease = beginDeliveryLease(responseJid, batchId);
+            let deliveredToUser = false;
             group.containerConfig = {
               ...savedConfig,
               timeout: Math.min(
@@ -1147,11 +1209,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
                       .trim();
                     if (text) {
                       setActiveAgentName(responseJid, agent.displayName);
-                      await responseChannel.sendMessage(
-                        responseJid,
-                        text,
-                        threadId,
-                      );
+                      if (
+                        await deliverAgentMessage(
+                          responseChannel,
+                          responseJid,
+                          text,
+                          lease,
+                          threadId,
+                        )
+                      ) {
+                        deliveredToUser = true;
+                      }
                     }
                   }
                 }
@@ -1183,8 +1251,19 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
               true, // isDelegation
               async (text) => {
                 setActiveAgentName(responseJid, agent.displayName);
-                await responseChannel.sendMessage(responseJid, text, threadId);
+                if (
+                  await deliverAgentMessage(
+                    responseChannel,
+                    responseJid,
+                    text,
+                    lease,
+                    threadId,
+                  )
+                ) {
+                  deliveredToUser = true;
+                }
               },
+              batchId,
             );
 
             group.containerConfig = savedConfig;
@@ -1223,7 +1302,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             const resultNote =
               status === 'error'
                 ? `[${agent.displayName} was unable to respond.]`
-                : `[${agent.displayName} has responded above.]`;
+                : deliveredToUser
+                  ? `[${agent.displayName} has responded above.]`
+                  : `[${agent.displayName} completed but output was superseded by newer context.]`;
             storeMessage({
               id: `mention-result-${agent.name}-${Date.now()}`,
               chat_jid: chatJid,
@@ -1262,6 +1343,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Run triggered agent(s) — typically one (coordinator or single specialist).
   // Multiple specialists are handled above via parallel delegation.
   for (const agent of triggeredAgents) {
+    const batchId = `run-${randomUUID()}`;
+    const lease = beginDeliveryLease(responseJid, batchId);
     // Build agent-specific prompt with multi-agent context
     const multiAgentCtx = buildMultiAgentContext(agent, agents);
     const agentPrompt = multiAgentCtx ? multiAgentCtx + prompt : prompt;
@@ -1340,9 +1423,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           if (text) {
             if (isMultiAgent)
               setActiveAgentName(responseJid, agent.displayName);
-            await responseChannel.sendMessage(responseJid, text, threadId);
-            outputSentToUser = true;
-            outputSentForCurrentQuery = true;
+            if (
+              await deliverAgentMessage(
+                responseChannel,
+                responseJid,
+                text,
+                lease,
+                threadId,
+              )
+            ) {
+              outputSentToUser = true;
+              outputSentForCurrentQuery = true;
+            }
           }
           resetIdleTimer();
         }
@@ -1436,10 +1528,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       undefined, // isDelegation
       async (text) => {
         if (isMultiAgent) setActiveAgentName(responseJid, agent.displayName);
-        await responseChannel.sendMessage(responseJid, text, threadId);
-        outputSentToUser = true;
-        outputSentForCurrentQuery = true;
+        if (
+          await deliverAgentMessage(
+            responseChannel,
+            responseJid,
+            text,
+            lease,
+            threadId,
+          )
+        ) {
+          outputSentToUser = true;
+          outputSentForCurrentQuery = true;
+        }
       },
+      batchId,
     );
 
     await responseChannel.setTyping?.(
@@ -1506,6 +1608,7 @@ async function runAgent(
   agent?: Agent,
   isDelegation?: boolean,
   sendMessage?: (text: string) => Promise<void>,
+  runBatchId?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
@@ -1847,6 +1950,7 @@ async function runAgent(
         assistantName: agent?.displayName || ASSISTANT_NAME,
         agentId,
         agentName: agent?.name || DEFAULT_AGENT_NAME,
+        runBatchId,
         canDelegate: agent ? !agent.trigger : false,
         isDelegation: isDelegation || false,
         poolManaged: true,
@@ -1919,6 +2023,7 @@ async function runAgent(
       assistantName: agent?.displayName || ASSISTANT_NAME,
       agentId,
       agentName: agent?.name || DEFAULT_AGENT_NAME,
+      runBatchId,
       canDelegate: agent ? !agent.trigger : false,
       isDelegation: isDelegation || false,
       poolManaged: false,
@@ -2417,6 +2522,13 @@ async function main(): Promise<void> {
         logger.info({ sessionsDir }, 'Deleted session files');
       }
 
+      // 4. Reset delivery-time supersession state for chats bound to this group
+      for (const [jid, group] of Object.entries(registeredGroups)) {
+        if (group.folder === groupFolder) {
+          resetChatSupersessionState(jid);
+        }
+      }
+
       logger.info(
         { groupFolder, evictedAgents: agentIds },
         'Session reset complete',
@@ -2447,6 +2559,9 @@ async function main(): Promise<void> {
           }
           return;
         }
+      }
+      if (!msg.is_bot_message && registeredGroups[chatJid]) {
+        noteVisibleMessage(chatJid, null);
       }
       storeMessage(msg);
     },
@@ -2650,6 +2765,7 @@ async function main(): Promise<void> {
         targetAgent,
         message,
         sourceAgent,
+        sourceBatchId,
         completionPolicy,
       } = request;
 
@@ -2703,6 +2819,9 @@ async function main(): Promise<void> {
         chatJid,
         taskId,
         async () => {
+          const batchId = sourceBatchId || `delegation-${randomUUID()}`;
+          const lease = beginDeliveryLease(chatJid, batchId);
+          let deliveredToUser = false;
           group.containerConfig = {
             ...savedConfig,
             timeout: Math.min(
@@ -2753,7 +2872,11 @@ async function main(): Promise<void> {
                     // Set agent name right before sending — parallel delegations
                     // share the same chatJid so we must claim the name each time
                     setActiveAgentName(chatJid, agent.displayName);
-                    await channel.sendMessage(chatJid, text);
+                    if (
+                      await deliverAgentMessage(channel, chatJid, text, lease)
+                    ) {
+                      deliveredToUser = true;
+                    }
                   }
                 }
               }
@@ -2783,7 +2906,9 @@ async function main(): Promise<void> {
                 .trim();
               if (!text) return;
               setActiveAgentName(chatJid, agent.displayName);
-              await channel.sendMessage(chatJid, text);
+              if (await deliverAgentMessage(channel, chatJid, text, lease)) {
+                deliveredToUser = true;
+              }
               const summary =
                 text.length > 120 ? text.slice(0, 117) + '...' : text;
               broadcastProgress(chatJid, {
@@ -2796,8 +2921,11 @@ async function main(): Promise<void> {
             true, // isDelegation — use shorter timeout
             async (text) => {
               setActiveAgentName(chatJid, agent.displayName);
-              await channel.sendMessage(chatJid, text);
+              if (await deliverAgentMessage(channel, chatJid, text, lease)) {
+                deliveredToUser = true;
+              }
             },
+            batchId,
           );
 
           group.containerConfig = savedConfig; // restore original config
@@ -2844,7 +2972,9 @@ async function main(): Promise<void> {
           const resultNote =
             status === 'error'
               ? `[${agent.displayName} was unable to complete the delegated task.]`
-              : `[${agent.displayName} has responded above.]`;
+              : deliveredToUser
+                ? `[${agent.displayName} has responded above.]`
+                : `[${agent.displayName} completed but output was superseded by newer context.]`;
           storeMessage({
             id: `delegation-result-${Date.now()}`,
             chat_jid: chatJid,

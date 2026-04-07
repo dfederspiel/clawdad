@@ -30,6 +30,7 @@ interface ContainerInput {
   assistantName?: string;
   agentId?: string;
   agentName?: string;
+  runBatchId?: string;
   canDelegate?: boolean;
   isDelegation?: boolean;
   poolManaged?: boolean;
@@ -539,6 +540,7 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
             NANOCLAW_AGENT_NAME: containerInput.agentName || 'default',
             NANOCLAW_AGENT_ID: containerInput.agentId || '',
+            NANOCLAW_RUN_BATCH_ID: containerInput.runBatchId || '',
             NANOCLAW_SESSION_ID: sessionId || '',
             NANOCLAW_CAN_DELEGATE: containerInput.canDelegate ? '1' : '0',
             NANOCLAW_MAIN_JID: containerInput.mainChatJid || '',

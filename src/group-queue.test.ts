@@ -40,7 +40,7 @@ describe('GroupQueue', () => {
     let concurrentCount = 0;
     let maxConcurrent = 0;
 
-    const processMessages = vi.fn(async (_groupJid: string) => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       concurrentCount++;
       maxConcurrent = Math.max(maxConcurrent, concurrentCount);
       // Simulate async work
@@ -69,7 +69,7 @@ describe('GroupQueue', () => {
     let maxActive = 0;
     const completionCallbacks: Array<() => void> = [];
 
-    const processMessages = vi.fn(async (_groupJid: string) => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       activeCount++;
       maxActive = Math.max(maxActive, activeCount);
       await new Promise<void>((resolve) => completionCallbacks.push(resolve));
@@ -104,7 +104,7 @@ describe('GroupQueue', () => {
     const executionOrder: string[] = [];
     let resolveFirst: () => void;
 
-    const processMessages = vi.fn(async (_groupJid: string) => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       if (executionOrder.length === 0) {
         // First call: block until we release it
         await new Promise<void>((resolve) => {
@@ -143,7 +143,7 @@ describe('GroupQueue', () => {
   it('retries with exponential backoff on failure', async () => {
     let callCount = 0;
 
-    const processMessages = vi.fn(async () => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       callCount++;
       return false; // failure
     });
@@ -169,7 +169,9 @@ describe('GroupQueue', () => {
   // --- Shutdown prevents new enqueues ---
 
   it('prevents new enqueues after shutdown', async () => {
-    const processMessages = vi.fn(async () => true);
+    const processMessages = vi.fn(
+      async (_groupJid: string, _mode: string) => true,
+    );
     queue.setProcessMessagesFn(processMessages);
 
     await queue.shutdown(1000);
@@ -185,7 +187,7 @@ describe('GroupQueue', () => {
   it('stops retrying after MAX_RETRIES and resets', async () => {
     let callCount = 0;
 
-    const processMessages = vi.fn(async () => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       callCount++;
       return false; // always fail
     });
@@ -217,7 +219,7 @@ describe('GroupQueue', () => {
     const processed: string[] = [];
     const completionCallbacks: Array<() => void> = [];
 
-    const processMessages = vi.fn(async (groupJid: string) => {
+    const processMessages = vi.fn(async (groupJid: string, _mode: string) => {
       processed.push(groupJid);
       await new Promise<void>((resolve) => completionCallbacks.push(resolve));
       return true;
@@ -284,7 +286,7 @@ describe('GroupQueue', () => {
     const fs = await import('fs');
     let resolveProcess: () => void;
 
-    const processMessages = vi.fn(async () => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       await new Promise<void>((resolve) => {
         resolveProcess = resolve;
       });
@@ -324,7 +326,7 @@ describe('GroupQueue', () => {
     const fs = await import('fs');
     let resolveProcess: () => void;
 
-    const processMessages = vi.fn(async () => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       await new Promise<void>((resolve) => {
         resolveProcess = resolve;
       });
@@ -367,7 +369,7 @@ describe('GroupQueue', () => {
     const fs = await import('fs');
     let resolveProcess: () => void;
 
-    const processMessages = vi.fn(async () => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       await new Promise<void>((resolve) => {
         resolveProcess = resolve;
       });
@@ -444,7 +446,7 @@ describe('GroupQueue', () => {
     let resolveCoordinator: () => void;
     let resolveDelegation: () => void;
 
-    const processMessages = vi.fn(async () => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       await new Promise<void>((resolve) => {
         resolveCoordinator = resolve;
       });
@@ -523,7 +525,7 @@ describe('GroupQueue', () => {
     let resolveDelegation: () => void;
 
     let callCount = 0;
-    const processMessages = vi.fn(async (groupJid: string) => {
+    const processMessages = vi.fn(async (groupJid: string, _mode: string) => {
       callCount++;
       if (groupJid === 'groupA@g.us' && callCount <= 1) {
         await new Promise<void>((resolve) => {
@@ -617,7 +619,7 @@ describe('GroupQueue', () => {
     let resolveDel1: () => void;
     let resolveDel2: () => void;
 
-    const processMessages = vi.fn(async () => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       await new Promise<void>((resolve) => {
         resolveCoordinator = resolve;
       });
@@ -718,7 +720,7 @@ describe('GroupQueue', () => {
     const fs = await import('fs');
     let resolveProcess: () => void;
 
-    const processMessages = vi.fn(async () => {
+    const processMessages = vi.fn(async (_groupJid: string, _mode: string) => {
       await new Promise<void>((resolve) => {
         resolveProcess = resolve;
       });
@@ -761,5 +763,102 @@ describe('GroupQueue', () => {
 
     resolveProcess!();
     await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('re-triggers delegations in coordinator-only mode', async () => {
+    const modes: string[] = [];
+    let resolveCoordinator: () => void;
+    let resolveDelegation: () => void;
+
+    const processMessages = vi.fn(async (_groupJid: string, mode: string) => {
+      modes.push(mode);
+      if (modes.length === 1) {
+        await new Promise<void>((resolve) => {
+          resolveCoordinator = resolve;
+        });
+      }
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    queue.registerProcess(
+      'group1@g.us',
+      {} as any,
+      'container-1',
+      'team-folder',
+      'coordinator',
+    );
+
+    queue.enqueueDelegation(
+      'group1@g.us',
+      'del-1',
+      async () => {
+        await new Promise<void>((resolve) => {
+          resolveDelegation = resolve;
+        });
+      },
+      'analyst',
+      false,
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    resolveCoordinator!();
+    await vi.advanceTimersByTimeAsync(10);
+    resolveDelegation!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(modes).toEqual(['normal', 'delegation_retrigger']);
+  });
+
+  it('preserves fresh message work over delegation retrigger work', async () => {
+    const modes: string[] = [];
+    let resolveCoordinator: () => void;
+    let resolveDelegation: () => void;
+
+    const processMessages = vi.fn(async (_groupJid: string, mode: string) => {
+      modes.push(mode);
+      if (modes.length === 1) {
+        await new Promise<void>((resolve) => {
+          resolveCoordinator = resolve;
+        });
+      }
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    queue.registerProcess(
+      'group1@g.us',
+      {} as any,
+      'container-1',
+      'team-folder',
+      'coordinator',
+    );
+
+    queue.enqueueDelegation(
+      'group1@g.us',
+      'del-1',
+      async () => {
+        await new Promise<void>((resolve) => {
+          resolveDelegation = resolve;
+        });
+      },
+      'analyst',
+      false,
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    // New inbound user work arrives while the delegation is still active.
+    queue.enqueueMessageCheck('group1@g.us', 'normal');
+
+    resolveCoordinator!();
+    await vi.advanceTimersByTimeAsync(10);
+    resolveDelegation!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(modes).toEqual(['normal', 'normal']);
   });
 });

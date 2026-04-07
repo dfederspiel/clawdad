@@ -60,6 +60,7 @@ export interface ContainerInput {
   assistantName?: string;
   agentId?: string; // '{group_folder}/{agent_name}' — used for session isolation
   agentName?: string; // agent name within the group
+  runBatchId?: string; // shared delivery batch for supersession-aware routing
   canDelegate?: boolean; // true for coordinator agents (no trigger)
   isDelegation?: boolean; // delegation semantics (output routing, completion signaling)
   poolManaged?: boolean; // true = stay alive for follow-up queries (warm pool)
