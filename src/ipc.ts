@@ -12,6 +12,25 @@ import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
+/**
+ * Tracks IPC messages sent per chatJid during an agent run.
+ * Reset when a new run starts; checked at OUTPUT delivery to suppress
+ * duplicates when the agent already sent messages via send_message.
+ */
+const ipcMessageCounts = new Map<string, number>();
+
+export function noteIpcMessageSent(chatJid: string): void {
+  ipcMessageCounts.set(chatJid, (ipcMessageCounts.get(chatJid) || 0) + 1);
+}
+
+export function getIpcMessageCount(chatJid: string): number {
+  return ipcMessageCounts.get(chatJid) || 0;
+}
+
+export function resetIpcMessageCount(chatJid: string): void {
+  ipcMessageCounts.delete(chatJid);
+}
+
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
@@ -121,6 +140,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   targetIsMain
                 ) {
                   await deps.sendMessage(data.chatJid, data.text);
+                  noteIpcMessageSent(data.chatJid);
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
