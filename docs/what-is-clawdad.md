@@ -53,6 +53,8 @@ ClawDad builds upward from there into a different product tier:
 - per-agent runtime/provider direction
 - internal coordination architecture beyond a shared chat transcript
 
+ClawDad also no longer assumes routine upstream sync with NanoClaw. The codebases have diverged enough that ClawDad should treat NanoClaw as an influential ancestor and occasional idea source, not as a branch it continuously follows.
+
 ## Product Direction
 
 The clearest way to think about ClawDad is:
