@@ -129,7 +129,7 @@ export function SetupWizard({ onComplete, userPath }) {
       <div class="max-w-md w-full">
         <div class="text-center mb-8">
           <h2 class="text-2xl font-bold text-txt mb-1">ClawDad</h2>
-          <p class="text-xs text-txt-muted mb-6">NanoClaw Agent Orchestrator</p>
+          <p class="text-xs text-txt-muted mb-6">Container-native local agent orchestration</p>
           <div class="flex items-center justify-center gap-2 mb-6">
             ${steps.map(
               (_, i) => html`

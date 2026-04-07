@@ -655,7 +655,9 @@ if (process.env.NANOCLAW_CAN_DELEGATE === '1') {
     'delegate_to_agent',
     `Delegate a task to another agent in this group. The target agent runs in its own container with the full conversation context plus your instructions. Use this when work falls outside your role.
 
-The target agent's response will appear in the chat. You do NOT need to wait for their response — it will arrive after your turn completes.
+The target agent runs after your turn completes. Their user-visible response may be suppressed if newer context arrives before delivery, but the coordinator still gets a system note that they finished.
+
+Use completion_policy: "final_response" by default. Use "retrigger_coordinator" only when you explicitly need a follow-up turn to combine or interpret specialist outputs.
 
 Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the three jokes I just told and rate them." })`,
     {

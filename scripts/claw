@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-claw — NanoClaw CLI
-Run a NanoClaw agent container from the command line.
+claw — ClawDad CLI harness
+Run a ClawDad agent container from the command line.
 
 Usage:
   claw "What is 2+2?"
@@ -37,11 +37,11 @@ def dbg(*args):
 # ── Config ──────────────────────────────────────────────────────────────────
 
 def _find_nanoclaw_dir() -> Path:
-    """Locate the NanoClaw installation directory.
+    """Locate the ClawDad installation directory.
 
     Resolution order:
     1. NANOCLAW_DIR env var
-    2. The directory containing this script (if it looks like a NanoClaw install)
+    2. The directory containing this script (if it looks like a ClawDad install)
     3. ~/src/nanoclaw (legacy default)
     """
     if env := os.environ.get("NANOCLAW_DIR"):
@@ -224,7 +224,7 @@ def run_container(runtime: str, image: str, payload: dict, timeout: int = 300) -
 def main():
     parser = argparse.ArgumentParser(
         prog="claw",
-        description="Run a NanoClaw agent from the command line.",
+        description="Run a ClawDad agent from the command line.",
     )
     parser.add_argument("prompt", nargs="?", help="Prompt to send")
     parser.add_argument("-g", "--group", help="Group name or folder (fuzzy match)")

@@ -3,12 +3,16 @@
 </p>
 
 <p align="center">
-  A hands-on platform for building and running Claude agents — built on <a href="https://github.com/qwibitai/nanoclaw">NanoClaw</a>.
+  A container-native platform for building, running, and observing local AI agent teams.
 </p>
 
 ---
 
 ## What is ClawDad?
+
+ClawDad is a **container-native agent orchestration platform** for building, running, and observing AI teams locally.
+
+It began with inspiration from [NanoClaw](https://github.com/qwibitai/nanoclaw), but it is moving into a different tier: multi-agent coordination, delegation, observability, and local control are now core product concerns rather than side effects of a single-agent runtime.
 
 Most agent platforms treat you as a consumer — pick a template, click run, hope for the best. ClawDad takes a different approach: it helps you **build intuition for how AI agents work** by making you a participant in their creation.
 
@@ -16,7 +20,9 @@ The web UI at `http://localhost:3456` gives you a local environment to create ag
 
 As you build that intuition, ClawDad grows with you. Advanced users graduate to building agents directly in Claude Code's CLI, where you have full control over instructions, tools, and container configuration. The web UI stays useful as a dashboard for monitoring tasks, reviewing execution history, and chatting with running agents.
 
-Under the hood, ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoclaw), which handles the hard parts: Docker container isolation, credential injection via a local proxy, and the Claude Agent SDK runtime.
+Under the hood, ClawDad still carries important NanoClaw foundations: Docker isolation, credential proxying, agent runtime integration, and the skill-driven operator workflow. But ClawDad is now best understood as its own orchestration layer, not just a slim variant.
+
+See [docs/what-is-clawdad.md](docs/what-is-clawdad.md) for the product statement and positioning.
 
 ## Quick Start
 
@@ -110,7 +116,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for skill types, PR guidelines, and the c
 
 ## Upstream
 
-ClawDad is built on [NanoClaw](https://github.com/qwibitai/nanoclaw) by [Qwibit](https://github.com/qwibitai). The core container runtime, agent SDK integration, credential proxy, and skill system all come from NanoClaw. Use `/update` to pull the latest ClawDad code.
+ClawDad is built with deep respect for [NanoClaw](https://github.com/qwibitai/nanoclaw) by [Qwibit](https://github.com/qwibitai). The core container runtime, credential proxy, and skill system started there. ClawDad extends that foundation into a more orchestration-heavy, multi-agent local platform. Use `/update` to pull the latest ClawDad code.
 
 ## License
 

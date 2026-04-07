@@ -46,6 +46,9 @@ If you're in a multi-agent group, you'll see context about your teammates inject
 - **Coordinators** (no trigger) handle untriggered messages and delegate using `mcp__nanoclaw__delegate_to_agent`
 - **Specialists** (with trigger like `@analyst`) respond when @-mentioned by users or delegated to by the coordinator
 - Delegations run in parallel — multiple specialists can work concurrently
+- Use `completion_policy: "final_response"` by default. Use `retrigger_coordinator` only when the coordinator truly needs a follow-up turn to synthesize or interpret specialist results.
+- User-visible delivery and coordinator awareness are separate. A specialist result can be superseded and hidden from the user if newer context arrives, while the coordinator still receives a system note that the work completed.
+- Coordinators should avoid promising that delegated output will definitely appear. If newer messages change the task, respond to the newest context and treat older delegated work as potentially superseded.
 - Don't role-play as other agents — delegate to them instead
 - Your individual `agents/{name}/CLAUDE.md` defines your specific role
 
