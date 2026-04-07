@@ -43,9 +43,12 @@ export function noteVisibleMessage(
   frontier.epoch += 1;
   if (batchId) {
     frontier.activeBatchIds.add(batchId);
-  } else {
-    frontier.activeBatchIds.clear();
   }
+  // When batchId is null (user message), do NOT clear activeBatchIds.
+  // In-flight agent runs have leases with batchIds that must survive
+  // new user messages — the agent is already processing and should
+  // still deliver its output. The epoch bump alone prevents new stale
+  // agents from delivering.
   return frontier.epoch;
 }
 

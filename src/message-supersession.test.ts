@@ -31,11 +31,25 @@ describe('message supersession', () => {
     expect(shouldDeliverForLease(second)).toBe(true);
   });
 
-  it('suppresses an older batch after an unrelated visible message arrives', () => {
+  it('allows in-flight lease to deliver after a user message arrives', () => {
     const lease = beginDeliveryLease('chat-1', 'batch-a');
+    // Simulate the first delivery registering the batchId
+    markLeaseDelivered(lease);
 
+    // User sends a new message mid-run (batchId=null, epoch bumps)
     noteVisibleMessage('chat-1', null);
 
+    // The in-flight lease should still deliver — its batchId is active
+    expect(shouldDeliverForLease(lease)).toBe(true);
+  });
+
+  it('suppresses a lease that never delivered before a user message arrives', () => {
+    const lease = beginDeliveryLease('chat-1', 'batch-a');
+
+    // User message arrives before the agent ever delivered anything
+    noteVisibleMessage('chat-1', null);
+
+    // Lease never registered its batchId via markLeaseDelivered, so it's stale
     expect(shouldDeliverForLease(lease)).toBe(false);
   });
 
