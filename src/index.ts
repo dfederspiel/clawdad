@@ -222,6 +222,16 @@ const channels: Channel[] = [];
 const queue = new GroupQueue();
 const pool = new ContainerPool(POOL_IDLE_TIMEOUT, WARM_POOL_ENABLED);
 pool.setOnCountChange((idleCount) => queue.setIdlePoolCount(idleCount));
+queue.setOnDelegationState(
+  (groupJid, groupFolder, coordinatorAgent, active) => {
+    const agentId = `${groupFolder}/${coordinatorAgent}`;
+    if (active) {
+      pool.pauseIdleTimer(agentId);
+    } else {
+      pool.resumeIdleTimer(agentId);
+    }
+  },
+);
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';

@@ -433,6 +433,287 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(10);
   });
 
+  // --- Delegation-aware idle timer ---
+
+  it('emits delegation state with snapshotted coordinator identity', async () => {
+    const delegationEvents: Array<{
+      groupFolder: string;
+      coord: string;
+      active: boolean;
+    }> = [];
+    let resolveCoordinator: () => void;
+    let resolveDelegation: () => void;
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveCoordinator = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.setOnDelegationState((groupJid, groupFolder, coord, active) => {
+      delegationEvents.push({ groupFolder, coord, active });
+    });
+
+    // Start coordinator
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Register coordinator identity (simulates what index.ts does)
+    queue.registerProcess(
+      'group1@g.us',
+      {} as any,
+      'container-1',
+      'test-group',
+      'coordinator',
+    );
+
+    // Enqueue a delegation while coordinator is still running
+    queue.enqueueDelegation(
+      'group1@g.us',
+      'del-1',
+      async () => {
+        await new Promise<void>((resolve) => {
+          resolveDelegation = resolve;
+        });
+      },
+      'analyst',
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Delegation started → pause should have fired with snapshotted identity
+    expect(delegationEvents).toHaveLength(1);
+    expect(delegationEvents[0]).toEqual({
+      groupFolder: 'test-group',
+      coord: 'coordinator',
+      active: true,
+    });
+
+    // Coordinator finishes — clears groupFolder/coordinatorAgentName
+    resolveCoordinator!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Delegation still running — no resume yet
+    expect(delegationEvents).toHaveLength(1);
+
+    // Delegation finishes — resume should fire using the SNAPSHOT, not the cleared fields
+    resolveDelegation!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(delegationEvents).toHaveLength(2);
+    expect(delegationEvents[1]).toEqual({
+      groupFolder: 'test-group',
+      coord: 'coordinator',
+      active: false,
+    });
+  });
+
+  it('uses enqueue-time snapshot when delegation starts after coordinator cleanup', async () => {
+    // This is the exact edge case: delegation queued at concurrency limit,
+    // coordinator finishes (clearing mutable fields), drainGroup starts the
+    // queued delegation — pause/resume must use the snapshot, not the cleared fields.
+    const delegationEvents: Array<{
+      groupFolder: string;
+      coord: string;
+      active: boolean;
+    }> = [];
+    let resolveCoordA: () => void;
+    let resolveCoordB: () => void;
+    let resolveDelegation: () => void;
+
+    let callCount = 0;
+    const processMessages = vi.fn(async (groupJid: string) => {
+      callCount++;
+      if (groupJid === 'groupA@g.us' && callCount <= 1) {
+        await new Promise<void>((resolve) => {
+          resolveCoordA = resolve;
+        });
+      } else if (groupJid === 'groupB@g.us') {
+        await new Promise<void>((resolve) => {
+          resolveCoordB = resolve;
+        });
+      }
+      // Re-triggered coordinator calls (from delegation completion) return immediately
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.setOnDelegationState((_jid, groupFolder, coord, active) => {
+      delegationEvents.push({ groupFolder, coord, active });
+    });
+
+    // Slot 1: group A coordinator
+    queue.enqueueMessageCheck('groupA@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    queue.registerProcess(
+      'groupA@g.us',
+      {} as any,
+      'c-a',
+      'team-folder',
+      'coordinator',
+    );
+
+    // Slot 2: group B coordinator (holds the slot)
+    queue.enqueueMessageCheck('groupB@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Enqueue delegation for group A — concurrency full (2/2), so it queues.
+    // Snapshot is taken HERE at enqueue time.
+    queue.enqueueDelegation(
+      'groupA@g.us',
+      'del-1',
+      async () => {
+        await new Promise<void>((resolve) => {
+          resolveDelegation = resolve;
+        });
+      },
+      'analyst',
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Delegation is queued, no events yet
+    expect(delegationEvents).toHaveLength(0);
+
+    // Group A coordinator finishes. The finally block:
+    //   1. Clears groupFolder, coordinatorAgentName (the mutable fields)
+    //   2. Decrements activeWorkCount (now 1)
+    //   3. Calls drainGroup → drainDelegations → starts the queued delegation
+    resolveCoordA!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    // The delegation should now be running. Pause must have fired using the
+    // snapshot taken at enqueue time, NOT the cleared mutable fields.
+    expect(delegationEvents).toHaveLength(1);
+    expect(delegationEvents[0]).toEqual({
+      groupFolder: 'team-folder',
+      coord: 'coordinator',
+      active: true,
+    });
+
+    // Complete the delegation — resume fires from same snapshot
+    resolveDelegation!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(delegationEvents).toHaveLength(2);
+    expect(delegationEvents[1]).toEqual({
+      groupFolder: 'team-folder',
+      coord: 'coordinator',
+      active: false,
+    });
+
+    // Clean up group B
+    resolveCoordB!();
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('snapshot survives even if a second delegation batch starts after fields cleared', async () => {
+    const delegationEvents: Array<{
+      groupFolder: string;
+      coord: string;
+      active: boolean;
+    }> = [];
+    let resolveCoordinator: () => void;
+    let resolveDel1: () => void;
+    let resolveDel2: () => void;
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveCoordinator = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.setOnDelegationState((_jid, groupFolder, coord, active) => {
+      delegationEvents.push({ groupFolder, coord, active });
+    });
+
+    // Start coordinator
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    queue.registerProcess(
+      'group1@g.us',
+      {} as any,
+      'c-1',
+      'team-folder',
+      'coordinator',
+    );
+
+    // First delegation — snapshot taken at enqueue
+    queue.enqueueDelegation(
+      'group1@g.us',
+      'del-1',
+      async () => {
+        await new Promise<void>((resolve) => {
+          resolveDel1 = resolve;
+        });
+      },
+      'analyst',
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    // pause fired
+    expect(delegationEvents).toHaveLength(1);
+    expect(delegationEvents[0].active).toBe(true);
+
+    // Coordinator finishes — clears mutable fields
+    resolveCoordinator!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    // First delegation finishes → resume fires from snapshot
+    resolveDel1!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(delegationEvents).toHaveLength(2);
+    expect(delegationEvents[1]).toEqual({
+      groupFolder: 'team-folder',
+      coord: 'coordinator',
+      active: false,
+    });
+
+    // Now start a new coordinator run (re-populates fields)
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    queue.registerProcess(
+      'group1@g.us',
+      {} as any,
+      'c-2',
+      'team-folder',
+      'coordinator',
+    );
+
+    // Second delegation — new snapshot
+    queue.enqueueDelegation(
+      'group1@g.us',
+      'del-2',
+      async () => {
+        await new Promise<void>((resolve) => {
+          resolveDel2 = resolve;
+        });
+      },
+      'reviewer',
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(delegationEvents).toHaveLength(3);
+    expect(delegationEvents[2]).toEqual({
+      groupFolder: 'team-folder',
+      coord: 'coordinator',
+      active: true,
+    });
+
+    resolveDel2!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(delegationEvents).toHaveLength(4);
+    expect(delegationEvents[3]).toEqual({
+      groupFolder: 'team-folder',
+      coord: 'coordinator',
+      active: false,
+    });
+  });
+
   it('preempts when idle arrives with pending tasks', async () => {
     const fs = await import('fs');
     let resolveProcess: () => void;

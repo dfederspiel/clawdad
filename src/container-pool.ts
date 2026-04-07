@@ -170,6 +170,41 @@ export class ContainerPool {
   }
 
   /**
+   * Pause the idle timer for an agent (e.g., while delegations are active).
+   * The container stays in the pool but won't be reclaimed by timeout.
+   */
+  pauseIdleTimer(agentId: string): void {
+    const entry = this.entries.get(agentId);
+    if (!entry || entry.state !== 'idle') return;
+    if (entry.idleTimer) {
+      clearTimeout(entry.idleTimer);
+      entry.idleTimer = null;
+      logger.debug({ agentId }, 'Pool: idle timer paused');
+    }
+  }
+
+  /**
+   * Resume the idle timer for an agent after delegations complete.
+   * Restarts the full timeout from now.
+   */
+  resumeIdleTimer(agentId: string, idleTimeoutMs?: number): void {
+    const entry = this.entries.get(agentId);
+    if (!entry || entry.state !== 'idle') return;
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+
+    const timeout = idleTimeoutMs ?? this.idleTimeoutMs;
+    entry.idleSince = Date.now();
+    entry.idleTimer = setTimeout(() => {
+      logger.info(
+        { agentId, containerName: entry.handle.containerName },
+        'Pool: idle timeout, reclaiming container',
+      );
+      this.reclaim(agentId);
+    }, timeout);
+    logger.debug({ agentId, timeout }, 'Pool: idle timer resumed');
+  }
+
+  /**
    * Reclaim a container: write _close, wait for exit, clean up.
    */
   async reclaim(agentId: string): Promise<void> {

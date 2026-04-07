@@ -37,6 +37,10 @@ interface GroupState {
   activeDelegationAgents: string[];
   pendingDelegations: QueuedTask[];
   completedDelegationRetriggers: boolean[]; // Per-delegation: true = needs retrigger, false = skip
+  // Snapshotted coordinator identity for idle timer pause/resume.
+  // Set when first delegation starts, cleared when all delegations complete.
+  // Survives runForGroup() cleanup so resume can find it.
+  delegationCoordinatorId: string | null;
 }
 
 export class GroupQueue {
@@ -47,6 +51,14 @@ export class GroupQueue {
   private processMessagesFn: ((groupJid: string) => Promise<boolean>) | null =
     null;
   private onWorkStateFn: ((event: WorkStateEvent) => void) | null = null;
+  private onDelegationStateFn:
+    | ((
+        groupJid: string,
+        groupFolder: string,
+        coordinatorAgent: string,
+        active: boolean,
+      ) => void)
+    | null = null;
   private shuttingDown = false;
 
   private getGroup(groupJid: string): GroupState {
@@ -70,6 +82,7 @@ export class GroupQueue {
         activeDelegationAgents: [],
         pendingDelegations: [],
         completedDelegationRetriggers: [],
+        delegationCoordinatorId: null,
       };
       this.groups.set(groupJid, state);
     }
@@ -82,6 +95,18 @@ export class GroupQueue {
 
   setOnWorkState(fn: (event: WorkStateEvent) => void): void {
     this.onWorkStateFn = fn;
+  }
+
+  /** Called when delegations start or finish, to pause/resume coordinator idle timer. */
+  setOnDelegationState(
+    fn: (
+      groupJid: string,
+      groupFolder: string,
+      coordinatorAgent: string,
+      active: boolean,
+    ) => void,
+  ): void {
+    this.onDelegationStateFn = fn;
   }
 
   /** Called by ContainerPool when idle pool count changes. */
@@ -322,6 +347,17 @@ export class GroupQueue {
 
     const state = this.getGroup(groupJid);
 
+    // Eagerly snapshot coordinator identity while it's still available.
+    // runForGroup() clears these fields when the coordinator query finishes,
+    // but queued delegations may not start until after that cleanup.
+    if (
+      !state.delegationCoordinatorId &&
+      state.groupFolder &&
+      state.coordinatorAgentName
+    ) {
+      state.delegationCoordinatorId = `${state.groupFolder}/${state.coordinatorAgentName}`;
+    }
+
     // Dedup
     if (state.pendingDelegations.some((t) => t.id === taskId)) {
       logger.debug({ groupJid, taskId }, 'Delegation already queued, skipping');
@@ -365,11 +401,21 @@ export class GroupQueue {
     task: QueuedTask,
   ): Promise<void> {
     const state = this.getGroup(groupJid);
+    const wasIdle = state.activeDelegations === 0;
     state.activeDelegations++;
     if (task.agentName) {
       state.activeDelegationAgents.push(task.agentName);
     }
     this.activeWorkCount++;
+
+    // Pause coordinator idle timer when first delegation starts.
+    // Use the snapshot (set at enqueue time) since mutable fields may
+    // already be cleared by runForGroup().
+    if (wasIdle && this.onDelegationStateFn && state.delegationCoordinatorId) {
+      const [folder, ...rest] = state.delegationCoordinatorId.split('/');
+      const coord = rest.join('/');
+      this.onDelegationStateFn(groupJid, folder, coord, true);
+    }
 
     logger.debug(
       {
@@ -415,6 +461,15 @@ export class GroupQueue {
       ) {
         // All delegations complete — only re-trigger coordinator if at least
         // one delegation needs it (i.e., was NOT automation-only)
+        // Resume coordinator idle timer using the snapshotted identity
+        // (mutable fields may have been cleared by runForGroup())
+        if (this.onDelegationStateFn && state.delegationCoordinatorId) {
+          const [folder, ...rest] = state.delegationCoordinatorId.split('/');
+          const coord = rest.join('/');
+          this.onDelegationStateFn(groupJid, folder, coord, false);
+          state.delegationCoordinatorId = null;
+        }
+
         const needsRetrigger = state.completedDelegationRetriggers.some(
           (r) => r,
         );
