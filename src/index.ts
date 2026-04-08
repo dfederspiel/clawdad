@@ -138,7 +138,7 @@ let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 // Agents per group: groupJid → Agent[]
-let groupAgents: Record<string, Agent[]> = {};
+const groupAgents: Record<string, Agent[]> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
