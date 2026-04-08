@@ -668,7 +668,19 @@ export async function spawnContainer(
       .trim()
       .split('\n')
       .filter(Boolean);
+    const now = Date.now();
     for (const name of existing) {
+      // Skip recently-spawned containers to avoid killing in-flight queries.
+      // Container names embed Date.now() as a suffix.
+      const tsMatch = name.match(/-(\d{13,})$/);
+      const spawnedAt = tsMatch ? parseInt(tsMatch[1], 10) : 0;
+      if (spawnedAt && now - spawnedAt < 60_000) {
+        logger.info(
+          { group: group.name, recent: name, ageMs: now - spawnedAt },
+          'Skipping recent container (< 60s old)',
+        );
+        continue;
+      }
       logger.info(
         { group: group.name, stale: name },
         'Stopping stale container before spawn',
