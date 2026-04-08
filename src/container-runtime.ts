@@ -77,7 +77,10 @@ export function stopContainer(name: string): void {
  */
 export function ensureContainerRuntimeRunning(): boolean {
   try {
-    execSync(`${CONTAINER_RUNTIME_BIN} info`, { stdio: 'pipe' });
+    execSync(`${CONTAINER_RUNTIME_BIN} info`, {
+      stdio: 'pipe',
+      timeout: 10_000,
+    });
     logger.debug('Container runtime already running');
     return true;
   } catch (err) {
