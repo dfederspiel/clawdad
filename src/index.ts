@@ -767,8 +767,9 @@ async function executeAutomationActions(
                 },
                 (event) => broadcastProgress(chatJid, event),
                 async (rawText) => {
-                  // TEXT markers deliver the actual message content AND
-                  // broadcast a progress summary for the typing indicator.
+                  // TEXT markers deliver the actual message content as a chat
+                  // message — no extra progress broadcast (would duplicate into
+                  // the typing indicator's tool history).
                   const text = rawText
                     .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                     .trim();
@@ -779,13 +780,6 @@ async function executeAutomationActions(
                   ) {
                     deliveredToUser = true;
                   }
-                  const summary =
-                    text.length > 120 ? text.slice(0, 117) + '...' : text;
-                  broadcastProgress(chatJid, {
-                    tool: 'text',
-                    summary,
-                    timestamp: new Date().toISOString(),
-                  });
                 },
                 agent,
                 true, // isDelegation
@@ -1238,18 +1232,24 @@ async function processGroupMessages(
               },
               (event) => broadcastProgress(responseJid, event),
               async (rawText) => {
+                // Deliver intermediate text as a chat message; the typing
+                // indicator's tool history is reserved for actual tool calls.
                 const text = rawText
                   .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                   .trim();
                 if (!text) return;
                 setActiveAgentName(responseJid, agent.displayName);
-                const summary =
-                  text.length > 120 ? text.slice(0, 117) + '...' : text;
-                broadcastProgress(responseJid, {
-                  tool: 'text',
-                  summary,
-                  timestamp: new Date().toISOString(),
-                });
+                if (
+                  await deliverAgentMessage(
+                    responseChannel,
+                    responseJid,
+                    text,
+                    lease,
+                    threadId,
+                  )
+                ) {
+                  deliveredToUser = true;
+                }
               },
               agent,
               true, // isDelegation
@@ -2937,13 +2937,6 @@ async function main(): Promise<void> {
               if (await deliverAgentMessage(channel, chatJid, text, lease)) {
                 deliveredToUser = true;
               }
-              const summary =
-                text.length > 120 ? text.slice(0, 117) + '...' : text;
-              broadcastProgress(chatJid, {
-                tool: 'text',
-                summary,
-                timestamp: new Date().toISOString(),
-              });
             },
             agent,
             true, // isDelegation — use shorter timeout
