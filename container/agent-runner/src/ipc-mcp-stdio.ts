@@ -637,13 +637,17 @@ const CREDENTIALS_DIR = path.join(IPC_DIR, 'credentials');
 
 server.tool(
   'request_credential',
-  `Request the user to register a credential. In web UI groups (chatJid starts with "web:"), this opens a secure popup in the browser — the user enters the secret directly, you never see it. For non-web channels, falls back to register-credential.sh.
+  `Request the user to register a NEW credential. Only use this as a LAST RESORT after confirming the credential is truly missing.
 
-Use this instead of asking the user to paste secrets into chat. The credential is stored in an encrypted vault and injected automatically into API calls.
+BEFORE calling this tool, you MUST:
+1. Try the API call using /workspace/scripts/api.sh or /workspace/scripts/cred-exec.sh first
+2. Only if you get a 401/403 AND the error is clearly an auth failure, then call this tool
 
-Known services: atlassian, github, gitlab, launchdarkly. For other services, provide a custom service name and host_pattern.
+Most credentials are ALREADY registered in the credential proxy. The proxy handles substitution automatically — your environment has placeholders, not real secrets. Use api.sh for HTTP calls and cred-exec.sh for CLI tools (gh, glab, etc.). See the credential-proxy skill for details.
 
-This tool returns immediately after sending the credential request. The user will submit the credential asynchronously. Once registered, a confirmation message is sent to the chat. You can proceed with other work in the meantime.`,
+DO NOT call this tool just because an environment variable looks empty or contains a placeholder like "__CRED_GITHUB_TOKEN__" — that is EXPECTED. The proxy substitutes the real value at request time.
+
+Known services: atlassian, github, gitlab, launchdarkly. For other services, provide a custom service name and host_pattern.`,
   {
     service: z.string().describe('Service name (e.g., "atlassian", "github", "gitlab", "launchdarkly", or a custom name)'),
     host_pattern: z.string().optional().describe('Host pattern for the credential (e.g., "*.atlassian.net"). Uses service default if omitted.'),
@@ -651,6 +655,35 @@ This tool returns immediately after sending the credential request. The user wil
     email: z.string().optional().describe('Email address (required for Atlassian Basic auth)'),
   },
   async (args) => {
+    // Pre-check: if the credential already exists in the proxy, don't bother the user
+    const proxyUrl = process.env.CRED_PROXY_URL;
+    if (proxyUrl) {
+      try {
+        const checkRes = await fetch(`${proxyUrl}/credential/${args.service}`);
+        if (checkRes.ok) {
+          const value = await checkRes.text();
+          if (value && value.trim().length > 0) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `The credential for "${args.service}" is ALREADY registered in the credential proxy. ` +
+                    `Do NOT ask the user to re-enter it.\n\n` +
+                    `To make authenticated API calls, use:\n` +
+                    `  /workspace/scripts/api.sh ${args.service} GET <URL> -H "Authorization: token $${args.service.toUpperCase()}_TOKEN"\n\n` +
+                    `For CLI tools (gh, glab, etc.), use:\n` +
+                    `  /workspace/scripts/cred-exec.sh ${args.service} ${args.service.toUpperCase()}_TOKEN -- <command>\n\n` +
+                    `The proxy substitutes the real credential at request time. Your env vars contain placeholders — that is expected.`,
+                },
+              ],
+            };
+          }
+        }
+      } catch {
+        // Proxy unreachable — fall through to normal flow
+      }
+    }
+
     const isWebChannel = chatJid.startsWith('web:');
 
     if (!isWebChannel) {

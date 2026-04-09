@@ -129,6 +129,19 @@ agent-browser state load auth.json
 agent-browser open https://app.example.com/dashboard
 ```
 
+### Polaris environments (pre-authenticated)
+
+The host maintains authenticated browser sessions for all configured Polaris environments. **Always load the browser state before browsing any Polaris URL:**
+
+```bash
+agent-browser state load /workspace/global/sessions/playwright-state.json
+agent-browser open https://co.dev.polaris.blackduck.com
+```
+
+This injects cookies AND localStorage tokens for every Polaris environment. The browser sends the right session automatically based on which domain you navigate to. No login flow needed — you land directly on the authenticated app.
+
+For direct API access (curl), session files are in `/workspace/global/sessions/` — one JSON per environment (e.g. `co.json`, `cdev.json`) with `base_url`, `session_cookie`, `org_id`, and `api_token`.
+
 ### Cookies & Storage
 
 ```bash

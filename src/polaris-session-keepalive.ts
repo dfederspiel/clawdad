@@ -26,6 +26,7 @@ const execFileAsync = promisify(execFile);
 const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes (session is short-lived)
 const SCRIPT_TIMEOUT_MS = 60_000; // browser auth can be slow
 const SESSIONS_DIR = path.join(GROUPS_DIR, 'global', 'sessions');
+const PLAYWRIGHT_STATE_FILE = path.join(SESSIONS_DIR, 'playwright-state.json');
 const AUTH_SCRIPT = path.join(
   process.cwd(),
   'scripts',
@@ -246,10 +247,101 @@ async function refreshEnvironment(envName: string): Promise<void> {
   }
 }
 
+/**
+ * Merge per-environment browser state files into a single Playwright storage
+ * state file. Each {env}-browser-state.json is produced by the browser auth
+ * script and contains the full context.storageState() output — cookies AND
+ * localStorage (including Keycloak tokens the SPA needs).
+ *
+ * Cookies are domain-scoped so multiple environments coexist safely.
+ * localStorage entries are origin-scoped (one per base URL).
+ */
+function writePlaywrightStorageState(): void {
+  const allCookies: unknown[] = [];
+  const allOrigins: unknown[] = [];
+  const seenOrigins = new Set<string>();
+
+  const stateFiles = fs
+    .readdirSync(SESSIONS_DIR)
+    .filter((f) => f.endsWith('-browser-state.json'));
+
+  for (const file of stateFiles) {
+    try {
+      const state = JSON.parse(
+        fs.readFileSync(path.join(SESSIONS_DIR, file), 'utf-8'),
+      );
+      if (Array.isArray(state.cookies)) {
+        allCookies.push(...state.cookies);
+      }
+      if (Array.isArray(state.origins)) {
+        for (const origin of state.origins) {
+          if (origin.origin && !seenOrigins.has(origin.origin)) {
+            seenOrigins.add(origin.origin);
+            allOrigins.push(origin);
+          }
+        }
+      }
+    } catch {
+      logger.debug({ file }, 'Skipping invalid browser state file');
+    }
+  }
+
+  // Fall back to constructing cookies from session JSONs if no browser
+  // state files exist yet (first run before browser auth completes).
+  if (stateFiles.length === 0) {
+    const sessionFiles = fs
+      .readdirSync(SESSIONS_DIR)
+      .filter(
+        (f) =>
+          f.endsWith('.json') &&
+          f !== 'playwright-state.json' &&
+          !f.endsWith('-browser-state.json'),
+      );
+    for (const file of sessionFiles) {
+      const session = readSession(file.replace('.json', ''));
+      if (!session || session.status !== 'active') continue;
+      allCookies.push(
+        {
+          name: 'session',
+          value: session.session_cookie,
+          domain: session.domain,
+          path: '/',
+          httpOnly: true,
+          secure: true,
+          sameSite: 'Lax',
+        },
+        {
+          name: 'OrgId',
+          value: session.org_id,
+          domain: session.domain,
+          path: '/',
+          httpOnly: false,
+          secure: true,
+          sameSite: 'Lax',
+        },
+      );
+    }
+  }
+
+  fs.writeFileSync(
+    PLAYWRIGHT_STATE_FILE,
+    JSON.stringify({ cookies: allCookies, origins: allOrigins }, null, 2),
+  );
+  logger.debug(
+    {
+      stateFiles: stateFiles.length,
+      cookies: allCookies.length,
+      origins: allOrigins.length,
+    },
+    'Playwright storage state updated',
+  );
+}
+
 async function refreshAllEnvironments(): Promise<void> {
   for (const envName of discoveredEnvs) {
     await refreshEnvironment(envName);
   }
+  writePlaywrightStorageState();
 }
 
 export function startPolarisSessionKeepalive(): void {

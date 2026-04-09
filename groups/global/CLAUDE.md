@@ -137,6 +137,39 @@ You MUST pass auth headers explicitly — the proxy substitutes placeholder valu
 
 **Requesting new credentials:** Use `mcp__nanoclaw__request_credential` — it opens a secure popup in the user's browser. Never ask users to paste secrets in chat. Try the API call first; only request credentials if you get a 401.
 
+## Polaris Browser Sessions
+
+The host maintains authenticated browser sessions for all configured Polaris environments (CO, CDEV, etc.). Sessions are refreshed automatically every 5 minutes by a keepalive process.
+
+### Browsing Polaris URLs
+
+**You MUST load the browser state before navigating to any Polaris URL.** Without this, you will hit a login wall.
+
+```bash
+agent-browser state load /workspace/global/sessions/playwright-state.json
+agent-browser open https://co.dev.polaris.blackduck.com/...
+```
+
+This injects cookies AND localStorage tokens for every configured Polaris environment. The browser sends the correct session automatically based on which domain you navigate to. No login flow needed — you land directly on the authenticated app.
+
+**If you still hit a login wall after loading state**, the session may have just expired. The host keepalive re-authenticates automatically every 5 minutes. Wait briefly and try again, or use the API token for the same work.
+
+### Polaris API Access (curl)
+
+Per-environment session files are in `/workspace/global/sessions/` — one JSON per environment (e.g., `co.json`, `cdev.json`) containing `base_url`, `session_cookie`, `org_id`, and `api_token`.
+
+**Prefer session cookies over API tokens.** Session cookies work with all Polaris APIs. API tokens have gaps — assessor account endpoints don't support them, and sporadic other endpoints were never wired up for token auth during development. Use the API token only as a fallback when the session is expired and hasn't been refreshed yet.
+
+```bash
+# Read session details
+SESSION=$(python3 -c "import json; s=json.load(open('/workspace/global/sessions/co.json')); print(f'session={s[\"session_cookie\"]}; OrgId={s[\"org_id\"]}')")
+ORG_ID=$(python3 -c "import json; print(json.load(open('/workspace/global/sessions/co.json'))['organization_id'])")
+
+# Use session cookie (preferred — works with all APIs)
+/workspace/scripts/api.sh polaris GET "https://co.dev.polaris.blackduck.com/api/auth/openid-connect/userinfo" \
+  -b "$SESSION" -H "organization-id: $ORG_ID" -H "Accept: application/json"
+```
+
 ## Event Logging
 
 **Log domain events using `/workspace/scripts/event-log.sh`.** This builds the structured audit trail that enables reports and analysis.

@@ -55,13 +55,50 @@ https://app.launchdarkly.com/api/v2
 
 ### Targeting Model
 
-Flags in `test` target specific Polaris environments via the `env` custom attribute (contextKind: `user`). A flag being ON in `test` does NOT mean it serves `true` everywhere — you must check rule clauses for `env` attribute values.
+Flags in `test` target specific Polaris environments via **custom context attributes** (contextKind: `user`). A flag being ON in `test` does NOT mean it serves `true` everywhere — you must check rule clauses.
 
-**`env` attribute values** appear in two forms:
-- Short: `im`, `co`, `stg`, `cdev`
-- FQDN: `im.altair.synopsys.com`, `im.dev.polaris.blackduck.com`
+The Polaris app sends **two custom attributes** when identifying with the LD SDK:
 
-Both may appear in the same rule.
+```typescript
+ldClient.identify({
+  anonymous: true,
+  custom: { tenant: orgId, env: ldEnvironment }
+})
+```
+
+#### `env` — hostname / Polaris environment
+
+The primary discriminator. Derived from the browser's `window.location.hostname` (or explicit config). Values appear in two forms:
+- **Short**: `im`, `co`, `stg`, `cdev`
+- **FQDN**: `im.altair.synopsys.com`, `im.dev.polaris.blackduck.com`
+
+Both forms may appear in the same rule. When checking if a flag is active for a specific Polaris environment, **match against both the short name and the full hostname** (e.g., `im` AND `im.dev.polaris.blackduck.com`).
+
+#### `tenant` — organization / tenant ID
+
+A secondary discriminator used when a flag needs to target specific tenants within an environment. The value is typically an organization UUID (e.g., `a1b2c3d4-e5f6-...`).
+
+Rules may use `tenant` clauses to:
+- Roll out a feature to specific tenants first (canary)
+- Exclude certain tenants from a feature
+- Enable a feature only for demo/internal tenants
+
+#### Evaluation order
+
+When a flag is ON, LD evaluates in this order:
+1. **Individual targets** — specific user keys
+2. **Rules** — clauses can match on `env`, `tenant`, or both in the same rule
+3. **Fallthrough** — default when no rules match
+
+**A flag can have rules that combine `env` AND `tenant` in the same rule** (e.g., "serve `true` when `env` is `im` AND `tenant` is `<specific-org-id>`"). Always report ALL clause attributes in a rule, not just `env`.
+
+#### Checking effective flag state
+
+When asked "is flag X active for environment Y?" — checking just the LD environment toggle (ON/OFF) is NOT sufficient. You must:
+1. Check if the flag is ON in the LD environment (`test` or `production`)
+2. Walk the rules and check if `env` clause values include the target environment/hostname
+3. Check if any `tenant` clauses further restrict the rule (if so, report this)
+4. If no rules match, report the fallthrough value
 
 ### Flag Naming Conventions
 
@@ -244,6 +281,8 @@ for env_key in ['test', 'production']:
     # Rules
     rules = env.get('rules', [])
     env_values_in_rules = set()
+    tenant_values_in_rules = set()
+    rules_with_tenant = []
 
     for i, rule in enumerate(rules):
         rule_id = rule.get('_id', '?')
@@ -263,6 +302,7 @@ for env_key in ['test', 'production']:
 
         disabled_str = ' [DISABLED]' if disabled else ''
         desc_str = f' ({desc_r})' if desc_r else ''
+        rule_has_tenant = False
 
         for clause in rule.get('clauses', []):
             attr = clause.get('attribute', '?')
@@ -276,9 +316,19 @@ for env_key in ['test', 'production']:
             print(f'    (ruleId: {rule_id})')
             if attr == 'env':
                 env_values_in_rules.update(vals)
+            if attr == 'tenant':
+                tenant_values_in_rules.update(vals)
+                rule_has_tenant = True
+
+        if rule_has_tenant:
+            rules_with_tenant.append(i)
 
     if not rules:
         print(f'  No targeting rules')
+
+    # Warn if rules use tenant-based targeting
+    if rules_with_tenant:
+        print(f'  ** Rules {rules_with_tenant} use tenant-based targeting — flag state depends on the org/tenant ID, not just the environment **')
 
     # Fallthrough
     ft = env.get('fallthrough', {})
@@ -298,16 +348,29 @@ for env_key in ['test', 'production']:
         if env_values_in_rules:
             matched = any(short == v or short == v.split('.')[0] for v in env_values_in_rules)
             if matched:
-                # Find which rule and what value
+                # Find which rule and what value, noting tenant restrictions
                 for i, rule in enumerate(rules):
+                    env_match = False
+                    has_tenant_clause = False
+                    tenant_vals = []
                     for clause in rule.get('clauses', []):
                         if clause.get('attribute') == 'env':
                             clause_vals = clause.get('values', [])
                             if any(short == v or short == v.split('.')[0] for v in clause_vals):
-                                var_idx = rule.get('variation')
-                                val = variations[var_idx]['value'] if var_idx is not None else 'rollout'
-                                print(f'  -> {target_env} IS targeted by Rule {i} -> serves {val}')
-                                break
+                                env_match = True
+                        if clause.get('attribute') == 'tenant':
+                            has_tenant_clause = True
+                            tenant_vals = clause.get('values', [])
+                    if env_match:
+                        var_idx = rule.get('variation')
+                        val = variations[var_idx]['value'] if var_idx is not None else 'rollout'
+                        if has_tenant_clause:
+                            print(f'  -> {target_env} IS targeted by Rule {i} -> serves {val}')
+                            print(f'     ** BUT only for tenants: {tenant_vals[:5]}{"..." if len(tenant_vals) > 5 else ""} **')
+                            print(f'     Other tenants in {target_env} fall through to next matching rule or fallthrough')
+                        else:
+                            print(f'  -> {target_env} IS targeted by Rule {i} -> serves {val} (all tenants)')
+                        break
             else:
                 ft_val = variations[ft_var]['value'] if ft_var is not None else 'rollout'
                 print(f'  -> {target_env} is NOT in any rule -> gets fallthrough ({ft_val})')
@@ -394,11 +457,16 @@ for env_key in ['test', 'production']:
         for i, rule in enumerate(rules):
             var_idx = rule.get('variation')
             var_val = variations[var_idx]['value'] if var_idx is not None else 'rollout'
+            has_tenant = False
             for clause in rule.get('clauses', []):
                 attr = clause.get('attribute', '?')
                 vals = clause.get('values', [])
                 negate = 'NOT ' if clause.get('negate') else ''
                 print(f'  Rule {i}: {attr} {negate}in {vals} -> {var_val}')
+                if attr == 'tenant':
+                    has_tenant = True
+            if has_tenant:
+                print(f'    ** tenant-restricted rule **')
         print()
 PYEOF
 ```
@@ -691,6 +759,9 @@ PYEOF
 
 - The `test` LD environment covers ALL non-production Polaris envs
 - A flag being ON does NOT mean it serves `true` — check rules and fallthrough
+- **Two custom context attributes are used for targeting**: `env` (hostname/environment) and `tenant` (organization ID). Rules may target by either or both.
+- When reporting flag state for a specific environment, always note if rules also restrict by `tenant` — the flag may be active for that environment but only for certain tenants
+- The `env` attribute value is typically the full hostname (e.g., `im.dev.polaris.blackduck.com`) but rules may also use short names (`im`). Check both forms.
 - Production changes require `comment` field in the patch request
 - Use `filter=query:<term>` syntax (NOT `filter=query equals "<term>"`)
 - The `summary=0` query param with `env=<envKey>` returns full targeting detail in list responses

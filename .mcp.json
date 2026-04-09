@@ -1,3 +1,12 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--storage-state",
+        "groups/global/sessions/playwright-state.json"
+      ]
+    }
+  }
 }

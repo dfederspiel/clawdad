@@ -279,6 +279,13 @@ async function authenticate(): Promise<void> {
     fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
     fs.writeFileSync(sessionFile, JSON.stringify(session, null, 2));
 
+    // Save full Playwright browser state (cookies + localStorage).
+    // This captures everything the SPA needs to recognize the session,
+    // including Keycloak tokens stored in localStorage.
+    const browserStateFile = sessionFile.replace('.json', '-browser-state.json');
+    const storageState = await context.storageState();
+    fs.writeFileSync(browserStateFile, JSON.stringify(storageState, null, 2));
+
     // Output result on stdout
     console.log(JSON.stringify({
       status: 'ok', env: envName, action: 're-authenticated',
