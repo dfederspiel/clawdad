@@ -25,6 +25,7 @@ import { getHealthStatus } from '../health.js';
 import {
   getMessagesSince,
   getMediaArtifact,
+  storeMediaArtifact,
   storeMessageDirect,
   updateMessageContent,
   clearMessages,
@@ -222,16 +223,7 @@ export class WebChannel implements Channel {
     const timestamp = new Date().toISOString();
     const effectiveSender =
       senderName || getActiveAgentName(jid) || ASSISTANT_NAME;
-    const blocks = [
-      {
-        type: 'image',
-        artifactId: artifact.id,
-        src: `/api/media/${artifact.id}`,
-        alt: artifact.alt || artifact.caption || 'Published image',
-        caption: artifact.caption || '',
-      },
-    ];
-    const text = `:::blocks\n${JSON.stringify(blocks, null, 2)}\n:::`;
+    const text = this.buildMediaMessageContent(artifact);
 
     storeMessageDirect({
       id,
@@ -327,6 +319,41 @@ export class WebChannel implements Channel {
     } catch {
       return {};
     }
+  }
+
+  private buildMediaMessageContent(
+    artifact: MediaArtifact,
+    options?: { fileLabel?: string; agentPath?: string },
+  ): string {
+    const lines: string[] = [];
+    if (options?.fileLabel)
+      lines.push(`Uploaded image \`${options.fileLabel}\`.`);
+    if (options?.agentPath) {
+      lines.push(`File available to agents at \`${options.agentPath}\`.`);
+    }
+    if (lines.length > 0) lines.push('');
+    lines.push(
+      ':::blocks',
+      JSON.stringify(
+        [
+          {
+            type: 'image',
+            artifactId: artifact.id,
+            src: `/api/media/${artifact.id}`,
+            alt:
+              artifact.alt ||
+              artifact.caption ||
+              options?.fileLabel ||
+              'Uploaded image',
+            caption: artifact.caption || '',
+          },
+        ],
+        null,
+        2,
+      ),
+      ':::',
+    );
+    return lines.join('\n');
   }
 
   private refreshAgentsAndRespond(res: http.ServerResponse, jid: string): void {
@@ -447,6 +474,124 @@ export class WebChannel implements Channel {
       });
       fs.createReadStream(artifact.path).pipe(res);
       return;
+    }
+
+    if (method === 'POST' && url.pathname === '/api/upload-media') {
+      const body = await this.readBody(req, 15 * 1024 * 1024);
+      const { jid, thread_id, filename, mime_type, data_base64, caption } =
+        body;
+      if (!jid || !filename || !mime_type || !data_base64) {
+        return this.json(res, 400, {
+          error: 'jid, filename, mime_type, and data_base64 are required',
+        });
+      }
+      if (!jid.startsWith('web:')) {
+        return this.json(res, 400, { error: 'jid must start with web:' });
+      }
+      const group = this.opts.registeredGroups()[jid];
+      if (!group) {
+        return this.json(res, 404, { error: 'Group not registered' });
+      }
+      if (!String(mime_type).startsWith('image/')) {
+        return this.json(res, 400, {
+          error: 'Only image uploads are supported',
+        });
+      }
+
+      const mimeToExt: Record<string, string> = {
+        'image/png': '.png',
+        'image/jpeg': '.jpg',
+        'image/gif': '.gif',
+        'image/webp': '.webp',
+      };
+      const ext =
+        mimeToExt[String(mime_type)] ||
+        path.extname(String(filename)).toLowerCase() ||
+        '.bin';
+      if (!['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) {
+        return this.json(res, 400, { error: 'Unsupported image type' });
+      }
+
+      let buffer: Buffer;
+      try {
+        buffer = Buffer.from(String(data_base64), 'base64');
+      } catch {
+        return this.json(res, 400, { error: 'Invalid base64 payload' });
+      }
+      if (buffer.length === 0) {
+        return this.json(res, 400, { error: 'Empty image payload' });
+      }
+
+      const artifactId = randomUUID();
+      const safeChatDir = jid.replace(/[^a-zA-Z0-9:_-]/g, '_');
+      const mediaDir = path.join(DATA_DIR, 'media', safeChatDir);
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const storedMediaPath = path.join(mediaDir, `${artifactId}${ext}`);
+      fs.writeFileSync(storedMediaPath, buffer);
+
+      const groupDir = this.getGroupDir(group.folder);
+      const uploadsDir = path.join(groupDir, 'uploads');
+      fs.mkdirSync(uploadsDir, { recursive: true });
+      const agentFileName = `upload-${artifactId}${ext}`;
+      const agentHostPath = path.join(uploadsDir, agentFileName);
+      fs.writeFileSync(agentHostPath, buffer);
+      const agentPath = `/workspace/group/uploads/${agentFileName}`;
+
+      const artifact: MediaArtifact = {
+        id: artifactId,
+        chat_jid: jid,
+        thread_id: thread_id || undefined,
+        created_at: new Date().toISOString(),
+        source: 'user_upload',
+        media_type: 'image',
+        mime_type: String(mime_type),
+        path: storedMediaPath,
+        caption: caption || undefined,
+        alt: String(filename),
+      };
+      storeMediaArtifact(artifact);
+
+      const content = this.buildMediaMessageContent(artifact, {
+        fileLabel: String(filename),
+        agentPath,
+      });
+
+      const msg: NewMessage = {
+        id: randomUUID(),
+        chat_jid: jid,
+        sender: 'web-user',
+        sender_name: 'Web User',
+        content,
+        timestamp: new Date().toISOString(),
+        is_from_me: false,
+        is_bot_message: false,
+        thread_id: thread_id || undefined,
+      };
+
+      if (thread_id) {
+        // Thread reply: store in the origin chat, mirror to the thread agent,
+        // and enqueue that agent just like a text thread reply.
+        this.opts.onMessage(jid, msg);
+        const threadInfo = this.opts.getThreadInfo?.(thread_id);
+        if (threadInfo) {
+          storeMessageDirect({
+            id: `${msg.id}_thread_${threadInfo.agentJid}`,
+            chat_jid: threadInfo.agentJid,
+            sender: msg.sender,
+            sender_name: msg.sender_name,
+            content: msg.content,
+            timestamp: msg.timestamp,
+            is_from_me: false,
+            is_bot_message: msg.is_bot_message,
+            thread_id,
+          });
+          this.opts.onThreadReply?.(thread_id, threadInfo.agentJid);
+        }
+      } else {
+        this.opts.onMessage(jid, msg);
+      }
+      this.broadcast('user_message', { jid, message: msg });
+      return this.json(res, 201, { ok: true, artifactId });
     }
 
     // POST /api/groups/:folder/agents — add or clone an agent into a group

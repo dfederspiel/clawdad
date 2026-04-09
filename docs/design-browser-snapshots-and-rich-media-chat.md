@@ -225,6 +225,27 @@ Use a staged hybrid:
 
 That gives a fast path without locking the system into blocks forever.
 
+### Layout flexibility note
+
+Even if phase 1 starts with a single `image` block, the design should stay open to richer visual arrangements that still fit the existing block system.
+
+Useful future shapes include:
+
+- **single image** — current default for screenshots and uploads
+- **side-by-side comparison** — before/after states, two candidate layouts, diff-style visual review
+- **carousel / gallery** — a short sequence of browser steps or alternative options
+- **image row with metadata** — screenshot plus caption, agent name, source, timestamp, or attached decision prompt
+- **mixed media card** — image preview alongside markdown or structured fields
+
+Short-term recommendation:
+
+- Keep `image` as the simplest atomic block
+- Avoid baking layout assumptions too deeply into the message pipeline
+- Prefer a future `media_group` or `gallery` block that can compose multiple image artifacts without replacing the single-image path
+- Keep artifact records independent from presentation so the same media can render as single, compare, gallery, or card layouts later
+
+That should let the UI evolve alongside the rest of the rich block system instead of treating images as a one-off exception.
+
 ## 3. Browser screenshot surfacing
 
 Add an explicit path for screenshot publication.
@@ -238,6 +259,11 @@ The agent intentionally says:
 - "Here is the screenshot"
 - "Please look at this state"
 - "I’m blocked on this screen"
+
+Short-term implementation note:
+
+- Provide a first-class `publish_browser_snapshot` tool that captures with `agent-browser` and publishes inline in one step.
+- Teach all agents about that tool in core instructions so visual confirmation becomes a normal part of browser-assisted work.
 
 Mechanically:
 
