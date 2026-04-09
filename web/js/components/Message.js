@@ -41,6 +41,13 @@ function formatCost(usd) {
   return `$${usd.toFixed(2)}`;
 }
 
+function renderToolLabel(tool) {
+  if (tool === 'media') {
+    return 'image';
+  }
+  return tool || '>';
+}
+
 function UsageFooter({ usage, toolHistory, expanded, onToggle }) {
   if (!usage || (!usage.numTurns && !usage.durationMs)) return null;
 
@@ -71,7 +78,7 @@ function UsageFooter({ usage, toolHistory, expanded, onToggle }) {
         <div class="mt-1.5 pl-3 border-l-2 border-border flex flex-col gap-0.5">
           ${toolHistory.map((t) => html`
             <div class="flex items-center gap-1.5 text-[10px] text-txt-muted">
-              <span class="font-mono text-[9px] text-accent shrink-0">${t.tool || '>'}</span>
+              <span class="font-mono text-[9px] text-accent shrink-0">${renderToolLabel(t.tool)}</span>
               <span class="truncate">${t.summary}</span>
             </div>
           `)}

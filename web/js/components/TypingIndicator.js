@@ -19,6 +19,16 @@ const PHASE_LABELS = {
   error: 'errored',
 };
 
+function renderProgressBadge(tool, isLatest) {
+  if (tool === 'media') {
+    return html`<span class="text-[10px] mt-px shrink-0 ${isLatest ? 'text-accent' : 'text-txt-muted'}">image</span>`;
+  }
+  if (!tool) {
+    return html`<span class="text-[10px] mt-px shrink-0">\u25CB</span>`;
+  }
+  return html`<span class="font-mono text-[10px] ${isLatest ? 'text-accent' : ''} shrink-0">${tool}</span>`;
+}
+
 export function TypingIndicator() {
   const [elapsed, setElapsed] = useState(0);
   const jid = selectedJid.value;
@@ -68,15 +78,14 @@ export function TypingIndicator() {
           ${recentTools.map((t, i) => {
             const isLatest = i === recentTools.length - 1;
             const isText = t.tool === 'text';
+            const isMedia = t.tool === 'media';
             return html`
               <div class="flex items-start gap-1.5 text-[11px] ${isLatest ? 'text-txt-2' : 'text-txt-muted opacity-50'}">
                 ${isText
                   ? html`<span class="text-[10px] mt-px shrink-0">\u25B8</span>`
-                  : !t.tool
-                    ? html`<span class="text-[10px] mt-px shrink-0">\u25CB</span>`
-                    : html`<span class="font-mono text-[10px] ${isLatest ? 'text-accent' : ''} shrink-0">${t.tool}</span>`
+                  : renderProgressBadge(t.tool, isLatest)
                 }
-                <span class="${isText ? '' : 'truncate'}">${t.summary}</span>
+                <span class="${isText || isMedia ? '' : 'truncate'}">${t.summary}</span>
               </div>
             `;
           })}
