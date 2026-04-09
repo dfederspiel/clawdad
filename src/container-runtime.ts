@@ -66,6 +66,13 @@ export function stopContainer(name: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
     throw new Error(`Invalid container name: ${name}`);
   }
+  const stack =
+    new Error().stack
+      ?.split('\n')
+      .slice(1, 4)
+      .map((l) => l.trim())
+      .join(' <- ') || 'unknown';
+  logger.info({ container: name, caller: stack }, 'stopContainer called');
   execSync(`${CONTAINER_RUNTIME_BIN} stop ${name}`, { stdio: 'pipe' });
 }
 
@@ -77,7 +84,10 @@ export function stopContainer(name: string): void {
  */
 export function ensureContainerRuntimeRunning(): boolean {
   try {
-    execSync(`${CONTAINER_RUNTIME_BIN} info`, { stdio: 'pipe' });
+    execSync(`${CONTAINER_RUNTIME_BIN} info`, {
+      stdio: 'pipe',
+      timeout: 10_000,
+    });
     logger.debug('Container runtime already running');
     return true;
   } catch (err) {

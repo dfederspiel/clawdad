@@ -43,8 +43,9 @@ export function TypingIndicator() {
     ? (minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`)
     : '';
 
-  // Show recent tool activity
-  const history = progress?.history || [];
+  // Show recent tool activity (exclude text events — those are agent response
+  // content that will arrive as a chat message, not status info)
+  const history = (progress?.history || []).filter(t => t.tool !== 'text');
   const recentTools = history.slice(-3);
   const label = phase ? (PHASE_LABELS[phase] || phase) : 'thinking';
   const showDots = isTyping || ['working', 'delegating', 'task_running'].includes(phase || '');

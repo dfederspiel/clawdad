@@ -2,20 +2,23 @@
 # Polaris Authentication Helper — Multi-Environment
 #
 # Source this file with an environment name to get session cookies.
-# Sessions are maintained by the host-level keepalive system and
-# shared via /workspace/global/sessions/{env}.json (read-only mount).
+# Sessions are maintained by the host-level keepalive system (Playwright
+# browser auth + periodic ping) and shared via
+# /workspace/global/sessions/{env}.json (read-only mount).
 #
 # Provides:
-#   $POLARIS_COOKIES    — cookie string for: curl -b "$POLARIS_COOKIES" ...
-#   $POLARIS_BASE_URL   — base URL for the environment
-#   $POLARIS_ENV        — environment name
-#   polaris_api()       — convenience: polaris_api METHOD /api/path [curl args]
+#   $POLARIS_COOKIES      — cookie string for: curl -b "$POLARIS_COOKIES" ...
+#   $POLARIS_BASE_URL     — base URL for the environment
+#   $POLARIS_ENV          — environment name
+#   $POLARIS_ORG_ID       — organization ID for the environment
+#   polaris_api()         — convenience: polaris_api METHOD /api/path [curl args]
 #
 # Usage:
 #   source /workspace/scripts/polaris-auth.sh cdev
-#   curl -b "$POLARIS_COOKIES" "$POLARIS_BASE_URL/api/auth/user-info"
-#   # Or:
-#   polaris_api GET /api/auth/user-info
+#   polaris_api GET /api/auth/openid-connect/userinfo
+#   # Or use curl directly:
+#   curl -b "$POLARIS_COOKIES" -H "organization-id: $POLARIS_ORG_ID" \
+#     "$POLARIS_BASE_URL/api/portfolios/"
 #
 # List available sessions:
 #   source /workspace/scripts/polaris-auth.sh --list
@@ -57,20 +60,33 @@ if [[ ! -f "$POLARIS_SESSION_FILE" ]]; then
   done
   POLARIS_COOKIES=""
   POLARIS_BASE_URL=""
+  POLARIS_ORG_ID=""
 else
   eval "$(python3 -c "
 import json, sys
 try:
     with open('$POLARIS_SESSION_FILE') as f:
         data = json.load(f)
-    cookies = data.get('cookies', {})
-    cookie_str = '; '.join(f'{k}={v}' for k, v in cookies.items())
+    session = data.get('session_cookie', '')
+    org_id = data.get('org_id', data.get('organization_id', ''))
     base_url = data.get('base_url', '')
+    api_token = data.get('api_token', '')
+    # Build cookie string: session + OrgId
+    cookie_parts = []
+    if session:
+        cookie_parts.append(f'session={session}')
+    if org_id:
+        cookie_parts.append(f'OrgId={org_id}')
+    cookie_str = '; '.join(cookie_parts)
     print(f'POLARIS_COOKIES=\"{cookie_str}\"')
     print(f'POLARIS_BASE_URL=\"{base_url}\"')
+    print(f'POLARIS_ORG_ID=\"{org_id}\"')
+    print(f'POLARIS_API_TOKEN=\"{api_token}\"')
 except Exception as e:
     print(f'POLARIS_COOKIES=\"\"', file=sys.stdout)
     print(f'POLARIS_BASE_URL=\"\"', file=sys.stdout)
+    print(f'POLARIS_ORG_ID=\"\"', file=sys.stdout)
+    print(f'POLARIS_API_TOKEN=\"\"', file=sys.stdout)
     print(f'Error reading session: {e}', file=sys.stderr)
   " 2>/dev/null)"
 fi
@@ -80,11 +96,47 @@ polaris_api() {
   local api_path="${2:?Usage: polaris_api METHOD /api/path [curl_args...]}"
   shift 2
 
-  if [[ -z "$POLARIS_COOKIES" ]]; then
-    echo "ERROR: No Polaris session available for '$POLARIS_ENV'" >&2
+  # Re-read session file for fresh cookies (keepalive may have refreshed)
+  local _cookies _org_id _base_url _api_token
+  eval "$(python3 -c "
+import json, sys
+try:
+    with open('${POLARIS_SESSION_FILE}') as f:
+        data = json.load(f)
+    session = data.get('session_cookie', '')
+    org_id = data.get('org_id', data.get('organization_id', ''))
+    base_url = data.get('base_url', '')
+    api_token = data.get('api_token', '')
+    cookie_parts = []
+    if session: cookie_parts.append(f'session={session}')
+    if org_id:  cookie_parts.append(f'OrgId={org_id}')
+    print(f'_cookies=\"{\";\".join(cookie_parts)}\"')
+    print(f'_org_id=\"{org_id}\"')
+    print(f'_base_url=\"{base_url}\"')
+    print(f'_api_token=\"{api_token}\"')
+except Exception as e:
+    print('_cookies=\"\"'); print('_org_id=\"\"')
+    print('_base_url=\"\"'); print('_api_token=\"\"')
+    print(f'echo \"Error reading session: {e}\" >&2')
+" 2>/dev/null)"
+
+  if [[ -z "$_cookies" && -z "$_api_token" ]]; then
+    echo "ERROR: No Polaris session or API token available for '$POLARIS_ENV'" >&2
     return 1
   fi
 
-  /workspace/scripts/api.sh "polaris-${POLARIS_ENV}" "$method" "${POLARIS_BASE_URL}${api_path}" \
-    -b "$POLARIS_COOKIES" "$@"
+  # Prefer API token (stable, long-lived) over session cookies (short-lived)
+  # API token auth: Api-Token header, NO organization-id header (conflicts)
+  # Session cookie auth: -b cookies + organization-id header (required)
+  local auth_args=()
+  if [[ -n "$_api_token" ]]; then
+    auth_args+=(-H "Api-Token: ${_api_token}")
+  else
+    auth_args+=(-b "$_cookies" -H "organization-id: ${_org_id}")
+  fi
+
+  /workspace/scripts/api.sh "polaris-${POLARIS_ENV}" "$method" "${_base_url}${api_path}" \
+    "${auth_args[@]}" \
+    -H "x-client-source: polaris-ui" \
+    "$@"
 }

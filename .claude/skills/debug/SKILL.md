@@ -28,12 +28,23 @@ src/container-runner.ts               container/agent-runner/
 
 ## Log Locations
 
-| Log | Location | Content |
-|-----|----------|---------|
-| **Main app logs** | `logs/nanoclaw.log` | Host-side WhatsApp, routing, container spawning |
-| **Main app errors** | `logs/nanoclaw.error.log` | Host-side errors |
-| **Container run logs** | `groups/{folder}/logs/container-*.log` | Per-run: input, mounts, stderr, stdout |
-| **Claude sessions** | `~/.claude/projects/` | Claude Code session history |
+**IMPORTANT:** The log file depends on how ClawDad was started:
+
+| Launch method | Log file | Error log |
+|---------------|----------|-----------|
+| `launchctl` service | `logs/clawdad.log` | `logs/clawdad.error.log` |
+| `npm run dev` / manual | `logs/nanoclaw.log` | `logs/nanoclaw.error.log` |
+
+To check which log the running instance uses:
+```bash
+launchctl print gui/$(id -u)/com.clawdad.clawdad 2>&1 | grep "stdout path"
+```
+
+| Log | Content |
+|-----|---------|
+| **Main app logs** | Host-side routing, container spawning, agent lifecycle |
+| **Container run logs** (`groups/{folder}/logs/container-*.log`) | Per-run: input, mounts, stderr, stdout |
+| **Claude sessions** (`~/.claude/projects/`) | Claude Code session history |
 
 ## Enabling Debug Logging
 
@@ -56,6 +67,43 @@ Debug level shows:
 - Real-time container stderr
 
 ## Common Issues
+
+### 0. Container Exit 137 (SIGKILL)
+
+Exit code 137 = 128 + signal 9 (SIGKILL). The container was forcibly killed. **Do not deep-dive into code first — work the triage checklist:**
+
+**Step 1: Restart the service**
+```bash
+kill $(pgrep -f 'node dist/index.js')
+# launchd auto-restarts — verify:
+sleep 3 && curl -sf http://localhost:3456/api/health | python3 -c "import sys,json; print(json.load(sys.stdin)['overall'])"
+```
+Re-send a test message. If the issue stops, it was accumulated process state (the most common cause).
+
+**Step 2: Check for stale/competing services**
+```bash
+launchctl list | grep -iE 'claw|nanoclaw'
+# Only com.clawdad.clawdad should exist. Remove others:
+# launchctl bootout gui/$(id -u)/<stale-name>
+# rm ~/Library/LaunchAgents/<stale-name>.plist
+```
+
+**Step 3: Check Docker events**
+```bash
+docker events --filter event=kill --filter event=die --since 5m \
+  --format '{{.Time}} {{.Action}} signal={{.Actor.Attributes.signal}} execDur={{.Actor.Attributes.execDuration}} name={{.Actor.Attributes.name}}'
+```
+- **1-second SIGTERM→SIGKILL gap**: Docker client disconnection (the `docker run` child process died)
+- **10-second gap**: Normal `docker stop` — check `stopContainer` stack trace logs
+- **No SIGTERM, just SIGKILL**: OOM killer — check `docker stats` for memory pressure
+
+**Step 4: Check for concurrent instances**
+```bash
+ps aux | grep 'dist/index.js' | grep -v grep  # Should be exactly ONE
+```
+
+**Step 5: Instrument (if steps 1-4 don't resolve)**
+`container-runner.ts` has lifecycle listeners on the `docker run` child process (exit code, signal, elapsed time). Check logs for `docker run child process exited` entries to correlate child process death with container death.
 
 ### 1. "Claude Code process exited with code 1"
 

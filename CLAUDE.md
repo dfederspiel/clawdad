@@ -252,10 +252,12 @@ npm run build        # Compile TypeScript
 
 Service management (if installed as a service via `/setup`):
 ```bash
-# macOS (launchd)
-launchctl load ~/Library/LaunchAgents/com.clawdad.plist
-launchctl unload ~/Library/LaunchAgents/com.clawdad.plist
-launchctl kickstart -k gui/$(id -u)/com.clawdad  # restart
+# macOS (launchd) — service name is com.clawdad.clawdad
+launchctl load ~/Library/LaunchAgents/com.clawdad.clawdad.plist
+launchctl unload ~/Library/LaunchAgents/com.clawdad.clawdad.plist
+launchctl kickstart -k gui/$(id -u)/com.clawdad.clawdad  # restart
+# If kickstart doesn't change the PID, kill the process directly:
+# kill $(pgrep -f 'node dist/index.js')  # launchd will auto-restart
 
 # Linux (systemd)
 systemctl --user start nanoclaw
@@ -292,19 +294,33 @@ wsl -d Ubuntu -e bash -ic "systemctl --user status nanoclaw.service"  # WSL Disc
 
 ## Instance Architecture
 
-Single active instance (as of 2026-04-03):
+Single active instance (as of 2026-04-08):
 
 | Instance | Location | Service Unit | Channels | Trigger |
 |----------|----------|-------------|----------|---------|
-| WSL Ubuntu | `/home/david/code/clawdad` | `com-nanoclaw-clawdad.service` | Web UI (`:3456`) | `@Andy` |
+| macOS | `/Users/davidaf/code/clawdad` | `com.clawdad.clawdad` (launchd) | Web UI (`:3456`) | `@Andy` |
 
-The previous WSL nanoclaw instance (`/home/david/code/nanoclaw`, `nanoclaw.service`) ran Discord + Gmail but has been stopped and disabled. If those channels are needed again, re-enable that service or add the channels to this instance.
+**Log files differ by launch method:**
+| How started | stdout/stderr log | Why |
+|-------------|------------------|-----|
+| `launchctl` (service) | `logs/clawdad.log`, `logs/clawdad.error.log` | plist `StandardOutPath`/`StandardErrorPath` |
+| `npm run dev` / manual | `logs/nanoclaw.log` | pino file transport in code |
+| `node dist/index.js >> logs/X.log` | wherever you redirect | manual |
 
-**WSL gotcha:** Node is installed via Linuxbrew (`/home/linuxbrew/.linuxbrew/bin/node`) and is not in the non-interactive PATH. The systemd unit uses the full path. If starting manually, use `bash -ic` or the full node path.
+Always check the right log file for the running instance. Use `launchctl print gui/$(id -u)/com.clawdad.clawdad` to see `stdout path`.
 
-**Stale services:** There are inactive systemd units (`com-nanoclaw-clawdad-test.service`, `com-nanoclaw-test2.service`, `nanoclaw.service`) pointing at old/test repos. These are disabled. Only `com-nanoclaw-clawdad.service` should be enabled.
+**Stale services:** Periodically audit `launchctl list | grep -iE 'claw|nanoclaw'`. Old services (e.g. `com.nanoclaw.nanoclaw`) that crash-loop can interfere with running containers. Remove them: `launchctl bootout gui/$(id -u)/<name> && rm ~/Library/LaunchAgents/<name>.plist`.
 
 ## Troubleshooting
+
+**Container exit 137 (SIGKILL) — triage checklist:**
+Exit 137 means the container received SIGKILL. Before deep-diving into code, work through this checklist in order:
+
+1. **Restart the service first.** Accumulated process state (orphaned child processes, leaked timers, retry cascades) is the most common cause. Kill the process and let launchd restart: `kill $(pgrep -f 'node dist/index.js')`. Re-test immediately.
+2. **Check for stale services.** Run `launchctl list | grep -iE 'claw|nanoclaw'`. Any service besides `com.clawdad.clawdad` that crash-loops can interfere — it may run orphan cleanup that kills your containers. Remove with `launchctl bootout gui/$(id -u)/<name>`.
+3. **Check Docker events.** `docker events --filter event=kill --filter event=die --since 5m --format '{{.Time}} {{.Action}} signal={{.Actor.Attributes.signal}} name={{.Actor.Attributes.name}}'` — look at the SIGTERM→SIGKILL gap. 1-second gap = client disconnection (not `docker stop`). 10-second gap = normal `docker stop`.
+4. **Check for concurrent instances.** `ps aux | grep 'dist/index.js' | grep -v grep` — there should be exactly one process.
+5. **Only then** trace code paths — check `stopContainer` stack trace logs, idle timers, stale container cleanup in `spawnContainer`.
 
 **WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `npx tsx scripts/apply-skill.ts .claude/skills/add-whatsapp && npm run build`) to install it. Existing auth credentials and groups are preserved.
 

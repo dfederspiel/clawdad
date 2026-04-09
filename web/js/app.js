@@ -183,6 +183,8 @@ api.onSSE('play_sound', (data) => {
 });
 
 api.onSSE('agent_progress', (data) => {
+  // Ignore progress events that arrive after typing state was cleared (race with message delivery)
+  if (!typingGroups.value[data.jid]) return;
   const prev = agentProgress.value[data.jid];
   const history = prev?.history || [];
   // Keep last 20 progress events for the transcript

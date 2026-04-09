@@ -663,7 +663,10 @@ export async function spawnContainer(
       : '';
   const containerPrefix = `nanoclaw-${safeName}${agentSuffix}-`;
 
-  // Stop any stale containers for this group before spawning
+  // Stop stale containers for this group before spawning.
+  // Skip containers spawned within the last 60s — they may be mid-query
+  // and killing them causes a retry cascade (spawn kills running → error →
+  // retry → spawn kills running → ...).
   try {
     const existing = execSync(
       `${CONTAINER_RUNTIME_BIN} ps --filter name=${containerPrefix} --format "{{.Names}}"`,
@@ -672,7 +675,18 @@ export async function spawnContainer(
       .trim()
       .split('\n')
       .filter(Boolean);
+    const now = Date.now();
     for (const name of existing) {
+      // Container names end with a timestamp: nanoclaw-{group}-{Date.now()}
+      const tsMatch = name.match(/-(\d{13,})$/);
+      const spawnedAt = tsMatch ? parseInt(tsMatch[1], 10) : 0;
+      if (now - spawnedAt < 60_000) {
+        logger.info(
+          { group: group.name, recent: name, ageMs: now - spawnedAt },
+          'Skipping recent container (< 60s old)',
+        );
+        continue;
+      }
       logger.info(
         { group: group.name, stale: name },
         'Stopping stale container before spawn',
@@ -716,6 +730,30 @@ export async function spawnContainer(
 
   container.stdin.write(JSON.stringify(input));
   container.stdin.end();
+
+  const spawnTime = Date.now();
+  // Debug: track child process lifecycle to diagnose exit 137
+  container.on('exit', (code, signal) => {
+    const elapsed = Date.now() - spawnTime;
+    logger.info(
+      { group: group.name, containerName, code, signal, elapsedMs: elapsed },
+      'docker run child process exited',
+    );
+  });
+  container.stdin.on('close', () => {
+    const elapsed = Date.now() - spawnTime;
+    logger.debug(
+      { group: group.name, containerName, elapsedMs: elapsed },
+      'docker run stdin pipe closed',
+    );
+  });
+  container.stdout.on('close', () => {
+    const elapsed = Date.now() - spawnTime;
+    logger.debug(
+      { group: group.name, containerName, elapsedMs: elapsed },
+      'docker run stdout pipe closed',
+    );
+  });
 
   const parser = new StdoutParser();
   let stdout = '';

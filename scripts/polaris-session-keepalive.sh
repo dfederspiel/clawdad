@@ -167,7 +167,8 @@ HTTP_CODE=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" \
   -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
   -L --max-redirs 10 \
   --max-time 15 \
-  -d "username=${EMAIL}&password=${PASSWORD}" \
+  --data-urlencode "username=${EMAIL}" \
+  --data-urlencode "password=${PASSWORD}" \
   "$ACTION_URL" 2>/dev/null) || HTTP_CODE="000"
 
 if [[ "$HTTP_CODE" == "000" ]]; then

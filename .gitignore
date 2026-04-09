@@ -27,6 +27,7 @@ groups/global-web/*
 
 # Temp files
 .tmp-*
+.playwright-mcp/
 ecosystem.config.cjs
 
 # OS
