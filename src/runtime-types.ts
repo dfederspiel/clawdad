@@ -15,6 +15,15 @@ export type RuntimeSupportLevel =
   | 'sdk-dependent'
   | 'unsupported';
 
+export type RuntimeFeatureStatus = 'available' | 'conditional' | 'unavailable';
+
+export type RuntimeModelClass =
+  | 'chat'
+  | 'vision-chat'
+  | 'embedding'
+  | 'tool-specialized'
+  | 'unknown';
+
 export interface AgentRuntimeConfig {
   provider: RuntimeProvider;
   model?: string;
@@ -86,6 +95,7 @@ export type RuntimeEvent =
       usage?: RuntimeUsageData;
       textsAlreadyStreamed?: number;
       newSessionId?: string;
+      resumeAt?: string;
     };
 
 export interface RuntimeCapabilityProfile {
@@ -104,4 +114,43 @@ export interface RuntimeCapabilityProfile {
 export interface RuntimeSession {
   provider: RuntimeProvider;
   capabilities: RuntimeCapabilityProfile;
+}
+
+export interface RuntimeFeatureSet {
+  textGeneration: RuntimeFeatureStatus;
+  imageInput: RuntimeFeatureStatus;
+  localImageFileInput: RuntimeFeatureStatus;
+  remoteImageUrlInput: RuntimeFeatureStatus;
+  base64ImageInput: RuntimeFeatureStatus;
+  toolUse: RuntimeFeatureStatus;
+  streamingText: RuntimeFeatureStatus;
+  sessionResume: RuntimeFeatureStatus;
+  embeddings: RuntimeFeatureStatus;
+}
+
+export interface ResolvedRuntimeProfile {
+  runtime: AgentRuntimeConfig;
+  provider: RuntimeProvider;
+  model?: string;
+  modelClass: RuntimeModelClass;
+  capabilities: RuntimeCapabilityProfile;
+  features: RuntimeFeatureSet;
+  notes: string[];
+}
+
+export interface RequiredRuntimeFeatures {
+  textGeneration?: boolean;
+  imageInput?: boolean;
+  toolUse?: boolean;
+  streamingText?: boolean;
+  sessionResume?: boolean;
+  embeddings?: boolean;
+}
+
+export interface RuntimeCompatibilityReport {
+  compatible: boolean;
+  downgradedFeatures: Array<keyof RequiredRuntimeFeatures>;
+  upgradedFeatures: Array<keyof RequiredRuntimeFeatures>;
+  blockedByModelClass?: string;
+  notes: string[];
 }

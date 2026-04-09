@@ -86,6 +86,7 @@ export type RuntimeEvent =
       usage?: RuntimeUsageData;
       textsAlreadyStreamed?: number;
       newSessionId?: string;
+      resumeAt?: string;
     };
 
 export interface RuntimeCapabilityProfile {
