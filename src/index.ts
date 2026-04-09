@@ -109,6 +109,7 @@ import {
   startRemoteControl,
   stopRemoteControl,
 } from './remote-control.js';
+import { resolveEffectiveRuntime } from './runtime-resolution.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -2004,7 +2005,7 @@ async function runAgent(
         agentId,
         agentName: agent?.name || DEFAULT_AGENT_NAME,
         runBatchId,
-        runtime: agent?.runtime,
+        runtime: resolveEffectiveRuntime(agent, group.folder),
         canDelegate: agent ? !agent.trigger : false,
         isDelegation: isDelegation || false,
         poolManaged: true,
@@ -2078,7 +2079,7 @@ async function runAgent(
       agentId,
       agentName: agent?.name || DEFAULT_AGENT_NAME,
       runBatchId,
-      runtime: agent?.runtime,
+      runtime: resolveEffectiveRuntime(agent, group.folder),
       canDelegate: agent ? !agent.trigger : false,
       isDelegation: isDelegation || false,
       poolManaged: false,
@@ -2650,6 +2651,10 @@ async function main(): Promise<void> {
       uptime: process.uptime(),
     }),
     getThreadInfo: (threadId: string) => activeThreads.get(threadId),
+    getDiscoveredAgents: (jid: string) => {
+      const group = registeredGroups[jid];
+      return group ? discoverAgents(group) : [];
+    },
     onThreadReply: (threadId: string, agentJid: string) => {
       pendingOrigins[agentJid] = {
         originJid: activeThreads.get(threadId)!.originJid,

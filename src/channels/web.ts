@@ -9,6 +9,11 @@ import {
   resolveAgentClaudeMdPath,
 } from '../agent-discovery.js';
 import {
+  compareRuntimeProfiles,
+  resolveRuntimeProfile,
+} from '../runtime-profile.js';
+import { resolveEffectiveRuntime } from '../runtime-resolution.js';
+import {
   getAchievementResponse,
   checkTelemetryAchievements,
   AchievementDef,
@@ -758,6 +763,46 @@ export class WebChannel implements Channel {
 
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
       return this.refreshAgentsAndRespond(res, jid);
+    }
+
+    // GET /api/groups/:folder/agents/:agent/runtime-profile — inspect
+    // declared/effective runtime and resolved capabilities for an agent.
+    const runtimeProfileMatch = url.pathname.match(
+      /^\/api\/groups\/([A-Za-z0-9_-]+)\/agents\/([A-Za-z0-9_-]+)\/runtime-profile$/,
+    );
+    if (method === 'GET' && runtimeProfileMatch) {
+      const folderSlug = decodeURIComponent(runtimeProfileMatch[1]);
+      const agentName = decodeURIComponent(runtimeProfileMatch[2]);
+      const jid = `web:${folderSlug}`;
+      const group = this.opts.registeredGroups()[jid];
+      if (!group) {
+        return this.json(res, 404, { error: 'Group not found' });
+      }
+
+      const agents =
+        this.opts.getDiscoveredAgents?.(jid) || discoverAgents(group);
+      const agent = agents.find((entry) => entry.name === agentName);
+      if (!agent) {
+        return this.json(res, 404, { error: 'Agent not found' });
+      }
+
+      const declaredRuntime = agent.runtime || null;
+      const effectiveRuntime = resolveEffectiveRuntime(agent, group.folder);
+      const profile = resolveRuntimeProfile(effectiveRuntime);
+      const currentProfile = resolveRuntimeProfile(agent.runtime);
+      const compatibility = compareRuntimeProfiles(currentProfile, profile);
+
+      return this.json(res, 200, {
+        agent: {
+          id: agent.id,
+          name: agent.name,
+          displayName: agent.displayName,
+        },
+        declaredRuntime,
+        effectiveRuntime,
+        resolvedProfile: profile,
+        compatibilityFromDeclared: compatibility,
+      });
     }
 
     // DELETE /api/groups/:folder/agents/:agent — remove an agent from a group
