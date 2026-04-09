@@ -86,6 +86,13 @@ To show a screenshot in the web UI chat, prefer `mcp__nanoclaw__publish_browser_
 
 If you need manual control, save the screenshot under a dedicated subdirectory like `/workspace/group/artifacts/screenshots/` and then call `publish_media` with that path.
 
+Use that snapshot tool in particular when:
+
+- the user asks to see the page, asks for a screenshot, or asks "what do you see?"
+- you are blocked by a login wall, captcha, permission prompt, modal trap, missing button, or obviously broken layout
+
+In blocker cases, publish one clear screenshot with a short caption that explains what you need from the user.
+
 ### Wait
 
 ```bash

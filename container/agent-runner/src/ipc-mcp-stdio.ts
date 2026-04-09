@@ -158,7 +158,11 @@ server.tool(
 This is the fastest way to show the user a browser screenshot:
 - It saves the image under /workspace/group/artifacts/screenshots/
 - It publishes the screenshot inline to the web chat
-- Prefer this over manual screenshot + publish_media when you just need a quick visual snapshot`,
+- Prefer this over manual screenshot + publish_media when you just need a quick visual snapshot
+
+Especially useful when:
+- The user asks "show me", "what do you see?", or requests a screenshot
+- Browser work is blocked by a login wall, captcha, permission prompt, modal trap, missing control, or broken layout`,
   {
     filename: z.string().optional().describe('Optional filename like "login-state.png". Defaults to a timestamped name under /workspace/group/artifacts/screenshots/.'),
     caption: z.string().optional().describe('Optional user-facing caption for the screenshot.'),

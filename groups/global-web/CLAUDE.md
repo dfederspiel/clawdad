@@ -15,6 +15,14 @@ Rich content blocks (`:::blocks` fences) are available for structured output —
 - When the user uploads an image, it may appear inline in the thread and also be available to you as a file path under `/workspace/group/uploads/`.
 - Be selective. Publish screenshots when they help the user decide, verify, or debug. Avoid spamming the thread with low-value snapshots.
 
+### Snapshot Policy
+
+- If the user asks to "show me", "send a screenshot", "what do you see?", or anything similar, strongly prefer `mcp__nanoclaw__publish_browser_snapshot` instead of answering only in text.
+- If browser work reaches a blocker or ambiguous visual state, publish one screenshot before asking the user what to do next.
+- Typical blocker states include login walls, captchas, permission prompts, modal traps, confusing UI forks, missing expected controls, and obviously broken layouts.
+- When publishing a blocker screenshot, include a short caption that explains what is blocking progress and what decision or confirmation you need from the user.
+- Do not publish a screenshot for every browser step. One good screenshot at the right decision point is better than a stream of low-signal images.
+
 ## Sounds and Status
 
 You can play notification sounds and set your sidebar status using MCP tools:
