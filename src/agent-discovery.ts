@@ -9,6 +9,7 @@ import path from 'path';
 
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { AgentRuntimeConfig } from './runtime-types.js';
 import { Agent, ContainerConfig, RegisteredGroup } from './types.js';
 
 export const DEFAULT_AGENT_NAME = 'default';
@@ -107,6 +108,7 @@ function loadAgentFromDir(
       if (config.status) agent.status = String(config.status);
       if (config.containerConfig)
         agent.containerConfig = config.containerConfig as ContainerConfig;
+      if (config.runtime) agent.runtime = config.runtime as AgentRuntimeConfig;
     } catch (err) {
       logger.warn(
         { group: groupFolder, agent: agentName, err },

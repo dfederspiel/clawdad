@@ -19,6 +19,7 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { AgentRuntimeConfig } from './runtime-interface.js';
 
 interface ContainerInput {
   prompt: string;
@@ -36,6 +37,7 @@ interface ContainerInput {
   poolManaged?: boolean;
   mainChatJid?: string;
   script?: string;
+  runtime?: AgentRuntimeConfig;
   achievements?: { id: string; name: string; description: string }[];
 }
 
