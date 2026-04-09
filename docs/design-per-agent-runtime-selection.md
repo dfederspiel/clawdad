@@ -58,6 +58,10 @@ Global defaults still matter, but they are defaults, not the source of truth.
 - Building full provider switching in one step without staged rollout
 - Eliminating Anthropic-specific optimizations immediately
 
+Related standard:
+
+- [design-provider-sdk-integration-standards.md](design-provider-sdk-integration-standards.md) defines the required adapter boundary, fallback behavior, and test bar for each provider SDK/runtime integration.
+
 ---
 
 ## Concepts
