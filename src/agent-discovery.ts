@@ -179,6 +179,7 @@ export function buildMultiAgentContext(
       `Avoid over-narrating future delegation steps to the user. If the conversation changes direction, treat older delegated work as possibly superseded and respond to the newest context.`,
       `Be specific in your delegation message — tell the agent exactly what to do and what context it needs.`,
       `Artifacts should be written under a dedicated subdirectory of /workspace/group/ (for example /workspace/group/artifacts/ or /workspace/group/uploads/) so all agents can access them without cluttering the group root.`,
+      `If browser automation or visual review matters, prefer surfacing a screenshot with mcp__nanoclaw__publish_browser_snapshot or mcp__nanoclaw__publish_media instead of only describing the page in text.`,
       ``,
       `Silent chaining: when a specialist just finished and you are simply passing the baton to the next one in a sequence, delegate without a visible message. Only respond visibly when synthesizing results, making a decision, or all specialists in the current batch have reported back. Do not narrate each handoff.`,
     );
@@ -190,6 +191,7 @@ export function buildMultiAgentContext(
       `Your response may be superseded for user delivery if newer context arrives first. Complete the assigned work cleanly anyway; the coordinator will still see that you finished.`,
       `Do NOT try to act as other agents or delegate work yourself.`,
       `Write any artifacts under a dedicated subdirectory of /workspace/group/ (for example /workspace/group/artifacts/ or /workspace/group/uploads/) so other agents can access them without cluttering the group root.`,
+      `If visual context would help the user, publish a screenshot or image rather than only describing it in text.`,
     );
   }
 

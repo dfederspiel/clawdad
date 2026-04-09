@@ -7,6 +7,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
@@ -33,6 +34,40 @@ function writeIpcFile(dir: string, data: object): string {
   fs.renameSync(tempPath, filepath);
 
   return filename;
+}
+
+function ensureGroupWorkspacePath(filePath: string): string | null {
+  if (!filePath.startsWith('/workspace/group/')) {
+    return null;
+  }
+  const relative = path.relative('/workspace/group', filePath);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    return null;
+  }
+  return filePath;
+}
+
+function publishMediaRequest(args: {
+  path: string;
+  caption?: string;
+  alt?: string;
+  threadId?: string;
+  source?: 'agent_browser' | 'agent_output' | 'user_upload';
+}): void {
+  writeIpcFile(MESSAGES_DIR, {
+    type: 'publish_media',
+    chatJid,
+    containerPath: args.path,
+    caption: args.caption || undefined,
+    alt: args.alt || undefined,
+    threadId: args.threadId || undefined,
+    sender: process.env.NANOCLAW_AGENT_NAME || undefined,
+    source: args.source || 'agent_browser',
+    groupFolder,
+    agentId: process.env.NANOCLAW_AGENT_ID || undefined,
+    sessionId: process.env.NANOCLAW_SESSION_ID || undefined,
+    timestamp: new Date().toISOString(),
+  });
 }
 
 const server = new McpServer({
@@ -81,7 +116,7 @@ Important:
     thread_id: z.string().optional().describe('Optional thread ID when publishing inside a thread.'),
   },
   async (args) => {
-    if (!args.path.startsWith('/workspace/group/')) {
+    if (!ensureGroupWorkspacePath(args.path)) {
       return {
         content: [{
           type: 'text' as const,
@@ -99,26 +134,87 @@ Important:
           text: 'publish_media only supports image files (.png, .jpg, .jpeg, .gif, .webp) in phase 1. PDFs and other media are not yet renderable in chat.',
         }],
         isError: true,
-      };
-    }
+        };
+      }
 
-    writeIpcFile(MESSAGES_DIR, {
-      type: 'publish_media',
-      chatJid,
-      containerPath: args.path,
+    publishMediaRequest({
+      path: args.path,
       caption: args.caption || undefined,
       alt: args.alt || undefined,
       threadId: args.thread_id || undefined,
-      sender: process.env.NANOCLAW_AGENT_NAME || undefined,
       source: 'agent_browser',
-      groupFolder,
-      agentId: process.env.NANOCLAW_AGENT_ID || undefined,
-      sessionId: process.env.NANOCLAW_SESSION_ID || undefined,
-      timestamp: new Date().toISOString(),
     });
 
     return {
       content: [{ type: 'text' as const, text: 'Media published to chat.' }],
+    };
+  },
+);
+
+server.tool(
+  'publish_browser_snapshot',
+  `Capture the current browser view with agent-browser and publish it into the web chat thread. Use this when visual context would help the user confirm what you are seeing.
+
+This is the fastest way to show the user a browser screenshot:
+- It saves the image under /workspace/group/artifacts/screenshots/
+- It publishes the screenshot inline to the web chat
+- Prefer this over manual screenshot + publish_media when you just need a quick visual snapshot`,
+  {
+    filename: z.string().optional().describe('Optional filename like "login-state.png". Defaults to a timestamped name under /workspace/group/artifacts/screenshots/.'),
+    caption: z.string().optional().describe('Optional user-facing caption for the screenshot.'),
+    alt: z.string().optional().describe('Optional alt text describing the screenshot.'),
+    full_page: z.boolean().optional().describe('Capture the full page instead of just the viewport.'),
+    thread_id: z.string().optional().describe('Optional thread ID when publishing inside a thread.'),
+  },
+  async (args) => {
+    const screenshotsDir = '/workspace/group/artifacts/screenshots';
+    fs.mkdirSync(screenshotsDir, { recursive: true });
+
+    const requestedName = (args.filename || '').trim();
+    const safeName = requestedName
+      ? path.basename(requestedName).replace(/[^A-Za-z0-9._-]/g, '-')
+      : `snapshot-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+    const filename = /\.(png|jpg|jpeg|gif|webp)$/i.test(safeName)
+      ? safeName
+      : `${safeName}.png`;
+    const outputPath = path.join(screenshotsDir, filename);
+
+    const screenshotArgs = ['screenshot'];
+    if (args.full_page) {
+      screenshotArgs.push('--full');
+    }
+    screenshotArgs.push(outputPath);
+
+    try {
+      execFileSync('agent-browser', screenshotArgs, {
+        cwd: '/workspace/group',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        encoding: 'utf-8',
+      });
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Failed to capture browser snapshot: ${details}`,
+        }],
+        isError: true,
+      };
+    }
+
+    publishMediaRequest({
+      path: outputPath,
+      caption: args.caption || undefined,
+      alt: args.alt || undefined,
+      threadId: args.thread_id || undefined,
+      source: 'agent_browser',
+    });
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Browser snapshot published from ${outputPath}.`,
+      }],
     };
   },
 );

@@ -82,7 +82,9 @@ agent-browser screenshot --full   # Full page
 agent-browser pdf output.pdf      # Save as PDF
 ```
 
-To show a screenshot in the web UI chat, save it under a dedicated subdirectory like `/workspace/group/artifacts/screenshots/` and then call `publish_media` with that path.
+To show a screenshot in the web UI chat, prefer `mcp__nanoclaw__publish_browser_snapshot` because it captures and publishes in one step.
+
+If you need manual control, save the screenshot under a dedicated subdirectory like `/workspace/group/artifacts/screenshots/` and then call `publish_media` with that path.
 
 ### Wait
 

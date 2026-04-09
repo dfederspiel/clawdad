@@ -239,6 +239,11 @@ The agent intentionally says:
 - "Please look at this state"
 - "I’m blocked on this screen"
 
+Short-term implementation note:
+
+- Provide a first-class `publish_browser_snapshot` tool that captures with `agent-browser` and publishes inline in one step.
+- Teach all agents about that tool in core instructions so visual confirmation becomes a normal part of browser-assisted work.
+
 Mechanically:
 
 1. `agent-browser screenshot` saves file
