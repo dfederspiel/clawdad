@@ -568,7 +568,28 @@ export class WebChannel implements Channel {
         thread_id: thread_id || undefined,
       };
 
-      this.opts.onMessage(jid, msg);
+      if (thread_id) {
+        // Thread reply: store in the origin chat, mirror to the thread agent,
+        // and enqueue that agent just like a text thread reply.
+        this.opts.onMessage(jid, msg);
+        const threadInfo = this.opts.getThreadInfo?.(thread_id);
+        if (threadInfo) {
+          storeMessageDirect({
+            id: `${msg.id}_thread_${threadInfo.agentJid}`,
+            chat_jid: threadInfo.agentJid,
+            sender: msg.sender,
+            sender_name: msg.sender_name,
+            content: msg.content,
+            timestamp: msg.timestamp,
+            is_from_me: false,
+            is_bot_message: msg.is_bot_message,
+            thread_id,
+          });
+          this.opts.onThreadReply?.(thread_id, threadInfo.agentJid);
+        }
+      } else {
+        this.opts.onMessage(jid, msg);
+      }
       this.broadcast('user_message', { jid, message: msg });
       return this.json(res, 201, { ok: true, artifactId });
     }

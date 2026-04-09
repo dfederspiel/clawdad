@@ -2887,6 +2887,13 @@ async function main(): Promise<void> {
         artifact,
         request.sender,
       );
+      broadcastProgress(request.chatJid, {
+        tool: 'media',
+        summary: request.threadId
+          ? 'Published image in thread'
+          : 'Published image to chat',
+        timestamp: new Date().toISOString(),
+      });
     },
     onDelegateToAgent: (request) => {
       const {
