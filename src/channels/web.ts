@@ -24,6 +24,7 @@ import {
 import { getHealthStatus } from '../health.js';
 import {
   getMessagesSince,
+  getMediaArtifact,
   storeMessageDirect,
   updateMessageContent,
   clearMessages,
@@ -48,6 +49,7 @@ import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
+  MediaArtifact,
   NewMessage,
   RegisteredGroup,
   ScheduledTask,
@@ -60,8 +62,13 @@ const MIME: Record<string, string> = {
   '.css': 'text/css',
   '.js': 'application/javascript',
   '.json': 'application/json',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+  '.pdf': 'application/pdf',
 };
 
 // SSE client connections
@@ -203,6 +210,54 @@ export class WebChannel implements Channel {
       sender_name: senderName,
     });
     logger.info({ jid, length: text.length, threadId }, 'Web message sent');
+    return id;
+  }
+
+  publishMediaMessage(
+    jid: string,
+    artifact: MediaArtifact,
+    senderName?: string,
+  ): string {
+    const id = randomUUID();
+    const timestamp = new Date().toISOString();
+    const effectiveSender =
+      senderName || getActiveAgentName(jid) || ASSISTANT_NAME;
+    const blocks = [
+      {
+        type: 'image',
+        artifactId: artifact.id,
+        src: `/api/media/${artifact.id}`,
+        alt: artifact.alt || artifact.caption || 'Published image',
+        caption: artifact.caption || '',
+      },
+    ];
+    const text = `:::blocks\n${JSON.stringify(blocks, null, 2)}\n:::`;
+
+    storeMessageDirect({
+      id,
+      chat_jid: jid,
+      sender: effectiveSender,
+      sender_name: effectiveSender,
+      content: text,
+      timestamp,
+      is_from_me: true,
+      is_bot_message: true,
+      thread_id: artifact.thread_id,
+    });
+
+    this.broadcast('message', {
+      jid,
+      message_id: id,
+      text,
+      timestamp,
+      thread_id: artifact.thread_id,
+      sender_name: effectiveSender,
+    });
+
+    logger.info(
+      { jid, artifactId: artifact.id, threadId: artifact.thread_id },
+      'Web media message sent',
+    );
     return id;
   }
 
@@ -377,6 +432,21 @@ export class WebChannel implements Channel {
           agents: this.opts.getGroupAgents?.(jid) || [],
         }));
       return this.json(res, 200, { groups: webGroups });
+    }
+
+    const mediaMatch = url.pathname.match(/^\/api\/media\/([A-Za-z0-9_-]+)$/);
+    if (method === 'GET' && mediaMatch) {
+      const artifact = getMediaArtifact(mediaMatch[1]);
+      if (!artifact || !fs.existsSync(artifact.path)) {
+        return this.json(res, 404, { error: 'Media not found' });
+      }
+
+      res.writeHead(200, {
+        'Content-Type': artifact.mime_type,
+        'Cache-Control': 'private, max-age=3600',
+      });
+      fs.createReadStream(artifact.path).pipe(res);
+      return;
     }
 
     // POST /api/groups/:folder/agents — add or clone an agent into a group

@@ -77,6 +77,16 @@ export interface IpcDeps {
     sourceBatchId?: string;
     completionPolicy?: 'final_response' | 'retrigger_coordinator';
   }) => void;
+  onPublishMedia?: (request: {
+    sourceGroup: string;
+    chatJid: string;
+    containerPath: string;
+    caption?: string;
+    alt?: string;
+    threadId?: string;
+    sender?: string;
+    source?: 'agent_browser' | 'agent_output' | 'user_upload';
+  }) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -151,6 +161,29 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     'Unauthorized IPC message attempt blocked',
                   );
                 }
+              } else if (
+                data.type === 'publish_media' &&
+                data.chatJid &&
+                data.containerPath
+              ) {
+                deps.onPublishMedia?.({
+                  sourceGroup,
+                  chatJid: data.chatJid,
+                  containerPath: data.containerPath,
+                  caption: data.caption || undefined,
+                  alt: data.alt || undefined,
+                  threadId: data.threadId || undefined,
+                  sender: data.sender || undefined,
+                  source: data.source || 'agent_browser',
+                });
+                logger.info(
+                  {
+                    chatJid: data.chatJid,
+                    sourceGroup,
+                    path: data.containerPath,
+                  },
+                  'IPC media publish requested',
+                );
               }
               fs.unlinkSync(filePath);
             } catch (err) {

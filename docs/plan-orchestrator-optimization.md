@@ -38,6 +38,34 @@ Each layer multiplies the savings of the ones below it. Multi-provider without w
 
 The right order is 1 → 2 → 3, but the work can overlap.
 
+### New Cross-Cutting Track: Internal Agent Event Channel
+
+Recent delegation and supersession work fixed an important user-facing problem: stale specialist output no longer has to clutter the thread. But it also made a larger architectural boundary visible.
+
+Today the shared conversation still acts as both:
+- the user-visible transcript
+- the coordination bus between agents
+
+That is increasingly awkward as delegation gets more concurrent, more pooled, and more cancellation-aware. We now have delivery-time suppression and coordinator-visible completion notes, which is a good bridge, but the cleaner long-term model is to separate:
+
+- **internal agent execution events**
+- **user-visible message delivery**
+
+This should be treated as a cross-cutting roadmap item that sits underneath Layers 1 and 2:
+
+- warm containers increase the value of precise interrupt/revise semantics
+- deterministic routing increases fan-out and coordination volume
+- both become easier to reason about if coordinator awareness does not depend on user-thread artifacts
+
+Design doc: `docs/design-internal-agent-event-channel.md`
+
+Near-term roadmap for this track:
+- Phase 1: dual-write internal completion and delivery events alongside current system notes
+- Phase 2: build coordinator follow-up context from internal events rather than transcript breadcrumbs
+- Phase 3: reduce routine specialist completion notes in the visible thread
+
+This is not a replacement for the current supersession work. It is the architectural continuation of it.
+
 ---
 
 ## Layer 1: Warm Container Pool

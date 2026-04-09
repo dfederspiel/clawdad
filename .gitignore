@@ -44,3 +44,6 @@ agents-sdk-docs
 
 # Clawdoodles — AI-generated templates (runtime output)
 clawdoodles/generated/
+
+# Playwright MCP runtime output
+.playwright-mcp/

@@ -183,7 +183,8 @@ api.onSSE('play_sound', (data) => {
 });
 
 api.onSSE('agent_progress', (data) => {
-  // Ignore progress events that arrive after typing state was cleared (race with message delivery)
+  // Drop late-arriving progress events for groups that have already cleared
+  // their typing state — prevents the indicator from flashing stale data.
   if (!typingGroups.value[data.jid]) return;
   const prev = agentProgress.value[data.jid];
   const history = prev?.history || [];

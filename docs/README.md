@@ -9,6 +9,8 @@ The files in this directory are original design documents and developer referenc
 | [SPEC.md](SPEC.md) | [Architecture](https://docs.nanoclaw.dev/concepts/architecture) |
 | [SECURITY.md](SECURITY.md) | [Security model](https://docs.nanoclaw.dev/concepts/security) |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | [Introduction](https://docs.nanoclaw.dev/introduction) |
+| [design-browser-snapshots-and-rich-media-chat.md](design-browser-snapshots-and-rich-media-chat.md) | Browser screenshots, images in chat, and rich media UX |
+| [design-internal-agent-event-channel.md](design-internal-agent-event-channel.md) | Internal agent coordination vs user-visible delivery |
 | [skills-as-branches.md](skills-as-branches.md) | [Skills system](https://docs.nanoclaw.dev/integrations/skills-system) |
 | [DEBUG_CHECKLIST.md](DEBUG_CHECKLIST.md) | [Troubleshooting](https://docs.nanoclaw.dev/advanced/troubleshooting) |
 | [docker-sandboxes.md](docker-sandboxes.md) | [Docker Sandboxes](https://docs.nanoclaw.dev/advanced/docker-sandboxes) |

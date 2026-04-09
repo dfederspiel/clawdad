@@ -1,5 +1,19 @@
 # Branch & Fork Maintenance Guidelines
 
+## Note On ClawDad
+
+This document describes the historical NanoClaw upstream/fork maintenance model.
+
+ClawDad no longer follows that workflow as an active practice. The project has diverged enough from `qwibitai/nanoclaw` that routine upstream merges are no longer expected. For ClawDad, upstream should be treated as:
+
+- an architectural reference
+- a source of occasional targeted cherry-picks
+- an ancestor to acknowledge clearly
+
+Not as a branch that this repo continuously rebases or merges.
+
+The rest of this document remains useful as background on the original NanoClaw fork/skill model, but it should not be read as current ClawDad maintenance policy.
+
 ## Structure
 
 **`qwibitai/nanoclaw`** (upstream) — core engine with skill definitions (`.claude/skills/`). No channel code on `main`.

@@ -65,6 +65,63 @@ server.tool(
   },
 );
 
+server.tool(
+  'publish_media',
+  `Publish an image from /workspace/group/ into the web chat thread. Use this when you want the user to see a screenshot or visual artifact inline in the conversation.
+
+Important:
+- The file MUST already exist under /workspace/group/
+- This is currently intended for the web UI
+- For screenshots, save them under /workspace/group/ first, then call publish_media`,
+  {
+    path: z.string().describe('Absolute path to a file under /workspace/group/ (for example /workspace/group/debug/screenshot.png).'),
+    caption: z.string().optional().describe('Optional user-facing caption to show above the media.'),
+    alt: z.string().optional().describe('Optional alt text describing the image for accessibility and context.'),
+    thread_id: z.string().optional().describe('Optional thread ID when publishing inside a thread.'),
+  },
+  async (args) => {
+    if (!args.path.startsWith('/workspace/group/')) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: 'publish_media only supports files under /workspace/group/ in phase 1.',
+        }],
+        isError: true,
+      };
+    }
+
+    const ext = args.path.toLowerCase().match(/\.(png|jpg|jpeg|gif|webp)$/);
+    if (!ext) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: 'publish_media only supports image files (.png, .jpg, .jpeg, .gif, .webp) in phase 1. PDFs and other media are not yet renderable in chat.',
+        }],
+        isError: true,
+      };
+    }
+
+    writeIpcFile(MESSAGES_DIR, {
+      type: 'publish_media',
+      chatJid,
+      containerPath: args.path,
+      caption: args.caption || undefined,
+      alt: args.alt || undefined,
+      threadId: args.thread_id || undefined,
+      sender: process.env.NANOCLAW_AGENT_NAME || undefined,
+      source: 'agent_browser',
+      groupFolder,
+      agentId: process.env.NANOCLAW_AGENT_ID || undefined,
+      sessionId: process.env.NANOCLAW_SESSION_ID || undefined,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [{ type: 'text' as const, text: 'Media published to chat.' }],
+    };
+  },
+);
+
 // escalate: non-main agents can send a message to the main/general group.
 // Main agents already have cross-group messaging via send_message.
 if (!isMain && mainJid) {
@@ -655,7 +712,9 @@ if (process.env.NANOCLAW_CAN_DELEGATE === '1') {
     'delegate_to_agent',
     `Delegate a task to another agent in this group. The target agent runs in its own container with the full conversation context plus your instructions. Use this when work falls outside your role.
 
-The target agent's response will appear in the chat. You do NOT need to wait for their response — it will arrive after your turn completes.
+The target agent runs after your turn completes. Their user-visible response may be suppressed if newer context arrives before delivery, but the coordinator still gets a system note that they finished.
+
+Use completion_policy: "final_response" by default. Use "retrigger_coordinator" only when you explicitly need a follow-up turn to combine or interpret specialist outputs.
 
 Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the three jokes I just told and rate them." })`,
     {

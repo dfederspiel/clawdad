@@ -183,7 +183,7 @@ export function PrerequisiteCheck({ onReady }) {
       <div class="max-w-xl w-full">
         <div class="text-center mb-8">
           <h2 class="text-2xl font-bold text-txt mb-1">ClawDad</h2>
-          <p class="text-xs text-txt-muted mb-3">NanoClaw Agent Orchestrator</p>
+          <p class="text-xs text-txt-muted mb-3">Container-native local agent orchestration</p>
           <p class="text-sm text-txt-2">
             ${allReady
               ? 'Everything looks good. Choose how you want to get started.'

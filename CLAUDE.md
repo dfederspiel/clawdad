@@ -219,6 +219,7 @@ Four types of skills exist in ClawDad. See [CONTRIBUTING.md](CONTRIBUTING.md) fo
 | `/restart` | Build and restart the service (no git pull) |
 | `/customize` | Adding channels, integrations, changing behavior |
 | `/debug` | Container issues, logs, troubleshooting |
+| `/report-bug` | Triage a failure and, if confirmed as a core platform bug, file a sanitized issue against `dfederspiel/clawdad` |
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
 

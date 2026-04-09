@@ -143,7 +143,7 @@ export function OnboardingGuide({ onCustom, compact = false }) {
             </p>
           ` : html`
             <h2 class="text-2xl font-bold text-txt mb-1">ClawDad</h2>
-            <p class="text-xs text-txt-muted mb-3">NanoClaw Agent Orchestrator</p>
+            <p class="text-xs text-txt-muted mb-3">Container-native local agent orchestration</p>
             <p class="text-sm text-txt-2">
               Pick a template to create your first agent. Each runs isolated with
               its own workspace — the agent will walk you through setup in chat.

@@ -10,6 +10,7 @@ import { ActionBlock } from './ActionBlock.js';
 import { DiffBlock } from './DiffBlock.js';
 import { FormBlock } from './FormBlock.js';
 import { SoundBlock } from './SoundBlock.js';
+import { ImageBlock } from './ImageBlock.js';
 
 const RENDERERS = {
   text: TextBlock,
@@ -23,6 +24,7 @@ const RENDERERS = {
   diff: DiffBlock,
   form: FormBlock,
   sound: SoundBlock,
+  image: ImageBlock,
 };
 
 export function BlockRenderer({ block }) {
