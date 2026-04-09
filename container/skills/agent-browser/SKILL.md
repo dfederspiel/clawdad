@@ -140,7 +140,7 @@ agent-browser open https://co.dev.polaris.blackduck.com
 
 This injects cookies AND localStorage tokens for every Polaris environment. The browser sends the right session automatically based on which domain you navigate to. No login flow needed — you land directly on the authenticated app.
 
-For direct API access (curl), session files are in `/workspace/global/sessions/` — one JSON per environment (e.g. `co.json`, `cdev.json`) with `base_url`, `session_cookie`, `org_id`, and `api_token`.
+For direct API access (curl), session files are in `/workspace/global/sessions/` — one JSON per environment (e.g. `co.json`, `cdev.json`, `im_assessor.json`) with `base_url`, `session_cookie`, `org_id`, and `api_token`. Run `source /workspace/scripts/polaris-auth.sh --list` to see all sessions and their types (tenant vs admin/assessor).
 
 ### Cookies & Storage
 

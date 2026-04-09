@@ -57,7 +57,7 @@ function discoverPolarisEnvironments(): string[] {
   const envs: string[] = [];
 
   for (const key of Object.keys(env)) {
-    const match = key.match(/^POLARIS_([A-Z0-9]+)_BASE_URL$/);
+    const match = key.match(/^POLARIS_([A-Z0-9]+(?:_[A-Z0-9]+)*)_BASE_URL$/);
     if (!match) continue;
 
     const envName = match[1].toLowerCase();
@@ -98,30 +98,39 @@ async function pingSession(envName: string): Promise<boolean> {
   const session = readSession(envName);
   if (!session) return false;
 
-  const cookieStr = `session=${session.session_cookie}; OrgId=${session.org_id}`;
-  const userinfoUrl = `${session.base_url}/api/auth/openid-connect/userinfo`;
+  // Assessor/admin sessions use org_id "master" (not a UUID) and need
+  // the admin userinfo endpoint without an organization-id header.
+  const isAdminSession = !/^[0-9a-f-]{36}$/.test(session.org_id);
+  const cookieStr = isAdminSession
+    ? `session=${session.session_cookie}`
+    : `session=${session.session_cookie}; OrgId=${session.org_id}`;
+  const userinfoUrl = isAdminSession
+    ? `${session.base_url}/api/auth/openid-connect/admin/userinfo`
+    : `${session.base_url}/api/auth/openid-connect/userinfo`;
+
+  const curlArgs = [
+    '-s',
+    '-o',
+    '/dev/null',
+    '-w',
+    '%{http_code}',
+    '-b',
+    cookieStr,
+    '-H',
+    'Accept: application/json',
+    '--max-time',
+    '10',
+    userinfoUrl,
+  ];
+  // Only add organization-id header for tenant-scoped sessions
+  if (!isAdminSession) {
+    curlArgs.splice(8, 0, '-H', `organization-id: ${session.organization_id}`);
+  }
 
   try {
-    const { stdout } = await execFileAsync(
-      'curl',
-      [
-        '-s',
-        '-o',
-        '/dev/null',
-        '-w',
-        '%{http_code}',
-        '-b',
-        cookieStr,
-        '-H',
-        `organization-id: ${session.organization_id}`,
-        '-H',
-        'Accept: application/json',
-        '--max-time',
-        '10',
-        userinfoUrl,
-      ],
-      { timeout: 15_000 },
-    );
+    const { stdout } = await execFileAsync('curl', curlArgs, {
+      timeout: 15_000,
+    });
 
     if (stdout.trim() === '200') {
       // Session still valid — update timestamp

@@ -89,11 +89,12 @@ async function authenticate(): Promise<void> {
   const page = await context.newPage();
 
   // Capture org ID from transient callback URL (e.g., /identity/signin/callback/{org-id})
+  // Matches both UUID org IDs and realm names like "master" (used by assessor accounts)
   let capturedOrgId = '';
   page.on('framenavigated', (frame) => {
     if (frame === page.mainFrame()) {
       const navUrl = frame.url();
-      const match = navUrl.match(/\/identity\/signin\/callback\/([0-9a-f-]{36})/);
+      const match = navUrl.match(/\/identity\/signin\/callback\/([a-z0-9-]+)/);
       if (match) capturedOrgId = match[1];
     }
   });
@@ -156,12 +157,15 @@ async function authenticate(): Promise<void> {
     let orgId = orgIdCookie?.value || capturedOrgId || '';
     if (!orgId) {
       // Try fetching from userinfo inside the browser (session may only work in-browser)
+      // Try both the standard and admin endpoints (assessor accounts use the admin variant)
       try {
         const userinfoResult = await page.evaluate(async () => {
-          const r = await fetch('/api/auth/openid-connect/userinfo', {
-            headers: { 'Accept': 'application/json' },
-          });
-          if (r.status === 200) return r.json();
+          for (const ep of ['/api/auth/openid-connect/userinfo', '/api/auth/openid-connect/admin/userinfo']) {
+            try {
+              const r = await fetch(ep, { headers: { 'Accept': 'application/json' } });
+              if (r.status === 200) return r.json();
+            } catch { /* try next */ }
+          }
           return null;
         });
         if (userinfoResult?.organization?.id) {

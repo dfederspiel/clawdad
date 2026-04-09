@@ -11,6 +11,7 @@
 #   $POLARIS_BASE_URL     — base URL for the environment
 #   $POLARIS_ENV          — environment name
 #   $POLARIS_ORG_ID       — organization ID for the environment
+#   $POLARIS_SESSION_TYPE — "tenant" (UUID org) or "admin" (assessor/master)
 #   polaris_api()         — convenience: polaris_api METHOD /api/path [curl args]
 #
 # Usage:
@@ -25,6 +26,9 @@
 
 POLARIS_SESSIONS_DIR="/workspace/global/sessions"
 
+# UUID pattern for detecting tenant vs admin sessions
+_POLARIS_UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
 # ── List mode ───────────────────────────────────────────────────────
 
 if [[ "${1:-}" == "--list" || "${1:-}" == "-l" ]]; then
@@ -36,11 +40,16 @@ if [[ "${1:-}" == "--list" || "${1:-}" == "-l" ]]; then
   for f in "$POLARIS_SESSIONS_DIR"/*.json; do
     [[ -f "$f" ]] || continue
     env_name=$(basename "$f" .json)
+    # Skip browser-state and playwright-state files
+    [[ "$env_name" == *-browser-state ]] && continue
+    [[ "$env_name" == "playwright-state" ]] && continue
     info=$(python3 -c "
-import json
+import json, re
 with open('$f') as fh:
     d = json.load(fh)
-print(f'{d.get(\"base_url\", \"?\")}  (updated: {d.get(\"updated_at\", \"?\")})')
+org_id = d.get('org_id', '')
+session_type = 'tenant' if re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', org_id) else 'admin'
+print(f'{d.get(\"base_url\", \"?\")}  [{session_type}]  (updated: {d.get(\"updated_at\", \"?\")})')
     " 2>/dev/null) || info="(unreadable)"
     echo "  $env_name — $info"
   done
@@ -49,21 +58,22 @@ fi
 
 # ── Load session ────────────────────────────────────────────────────
 
-POLARIS_ENV="${1:?Usage: source polaris-auth.sh <env-name>  (e.g., cdev, co, im)}"
+POLARIS_ENV="${1:?Usage: source polaris-auth.sh <env-name>  (e.g., cdev, co, im_assessor)}"
 POLARIS_SESSION_FILE="${POLARIS_SESSIONS_DIR}/${POLARIS_ENV}.json"
 
 if [[ ! -f "$POLARIS_SESSION_FILE" ]]; then
   echo "WARNING: No session for environment '$POLARIS_ENV' at $POLARIS_SESSION_FILE" >&2
   echo "Available sessions:" >&2
   ls "$POLARIS_SESSIONS_DIR"/*.json 2>/dev/null | while read -r f; do
-    echo "  $(basename "$f" .json)" >&2
+    basename "$f" .json >&2
   done
   POLARIS_COOKIES=""
   POLARIS_BASE_URL=""
   POLARIS_ORG_ID=""
+  POLARIS_SESSION_TYPE=""
 else
   eval "$(python3 -c "
-import json, sys
+import json, re, sys
 try:
     with open('$POLARIS_SESSION_FILE') as f:
         data = json.load(f)
@@ -71,22 +81,26 @@ try:
     org_id = data.get('org_id', data.get('organization_id', ''))
     base_url = data.get('base_url', '')
     api_token = data.get('api_token', '')
-    # Build cookie string: session + OrgId
+    is_tenant = bool(re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', org_id))
+    session_type = 'tenant' if is_tenant else 'admin'
+    # Build cookie string: session + OrgId (only for tenant sessions)
     cookie_parts = []
     if session:
         cookie_parts.append(f'session={session}')
-    if org_id:
+    if org_id and is_tenant:
         cookie_parts.append(f'OrgId={org_id}')
     cookie_str = '; '.join(cookie_parts)
     print(f'POLARIS_COOKIES=\"{cookie_str}\"')
     print(f'POLARIS_BASE_URL=\"{base_url}\"')
     print(f'POLARIS_ORG_ID=\"{org_id}\"')
     print(f'POLARIS_API_TOKEN=\"{api_token}\"')
+    print(f'POLARIS_SESSION_TYPE=\"{session_type}\"')
 except Exception as e:
     print(f'POLARIS_COOKIES=\"\"', file=sys.stdout)
     print(f'POLARIS_BASE_URL=\"\"', file=sys.stdout)
     print(f'POLARIS_ORG_ID=\"\"', file=sys.stdout)
     print(f'POLARIS_API_TOKEN=\"\"', file=sys.stdout)
+    print(f'POLARIS_SESSION_TYPE=\"\"', file=sys.stdout)
     print(f'Error reading session: {e}', file=sys.stderr)
   " 2>/dev/null)"
 fi
@@ -97,9 +111,9 @@ polaris_api() {
   shift 2
 
   # Re-read session file for fresh cookies (keepalive may have refreshed)
-  local _cookies _org_id _base_url _api_token
+  local _cookies _org_id _base_url _api_token _session_type
   eval "$(python3 -c "
-import json, sys
+import json, re, sys
 try:
     with open('${POLARIS_SESSION_FILE}') as f:
         data = json.load(f)
@@ -107,16 +121,20 @@ try:
     org_id = data.get('org_id', data.get('organization_id', ''))
     base_url = data.get('base_url', '')
     api_token = data.get('api_token', '')
+    is_tenant = bool(re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', org_id))
+    session_type = 'tenant' if is_tenant else 'admin'
     cookie_parts = []
     if session: cookie_parts.append(f'session={session}')
-    if org_id:  cookie_parts.append(f'OrgId={org_id}')
+    if org_id and is_tenant: cookie_parts.append(f'OrgId={org_id}')
     print(f'_cookies=\"{\";\".join(cookie_parts)}\"')
     print(f'_org_id=\"{org_id}\"')
     print(f'_base_url=\"{base_url}\"')
     print(f'_api_token=\"{api_token}\"')
+    print(f'_session_type=\"{session_type}\"')
 except Exception as e:
     print('_cookies=\"\"'); print('_org_id=\"\"')
     print('_base_url=\"\"'); print('_api_token=\"\"')
+    print('_session_type=\"\"')
     print(f'echo \"Error reading session: {e}\" >&2')
 " 2>/dev/null)"
 
@@ -125,11 +143,13 @@ except Exception as e:
     return 1
   fi
 
-  # Prefer API token (stable, long-lived) over session cookies (short-lived)
-  # API token auth: Api-Token header, NO organization-id header (conflicts)
-  # Session cookie auth: -b cookies + organization-id header (required)
+  # Auth strategy depends on session type:
+  # - tenant: prefer API token (stable, long-lived), fall back to cookies + organization-id
+  # - admin/assessor: always use cookies, NO organization-id header (causes UUID validation error)
   local auth_args=()
-  if [[ -n "$_api_token" ]]; then
+  if [[ "$_session_type" == "admin" ]]; then
+    auth_args+=(-b "$_cookies")
+  elif [[ -n "$_api_token" ]]; then
     auth_args+=(-H "Api-Token: ${_api_token}")
   else
     auth_args+=(-b "$_cookies" -H "organization-id: ${_org_id}")

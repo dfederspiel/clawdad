@@ -7,16 +7,30 @@ description: Authenticate to Polaris environments (CDEV, CO, IM, STG, etc.) usin
 
 The host maintains authenticated sessions to Polaris environments via Playwright browser-based Keycloak login and 5-minute keepalive pings. It also generates long-lived API tokens per environment. Both are available in your container.
 
-## Two Auth Methods
+## Session Types
+
+Polaris sessions come in two types. **`polaris_api` handles both automatically** — you generally don't need to think about this unless you're making raw `curl` calls.
+
+| Type | `$POLARIS_SESSION_TYPE` | Org ID | API token | `organization-id` header | Userinfo endpoint |
+|------|------------------------|--------|-----------|--------------------------|-------------------|
+| **Tenant** | `tenant` | UUID (e.g., `2e241...`) | Available | Required for cookie auth | `/api/auth/openid-connect/userinfo` |
+| **Admin/assessor** | `admin` | Non-UUID (e.g., `master`) | Not available | **Must NOT be sent** (causes UUID validation error) | `/api/auth/openid-connect/admin/userinfo` |
+
+**Tenant sessions** (CO, CDEV, IM) are standard customer logins scoped to an organization. **Admin/assessor sessions** (e.g., IM_ASSESSOR) use the Keycloak master realm and have cross-tenant access for assessment workflows.
+
+Run `source polaris-auth.sh --list` to see all sessions with their types.
+
+## Auth Methods
 
 | Method | When to use | Header / flag |
 |--------|------------|---------------|
-| **API token** | Preferred for all API calls — stable, long-lived | `-H "Api-Token: $POLARIS_API_TOKEN"` (**NO** `organization-id` header) |
-| **Session cookies** | Fallback when no API token, or for admin-only endpoints | `-b "$POLARIS_COOKIES"` + `-H "organization-id: $POLARIS_ORG_ID"` |
+| **API token** | Preferred for tenant sessions — stable, long-lived | `-H "Api-Token: $POLARIS_API_TOKEN"` (**NO** `organization-id` header) |
+| **Session cookies (tenant)** | Fallback when no API token | `-b "$POLARIS_COOKIES"` + `-H "organization-id: $POLARIS_ORG_ID"` |
+| **Session cookies (admin)** | Only option for assessor sessions | `-b "$POLARIS_COOKIES"` (no `organization-id` header) |
 
-**Critical:** API token auth and `organization-id` header are **mutually exclusive**. Including `organization-id` with an `Api-Token` header causes a 401. The `polaris_api` function handles this automatically.
+**Critical:** API token auth and `organization-id` header are **mutually exclusive**. Including `organization-id` with an `Api-Token` header causes a 401. The `polaris_api` function handles all of this automatically.
 
-**Prefer API tokens** — they survive session expiry and don't depend on the keepalive cycle. Use session cookies only for endpoints that require them (e.g., token management endpoints themselves).
+For **tenant sessions**, prefer API tokens — they survive session expiry and don't depend on the keepalive cycle. **Admin/assessor sessions** are always cookie-only (API tokens are not available for assessor accounts).
 
 ## Quick Start — Session Cookies
 
@@ -74,11 +88,12 @@ After sourcing `polaris-auth.sh <env>`, these are set:
 
 | Variable | Content |
 |----------|---------|
-| `$POLARIS_COOKIES` | Cookie string for `curl -b` (includes `session` and `OrgId` cookies) |
+| `$POLARIS_COOKIES` | Cookie string for `curl -b` (includes `session` + `OrgId` for tenant, `session` only for admin) |
 | `$POLARIS_BASE_URL` | Base URL (e.g., `https://cdev.dev.polaris.blackduck.com`) |
-| `$POLARIS_ENV` | Environment name (e.g., `cdev`) |
-| `$POLARIS_ORG_ID` | Organization ID (required header for all API calls) |
-| `$POLARIS_API_TOKEN` | API token for the environment (long-lived, preferred for most calls) |
+| `$POLARIS_ENV` | Environment name (e.g., `cdev`, `im_assessor`) |
+| `$POLARIS_ORG_ID` | Organization ID — UUID for tenant sessions, `master` for admin sessions |
+| `$POLARIS_API_TOKEN` | API token (tenant sessions only — empty for admin/assessor sessions) |
+| `$POLARIS_SESSION_TYPE` | `"tenant"` or `"admin"` — determines auth strategy used by `polaris_api` |
 
 ## `polaris_api` Function
 
@@ -88,7 +103,7 @@ The sourced script provides `polaris_api()` — a wrapper that automatically inc
 polaris_api <METHOD> <API_PATH> [extra curl args...]
 ```
 
-**Note:** `polaris_api` uses session cookies by default. To use the API token instead, call `api.sh` directly with the `Api-Token` header (see Quick Start above).
+**Note:** `polaris_api` detects the session type and chooses the right auth strategy automatically: API token for tenant sessions, session cookies (without `organization-id`) for admin/assessor sessions, cookies with `organization-id` as tenant fallback.
 
 Examples:
 
@@ -130,17 +145,20 @@ When in doubt, check the SPA's network requests to find the correct content type
 
 ## Important: Organization ID Header
 
-**Session cookie auth requires the `organization-id` header.** Without it, session cookie calls return 401.
+The `organization-id` header behavior depends on session type:
 
 ```bash
-# Session cookie auth — org-id REQUIRED
+# Tenant session cookie auth — org-id REQUIRED
 curl -b "$POLARIS_COOKIES" -H "organization-id: $POLARIS_ORG_ID" "$POLARIS_BASE_URL/api/..."
 
-# API token auth — org-id MUST NOT be included (causes 401)
+# Admin/assessor session cookie auth — org-id MUST NOT be included
+curl -b "$POLARIS_COOKIES" "$POLARIS_BASE_URL/api/..."
+
+# API token auth (tenant only) — org-id MUST NOT be included
 curl -H "Api-Token: $POLARIS_API_TOKEN" "$POLARIS_BASE_URL/api/..."
 ```
 
-The `polaris_api` function handles this automatically — it uses API token (no org-id) when available, falling back to cookies (with org-id).
+The `polaris_api` function handles this automatically — it detects the session type and applies the right auth strategy.
 
 ## Working with Multiple Environments
 
@@ -182,12 +200,13 @@ CO_TOKEN="$POLARIS_API_TOKEN"
 2. On startup, it authenticates each environment using a headless Chromium browser (Playwright)
 3. The browser walks through: Polaris sign-in → Keycloak password form → redirect back to app
 4. The Kong `session` and `OrgId` cookies are extracted and written to `groups/global/sessions/{env}.json`
-5. A long-lived API token is generated and cached in both the session file and `.env` as `POLARIS_{ENV}_API_TOKEN`
-6. Every 5 minutes, the keepalive pings the session via `/api/auth/openid-connect/userinfo`
-7. If the ping fails (session expired), it re-authenticates via browser and generates a fresh API token
-8. Your container mounts `groups/global/` at `/workspace/global/` (read-only)
-9. `polaris-auth.sh` reads the session JSON and exports cookies, org ID, base URL, and API token
-10. API tokens in `.env` are forwarded through the credential proxy — `api.sh` substitutes placeholders automatically
+5. For **tenant** sessions: a long-lived API token is generated and cached in both the session file and `.env`
+6. For **admin/assessor** sessions: API tokens are not available — the Keycloak master realm doesn't support offline tokens. Auth is session-cookie-only.
+7. Every 5 minutes, the keepalive pings the session (tenant: `/api/auth/openid-connect/userinfo`, admin: `/api/auth/openid-connect/admin/userinfo`)
+8. If the ping fails (session expired), it re-authenticates via browser
+9. Your container mounts `groups/global/` at `/workspace/global/` (read-only)
+10. `polaris-auth.sh` reads the session JSON, detects the session type, and exports cookies, org ID, base URL, API token, and session type
+11. API tokens in `.env` are forwarded through the credential proxy — `api.sh` substitutes placeholders automatically
 
 ## Troubleshooting
 
@@ -195,18 +214,22 @@ CO_TOKEN="$POLARIS_API_TOKEN"
 |---------|-------|-----|
 | "No session for environment 'X'" | Environment not configured on host | Ask user to add `POLARIS_X_BASE_URL/EMAIL/PASSWORD` to `.env` |
 | Empty `$POLARIS_COOKIES` | Session file unreadable or malformed | Run `--list` to check; host may need restart |
-| Empty `$POLARIS_API_TOKEN` | Token not yet generated | Wait for next keepalive cycle (browser re-auth generates tokens) |
-| 401/403 with session cookie | Missing `organization-id` header | Add `-H "organization-id: $POLARIS_ORG_ID"` (required for cookie auth) |
+| Empty `$POLARIS_API_TOKEN` | Token not yet generated, or admin/assessor session (tokens not supported) | For tenant: wait for next keepalive cycle. For admin: use `polaris_api` (cookie-only) |
+| 401/403 with session cookie (tenant) | Missing `organization-id` header | Add `-H "organization-id: $POLARIS_ORG_ID"` (required for tenant cookie auth) |
+| 401/403 with session cookie (admin) | Included `organization-id` header | Remove it — admin sessions reject `organization-id: master` (not a valid UUID) |
 | 401/403 with API token | Included `organization-id` header | Remove `-H "organization-id: ..."` — it conflicts with `Api-Token` auth |
 | 401/403 with session cookie | Session expired between keepalives | Use `polaris_api` (re-reads fresh cookies), or re-source `polaris-auth.sh` |
+| 500 on `/api/auth/openid-connect/userinfo` | Using standard userinfo with admin session | Admin sessions use `/api/auth/openid-connect/admin/userinfo` instead |
 | HTML response instead of JSON | Missing vendor content type header | Add the correct `Content-Type`/`Accept` header for the endpoint |
 | `polaris_api` fails with "No Polaris session available" | Source step was skipped or failed | Re-run `source /workspace/scripts/polaris-auth.sh <env>` |
 
 ## Important Notes
 
 - Sessions are **read-only** from the container — you cannot modify or refresh them yourself
-- **API tokens are preferred** over session cookies — they're more stable and survive keepalive gaps
+- For **tenant sessions**, API tokens are preferred — they're more stable and survive keepalive gaps
+- For **admin/assessor sessions**, session cookies are the only option — no API tokens available
 - The keepalive runs every 5 minutes — if a session just expired, it will be restored shortly
 - Always use `api.sh` for requests (routes through the credential proxy for logging and credential substitution)
 - Do **not** try to authenticate directly via Keycloak from the container
-- The `organization-id` header is **required** for all API calls — omitting it causes 401 errors
+- The `organization-id` header is required for **tenant** cookie auth only — do NOT send it for admin/assessor sessions
+- Use `$POLARIS_SESSION_TYPE` to check if you're working with a `tenant` or `admin` session

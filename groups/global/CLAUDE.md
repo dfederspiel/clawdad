@@ -139,7 +139,13 @@ You MUST pass auth headers explicitly — the proxy substitutes placeholder valu
 
 ## Polaris Browser Sessions
 
-The host maintains authenticated browser sessions for all configured Polaris environments (CO, CDEV, etc.). Sessions are refreshed automatically every 5 minutes by a keepalive process.
+The host maintains authenticated browser sessions for all configured Polaris environments. Sessions are refreshed automatically every 5 minutes by a keepalive process.
+
+Two session types exist:
+- **Tenant** (CO, CDEV, IM) — standard customer logins with UUID org IDs and API tokens
+- **Admin/assessor** (e.g., IM_ASSESSOR) — Keycloak master realm, `org_id: "master"`, cookie-only auth, no `organization-id` header
+
+Run `source /workspace/scripts/polaris-auth.sh --list` to see all available sessions and their types.
 
 ### Browsing Polaris URLs
 
@@ -150,25 +156,23 @@ agent-browser state load /workspace/global/sessions/playwright-state.json
 agent-browser open https://co.dev.polaris.blackduck.com/...
 ```
 
-This injects cookies AND localStorage tokens for every configured Polaris environment. The browser sends the correct session automatically based on which domain you navigate to. No login flow needed — you land directly on the authenticated app.
+This injects cookies AND localStorage tokens for every configured Polaris environment. The browser sends the correct session automatically based on which domain you navigate to. No login flow needed.
 
-**If you still hit a login wall after loading state**, the session may have just expired. The host keepalive re-authenticates automatically every 5 minutes. Wait briefly and try again, or use the API token for the same work.
+### Polaris API Access
 
-### Polaris API Access (curl)
-
-Per-environment session files are in `/workspace/global/sessions/` — one JSON per environment (e.g., `co.json`, `cdev.json`) containing `base_url`, `session_cookie`, `org_id`, and `api_token`.
-
-**Prefer session cookies over API tokens.** Session cookies work with all Polaris APIs. API tokens have gaps — assessor account endpoints don't support them, and sporadic other endpoints were never wired up for token auth during development. Use the API token only as a fallback when the session is expired and hasn't been refreshed yet.
+Use `polaris-auth.sh` — it detects the session type and handles auth automatically:
 
 ```bash
-# Read session details
-SESSION=$(python3 -c "import json; s=json.load(open('/workspace/global/sessions/co.json')); print(f'session={s[\"session_cookie\"]}; OrgId={s[\"org_id\"]}')")
-ORG_ID=$(python3 -c "import json; print(json.load(open('/workspace/global/sessions/co.json'))['organization_id'])")
+# Tenant session (API token preferred, cookie + org-id fallback)
+source /workspace/scripts/polaris-auth.sh co
+polaris_api GET /api/auth/openid-connect/userinfo
 
-# Use session cookie (preferred — works with all APIs)
-/workspace/scripts/api.sh polaris GET "https://co.dev.polaris.blackduck.com/api/auth/openid-connect/userinfo" \
-  -b "$SESSION" -H "organization-id: $ORG_ID" -H "Accept: application/json"
+# Admin/assessor session (cookie only, no org-id header)
+source /workspace/scripts/polaris-auth.sh im_assessor
+polaris_api GET /api/auth/openid-connect/admin/userinfo
 ```
+
+Check `$POLARIS_SESSION_TYPE` (`"tenant"` or `"admin"`) if your code needs to branch on session type. See the `polaris-auth` skill docs for full details.
 
 ## Event Logging
 
