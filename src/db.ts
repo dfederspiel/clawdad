@@ -6,6 +6,7 @@ import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  MediaArtifact,
   NewMessage,
   RegisteredGroup,
   ScheduledTask,
@@ -204,6 +205,27 @@ function createSchema(database: Database.Database): void {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+  `);
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS media_artifacts (
+      id TEXT PRIMARY KEY,
+      chat_jid TEXT NOT NULL,
+      thread_id TEXT,
+      created_at TEXT NOT NULL,
+      source TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      path TEXT NOT NULL,
+      width INTEGER,
+      height INTEGER,
+      agent_name TEXT,
+      run_id TEXT,
+      batch_id TEXT,
+      caption TEXT,
+      alt TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_media_artifacts_chat ON media_artifacts(chat_jid, created_at);
   `);
 
   // Add tool_history column to agent_runs (per-run tool call chain for visibility)
@@ -566,6 +588,40 @@ export function getThreadsForChat(chatJid: string): ThreadInfo[] {
        ORDER BY t.created_at DESC`,
     )
     .all(chatJid, chatJid) as ThreadInfo[];
+}
+
+export function storeMediaArtifact(artifact: MediaArtifact): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO media_artifacts
+     (id, chat_jid, thread_id, created_at, source, media_type, mime_type, path, width, height, agent_name, run_id, batch_id, caption, alt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    artifact.id,
+    artifact.chat_jid,
+    artifact.thread_id || null,
+    artifact.created_at,
+    artifact.source,
+    artifact.media_type,
+    artifact.mime_type,
+    artifact.path,
+    artifact.width || null,
+    artifact.height || null,
+    artifact.agent_name || null,
+    artifact.run_id || null,
+    artifact.batch_id || null,
+    artifact.caption || null,
+    artifact.alt || null,
+  );
+}
+
+export function getMediaArtifact(id: string): MediaArtifact | undefined {
+  return db
+    .prepare(
+      `SELECT id, chat_jid, thread_id, created_at, source, media_type, mime_type, path, width, height, agent_name, run_id, batch_id, caption, alt
+       FROM media_artifacts
+       WHERE id = ?`,
+    )
+    .get(id) as MediaArtifact | undefined;
 }
 
 /**

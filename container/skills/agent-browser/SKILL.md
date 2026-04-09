@@ -82,6 +82,8 @@ agent-browser screenshot --full   # Full page
 agent-browser pdf output.pdf      # Save as PDF
 ```
 
+To show a screenshot in the web UI chat, save it under `/workspace/group/` and then call `publish_media` with that path.
+
 ### Wait
 
 ```bash

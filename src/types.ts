@@ -60,6 +60,24 @@ export interface NewMessage {
   usage?: string;
 }
 
+export interface MediaArtifact {
+  id: string;
+  chat_jid: string;
+  thread_id?: string;
+  created_at: string;
+  source: 'agent_browser' | 'agent_output' | 'user_upload';
+  media_type: 'image' | 'pdf';
+  mime_type: string;
+  path: string;
+  width?: number;
+  height?: number;
+  agent_name?: string;
+  run_id?: string;
+  batch_id?: string;
+  caption?: string;
+  alt?: string;
+}
+
 export interface ThreadInfo {
   thread_id: string;
   agent_jid: string;

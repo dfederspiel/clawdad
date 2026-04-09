@@ -84,6 +84,7 @@ import {
   attachUsageToLastBotMessage,
   getSessionPressure,
   setGroupSubtitle,
+  storeMediaArtifact,
   storeMessage,
 } from './db.js';
 import { GroupQueue, MessageCheckMode } from './group-queue.js';
@@ -129,6 +130,7 @@ import {
 } from './automation-rules.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
+import type { MediaArtifact } from './types.js';
 import { logger } from './logger.js';
 
 // Re-export for backwards compatibility during refactor
@@ -161,6 +163,29 @@ function broadcastUsage(chatJid: string, usage: UsageData): void {
       break;
     }
   }
+}
+
+function getMimeTypeForPath(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.gif':
+      return 'image/gif';
+    case '.webp':
+      return 'image/webp';
+    case '.pdf':
+      return 'application/pdf';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+function isPathInside(parentDir: string, candidatePath: string): boolean {
+  const rel = path.relative(parentDir, candidatePath);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 /** Broadcast work-state lifecycle transitions to web UI clients */
@@ -2785,6 +2810,83 @@ async function main(): Promise<void> {
           break;
         }
       }
+    },
+    onPublishMedia: (request) => {
+      const channel = findChannel(channels, request.chatJid);
+      if (!channel) {
+        logger.warn(
+          { jid: request.chatJid },
+          'Media publish: no channel found',
+        );
+        return;
+      }
+
+      if (channel.name !== 'web' || !('publishMediaMessage' in channel)) {
+        void channel.sendMessage(
+          request.chatJid,
+          request.caption
+            ? `${request.caption}\n\n[Media publishing is currently supported in the web UI only.]`
+            : '[Media publishing is currently supported in the web UI only.]',
+          request.threadId,
+        );
+        return;
+      }
+
+      if (!request.containerPath.startsWith('/workspace/group/')) {
+        logger.warn(
+          { path: request.containerPath, group: request.sourceGroup },
+          'Media publish rejected: unsupported container path',
+        );
+        return;
+      }
+
+      const groupDir = resolveGroupFolderPath(request.sourceGroup);
+      const relativePath = request.containerPath.slice(
+        '/workspace/group/'.length,
+      );
+      const hostPath = path.resolve(groupDir, relativePath);
+      if (!isPathInside(groupDir, hostPath) || !fs.existsSync(hostPath)) {
+        logger.warn(
+          { hostPath, groupDir },
+          'Media publish rejected: host file missing or outside group dir',
+        );
+        return;
+      }
+
+      const ext = path.extname(hostPath).toLowerCase();
+      if (!['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) {
+        logger.warn(
+          { hostPath, ext },
+          'Media publish rejected: unsupported media type in phase 1',
+        );
+        return;
+      }
+      const safeChatDir = request.chatJid.replace(/[^a-zA-Z0-9:_-]/g, '_');
+      const mediaDir = path.join(DATA_DIR, 'media', safeChatDir);
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const artifactId = randomUUID();
+      const destPath = path.join(mediaDir, `${artifactId}${ext}`);
+      fs.copyFileSync(hostPath, destPath);
+
+      const artifact: MediaArtifact = {
+        id: artifactId,
+        chat_jid: request.chatJid,
+        thread_id: request.threadId,
+        created_at: new Date().toISOString(),
+        source: request.source || 'agent_browser',
+        media_type: 'image',
+        mime_type: getMimeTypeForPath(destPath),
+        path: destPath,
+        agent_name: request.sender,
+        caption: request.caption,
+        alt: request.alt,
+      };
+      storeMediaArtifact(artifact);
+      (channel as any).publishMediaMessage(
+        request.chatJid,
+        artifact,
+        request.sender,
+      );
     },
     onDelegateToAgent: (request) => {
       const {
