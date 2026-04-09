@@ -528,6 +528,12 @@ With warm containers and deterministic routing in place, multi-provider becomes 
 6. Extend credential proxy for multi-provider forwarding
 7. Test with a mixed team: Ollama classifier + Claude specialist
 
+Related follow-up:
+
+- Treat multimodal image input as a runtime capability, not a Claude-only feature.
+- Add a normalized `RuntimeTurnInput` + attachment model before implementing provider-specific vision paths.
+- See [plan-provider-aware-multimodal-input.md](plan-provider-aware-multimodal-input.md).
+
 ### Phase E: Private Agent Workspaces (2-3 days)
 
 With warm containers, this becomes practical. Separate feature but benefits from the pool.

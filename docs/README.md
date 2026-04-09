@@ -10,6 +10,7 @@ The files in this directory are original design documents and developer referenc
 | [SECURITY.md](SECURITY.md) | [Security model](https://docs.nanoclaw.dev/concepts/security) |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | [Introduction](https://docs.nanoclaw.dev/introduction) |
 | [design-browser-snapshots-and-rich-media-chat.md](design-browser-snapshots-and-rich-media-chat.md) | Browser screenshots, images in chat, and rich media UX |
+| [plan-provider-aware-multimodal-input.md](plan-provider-aware-multimodal-input.md) | Provider-aware plan for true model-visible image input |
 | [design-internal-agent-event-channel.md](design-internal-agent-event-channel.md) | Internal agent coordination vs user-visible delivery |
 | [skills-as-branches.md](skills-as-branches.md) | [Skills system](https://docs.nanoclaw.dev/integrations/skills-system) |
 | [DEBUG_CHECKLIST.md](DEBUG_CHECKLIST.md) | [Troubleshooting](https://docs.nanoclaw.dev/advanced/troubleshooting) |
