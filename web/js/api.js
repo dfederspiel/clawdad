@@ -63,6 +63,24 @@ export const getMessages = (jid, since) =>
 export const sendMessage = (jid, content, sender, threadId) =>
   fetchJson('/api/send', { method: 'POST', body: { jid, content, sender, thread_id: threadId } });
 
+export async function uploadMedia(jid, file, { threadId, caption } = {}) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const dataBase64 = btoa(binary);
+  return fetchJson('/api/upload-media', {
+    method: 'POST',
+    body: {
+      jid,
+      thread_id: threadId,
+      filename: file.name,
+      mime_type: file.type || 'application/octet-stream',
+      data_base64: dataBase64,
+      caption: caption || undefined,
+    },
+  });
+}
+
 export const getThreads = (jid) =>
   fetchJson(`/api/threads/${encodeURIComponent(jid)}`);
 

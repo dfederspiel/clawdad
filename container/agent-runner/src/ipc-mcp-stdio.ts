@@ -72,9 +72,10 @@ server.tool(
 Important:
 - The file MUST already exist under /workspace/group/
 - This is currently intended for the web UI
-- For screenshots, save them under /workspace/group/ first, then call publish_media`,
+- Prefer a dedicated subdirectory like /workspace/group/artifacts/screenshots/ instead of cluttering the group root
+- For screenshots, save them under /workspace/group/artifacts/screenshots/ first, then call publish_media`,
   {
-    path: z.string().describe('Absolute path to a file under /workspace/group/ (for example /workspace/group/debug/screenshot.png).'),
+    path: z.string().describe('Absolute path to a file under /workspace/group/ (for example /workspace/group/artifacts/screenshots/debug.png).'),
     caption: z.string().optional().describe('Optional user-facing caption to show above the media.'),
     alt: z.string().optional().describe('Optional alt text describing the image for accessibility and context.'),
     thread_id: z.string().optional().describe('Optional thread ID when publishing inside a thread.'),

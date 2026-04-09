@@ -1,9 +1,11 @@
 import { html } from 'htm/preact';
 import { useState, useRef, useEffect, useMemo } from 'preact/hooks';
 import { handleSend, triggers, selectedGroup, pendingInput } from '../app.js';
+import * as api from '../api.js';
 
 export function ChatInput() {
   const [text, setText] = useState('');
+  const [files, setFiles] = useState([]);
   const [sending, setSending] = useState(false);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -11,6 +13,7 @@ export function ChatInput() {
   const [mentionStart, setMentionStart] = useState(-1); // cursor position of '@'
   const ref = useRef(null);
   const menuRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Refs so onKeyDown always sees current values (avoids stale closures)
   const showMentionsRef = useRef(false);
@@ -87,15 +90,40 @@ export function ChatInput() {
   }
 
   async function onSend() {
-    if (!text.trim() || sending) return;
+    if ((!text.trim() && files.length === 0) || sending) return;
     setSending(true);
     const val = text;
+    const pendingFilesList = files;
     setText('');
+    setFiles([]);
     setShowMentions(false);
     if (ref.current) ref.current.style.height = 'auto';
-    await handleSend(val);
+    try {
+      if (pendingFilesList.length > 0) {
+        const caption =
+          pendingFilesList.length === 1 && val.trim() ? val : undefined;
+        for (const file of pendingFilesList) {
+          await api.uploadMedia(selectedGroup.value?.jid, file, { caption });
+        }
+        if (val.trim() && pendingFilesList.length > 1) {
+          await handleSend(val);
+        }
+      } else {
+        await handleSend(val);
+      }
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
     setSending(false);
     ref.current?.focus();
+  }
+
+  function addFiles(fileList) {
+    const incoming = Array.from(fileList || []).filter((file) =>
+      file.type.startsWith('image/'),
+    );
+    if (incoming.length === 0) return;
+    setFiles((prev) => [...prev, ...incoming]);
   }
 
   function onKeyDown(e) {
@@ -192,6 +220,24 @@ export function ChatInput() {
           `)}
         </div>
       `}
+      <input
+        ref=${fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        multiple
+        class="hidden"
+        onChange=${(e) => addFiles(e.target.files)}
+      />
+      <button
+        type="button"
+        class="shrink-0 w-9 h-9 flex items-center justify-center border border-border text-txt-2 rounded-full hover:bg-bg-hover transition-all"
+        onClick=${() => fileInputRef.current?.click()}
+        title="Attach image"
+      >
+        <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+          <path d="M15.5 10.5l-5.146 5.147a3 3 0 01-4.243-4.243l6.01-6.01a2 2 0 112.829 2.828L9.646 13.53a1 1 0 01-1.414-1.414l4.597-4.596.707.707-.707-.707a.5.5 0 10-.707-.707l-4.596 4.596a2 2 0 102.828 2.829l5.147-5.147.707.707-.707-.707a4 4 0 11-5.657 5.657L4.404 10.11a5 5 0 017.071-7.07l.707.707-.707-.707a6 6 0 00-8.485 8.485l5.44 5.44a5 5 0 007.07-7.072z"/>
+        </svg>
+      </button>
       <textarea
         ref=${ref}
         class="flex-1 min-w-0 bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt resize-none focus:outline-none focus:border-accent placeholder-txt-muted font-sans"
@@ -200,17 +246,43 @@ export function ChatInput() {
         value=${text}
         onInput=${onInput}
         onKeyDown=${onKeyDown}
+        onPaste=${(e) => {
+          const clipboardFiles = Array.from(e.clipboardData?.items || [])
+            .filter((item) => item.type.startsWith('image/'))
+            .map((item) => item.getAsFile())
+            .filter(Boolean);
+          if (clipboardFiles.length > 0) {
+            e.preventDefault();
+            addFiles(clipboardFiles);
+          }
+        }}
       />
       <button
         class="shrink-0 w-9 h-9 flex items-center justify-center bg-accent text-bg rounded-full hover:brightness-110 disabled:opacity-40 transition-all"
         onClick=${onSend}
-        disabled=${!text.trim() || sending}
+        disabled=${(!text.trim() && files.length === 0) || sending}
         title="Send"
       >
         <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M10 17a.75.75 0 01-.75-.75V5.612L5.29 9.77a.75.75 0 01-1.08-1.04l5.25-5.5a.75.75 0 011.08 0l5.25 5.5a.75.75 0 11-1.08 1.04l-3.96-4.158V16.25A.75.75 0 0110 17z" clip-rule="evenodd"/>
         </svg>
       </button>
+      ${files.length > 0 && html`
+        <div class="absolute left-3 right-3 bottom-full mb-2 flex flex-wrap gap-2">
+          ${files.map((file, i) => html`
+            <div key=${i} class="px-2 py-1 rounded-md bg-bg-3 border border-border text-xs text-txt flex items-center gap-2">
+              <span class="truncate max-w-[180px]">${file.name}</span>
+              <button
+                type="button"
+                class="text-txt-muted hover:text-err"
+                onClick=${() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
+              >
+                x
+              </button>
+            </div>
+          `)}
+        </div>
+      `}
     </div>
   `;
 }

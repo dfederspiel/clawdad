@@ -101,7 +101,7 @@ export function Message({ role, content, timestamp, senderName, isError, compact
 
   const errorClass = isError ? 'border-err/30' : '';
 
-  const blocks = isAssistant ? parseBlocks(content) : null;
+  const blocks = parseBlocks(content);
 
   return html`
     <div class="${sizeClass} leading-relaxed ${bubbleClass} ${errorClass} overflow-hidden break-words"
