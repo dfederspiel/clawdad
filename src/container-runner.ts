@@ -27,6 +27,8 @@ import { logger } from './logger.js';
 import {
   CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
+  DockerUnavailableError,
+  ensureContainerRuntimeRunning,
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
@@ -63,6 +65,7 @@ export interface ContainerInput {
   runBatchId?: string; // shared delivery batch for supersession-aware routing
   canDelegate?: boolean; // true for coordinator agents (no trigger)
   isDelegation?: boolean; // delegation semantics (output routing, completion signaling)
+  networkContainer?: string; // share network namespace with this container (--network=container:<name>)
   poolManaged?: boolean; // true = stay alive for follow-up queries (warm pool)
   mainChatJid?: string; // JID of the main group (for escalation messaging)
   script?: string;
@@ -332,6 +335,7 @@ async function buildContainerArgs(
   isMain: boolean,
   group?: RegisteredGroup,
   agentName?: string,
+  networkContainer?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -429,6 +433,12 @@ async function buildContainerArgs(
     } else {
       args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
     }
+  }
+
+  // Share network namespace with another container (e.g. coordinator)
+  // so delegation containers can reach services on the coordinator's localhost.
+  if (networkContainer) {
+    args.push('--network', `container:${networkContainer}`);
   }
 
   args.push(CONTAINER_IMAGE);
@@ -647,6 +657,12 @@ export async function spawnContainer(
   group: RegisteredGroup,
   input: ContainerInput,
 ): Promise<ContainerHandle> {
+  // Fail fast if Docker isn't running — avoids spawning a doomed process
+  // and prevents the GroupQueue from retrying against a dead daemon.
+  if (!ensureContainerRuntimeRunning()) {
+    throw new DockerUnavailableError();
+  }
+
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
@@ -702,6 +718,31 @@ export async function spawnContainer(
     /* docker ps may fail if runtime not ready */
   }
 
+  // Validate network-share target: if the coordinator container is no longer
+  // running, fall back to default (isolated) networking.
+  let networkContainer = input.networkContainer;
+  if (networkContainer) {
+    try {
+      const running = execSync(
+        `${CONTAINER_RUNTIME_BIN} inspect --format "{{.State.Running}}" ${networkContainer}`,
+        { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8', timeout: 5_000 },
+      ).trim();
+      if (running !== 'true') {
+        logger.warn(
+          { group: group.name, networkContainer },
+          'Network-share target not running, falling back to default networking',
+        );
+        networkContainer = undefined;
+      }
+    } catch {
+      logger.warn(
+        { group: group.name, networkContainer },
+        'Network-share target not found, falling back to default networking',
+      );
+      networkContainer = undefined;
+    }
+  }
+
   const containerName = `${containerPrefix}${Date.now()}`;
   const containerArgs = await buildContainerArgs(
     mounts,
@@ -709,6 +750,7 @@ export async function spawnContainer(
     input.isMain,
     group,
     input.agentName,
+    networkContainer,
   );
 
   logger.info(

@@ -56,6 +56,7 @@ import {
 import { ContainerPool } from './container-pool.js';
 import {
   cleanupOrphans,
+  DockerUnavailableError,
   ensureContainerRuntimeRunning,
   PROXY_BIND_HOST,
   stopContainer,
@@ -710,6 +711,8 @@ async function executeAutomationActions(
           const AUTOMATION_TIMEOUT = 120_000;
           const taskId = `automation-${agent.name}-${Date.now()}`;
           const batchId = `automation-${trace.ruleId}-${randomUUID()}`;
+          const autoCoordinatorContainer =
+            queue.getCoordinatorContainerName(chatJid);
           queue.enqueueDelegation(
             chatJid,
             taskId,
@@ -814,6 +817,7 @@ async function executeAutomationActions(
                   }
                 },
                 batchId,
+                autoCoordinatorContainer || undefined,
               );
 
               group.containerConfig = savedConfig;
@@ -1175,6 +1179,8 @@ async function processGroupMessages(
     if (specialists.length > 1) {
       const MENTION_TIMEOUT = 120_000; // 2 minutes, same as coordinator delegations
       const batchId = `fanout-${randomUUID()}`;
+      const fanoutCoordinatorContainer =
+        queue.getCoordinatorContainerName(chatJid);
 
       logger.info(
         {
@@ -1290,6 +1296,7 @@ async function processGroupMessages(
                 }
               },
               batchId,
+              fanoutCoordinatorContainer || undefined,
             );
 
             group.containerConfig = savedConfig;
@@ -1634,6 +1641,7 @@ async function runAgent(
   isDelegation?: boolean,
   sendMessage?: (text: string) => Promise<void>,
   runBatchId?: string,
+  networkContainer?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
@@ -1978,6 +1986,7 @@ async function runAgent(
         runBatchId,
         canDelegate: agent ? !agent.trigger : false,
         isDelegation: isDelegation || false,
+        networkContainer,
         poolManaged: true,
         mainChatJid: isMain ? undefined : getMainChatJid(),
         achievements: getAchievementsForContainer(),
@@ -2051,6 +2060,7 @@ async function runAgent(
       runBatchId,
       canDelegate: agent ? !agent.trigger : false,
       isDelegation: isDelegation || false,
+      networkContainer,
       poolManaged: false,
       mainChatJid: isMain ? undefined : getMainChatJid(),
       achievements: getAchievementsForContainer(),
@@ -2108,6 +2118,8 @@ async function runAgent(
 
     return 'success';
   } catch (err) {
+    // Let DockerUnavailableError propagate to GroupQueue so it can skip retries
+    if (err instanceof DockerUnavailableError) throw err;
     logger.error({ group: group.name, err }, 'Agent error');
     return 'error';
   }
@@ -2925,6 +2937,9 @@ async function main(): Promise<void> {
       const savedConfig = group.containerConfig;
       const DELEGATION_TIMEOUT = 120_000; // 2 minutes
       const taskId = `delegation-${agent.name}-${Date.now()}`;
+      // Share coordinator's network namespace so delegation containers can
+      // reach services (e.g. Storybook) running on the coordinator's localhost.
+      const coordinatorContainer = queue.getCoordinatorContainerName(chatJid);
       queue.enqueueDelegation(
         chatJid,
         taskId,
@@ -3029,6 +3044,7 @@ async function main(): Promise<void> {
               }
             },
             batchId,
+            coordinatorContainer || undefined,
           );
 
           group.containerConfig = savedConfig; // restore original config

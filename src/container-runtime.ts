@@ -61,6 +61,17 @@ export function readonlyMountArgs(
   ];
 }
 
+/**
+ * Thrown when the container runtime (Docker) is not reachable.
+ * Non-retryable — the GroupQueue should skip retry scheduling when it sees this.
+ */
+export class DockerUnavailableError extends Error {
+  constructor(message = 'Container runtime (Docker) is not available') {
+    super(message);
+    this.name = 'DockerUnavailableError';
+  }
+}
+
 /** Stop a container by name. Uses execFileSync to avoid shell injection. */
 export function stopContainer(name: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {

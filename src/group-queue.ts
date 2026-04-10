@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { MAX_CONCURRENT_CONTAINERS } from './config.js';
+import { DockerUnavailableError } from './container-runtime.js';
 import { resolveAgentIpcInputPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { WorkPhase, WorkStateEvent } from './types.js';
@@ -45,6 +46,10 @@ interface GroupState {
   // Set when first delegation starts, cleared when all delegations complete.
   // Survives runForGroup() cleanup so resume can find it.
   delegationCoordinatorId: string | null;
+  // Snapshotted coordinator container name for delegation network sharing.
+  // Set when first delegation enqueues so delegations can share the
+  // coordinator's network namespace (--network=container:<name>).
+  delegationCoordinatorContainerName: string | null;
 }
 
 export class GroupQueue {
@@ -90,6 +95,7 @@ export class GroupQueue {
         completedDelegationRetriggers: [],
         suppressNextDelegationRetrigger: false,
         delegationCoordinatorId: null,
+        delegationCoordinatorContainerName: null,
       };
       this.groups.set(groupJid, state);
     }
@@ -294,6 +300,15 @@ export class GroupQueue {
   }
 
   /**
+   * Get the coordinator's container name for network sharing.
+   * Returns the snapshotted name if available, otherwise the live container name.
+   */
+  getCoordinatorContainerName(groupJid: string): string | null {
+    const state = this.getGroup(groupJid);
+    return state.delegationCoordinatorContainerName || state.containerName;
+  }
+
+  /**
    * Mark the container as idle-waiting (finished work, waiting for IPC input).
    * If tasks are pending, preempt the idle container immediately.
    */
@@ -384,15 +399,18 @@ export class GroupQueue {
 
     const state = this.getGroup(groupJid);
 
-    // Eagerly snapshot coordinator identity while it's still available.
-    // runForGroup() clears these fields when the coordinator query finishes,
-    // but queued delegations may not start until after that cleanup.
+    // Eagerly snapshot coordinator identity and container name while still
+    // available. runForGroup() clears these fields when the coordinator query
+    // finishes, but queued delegations may not start until after that cleanup.
     if (
       !state.delegationCoordinatorId &&
       state.groupFolder &&
       state.coordinatorAgentName
     ) {
       state.delegationCoordinatorId = `${state.groupFolder}/${state.coordinatorAgentName}`;
+    }
+    if (!state.delegationCoordinatorContainerName && state.containerName) {
+      state.delegationCoordinatorContainerName = state.containerName;
     }
 
     // Dedup
@@ -471,10 +489,17 @@ export class GroupQueue {
     try {
       await task.fn();
     } catch (err) {
-      logger.error(
-        { groupJid, taskId: task.id, err },
-        'Error running delegation',
-      );
+      if (err instanceof DockerUnavailableError) {
+        logger.error(
+          { groupJid, taskId: task.id },
+          'Delegation failed: Docker unavailable',
+        );
+      } else {
+        logger.error(
+          { groupJid, taskId: task.id, err },
+          'Error running delegation',
+        );
+      }
     } finally {
       state.activeDelegations--;
       if (task.agentName) {
@@ -505,6 +530,7 @@ export class GroupQueue {
           const coord = rest.join('/');
           this.onDelegationStateFn(groupJid, folder, coord, false);
           state.delegationCoordinatorId = null;
+          state.delegationCoordinatorContainerName = null;
         }
 
         const needsRetrigger = state.completedDelegationRetriggers.some(
@@ -592,11 +618,22 @@ export class GroupQueue {
         }
       }
     } catch (err) {
-      logger.error({ groupJid, err }, 'Error processing messages for group');
-      this.emitWorkState(groupJid, 'error', {
-        summary: 'Error processing messages',
-      });
-      this.scheduleRetry(groupJid, state, mode);
+      if (err instanceof DockerUnavailableError) {
+        logger.error(
+          { groupJid },
+          'Docker unavailable — skipping retries (will retry on next incoming message)',
+        );
+        state.retryCount = 0;
+        this.emitWorkState(groupJid, 'error', {
+          summary: 'Docker unavailable',
+        });
+      } else {
+        logger.error({ groupJid, err }, 'Error processing messages for group');
+        this.emitWorkState(groupJid, 'error', {
+          summary: 'Error processing messages',
+        });
+        this.scheduleRetry(groupJid, state, mode);
+      }
     } finally {
       state.active = false;
       state.process = null;
