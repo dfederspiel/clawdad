@@ -124,18 +124,65 @@ The `conversations/` folder contains searchable markdown snapshots of past sessi
 
 ## API Access & Credentials
 
-**All external API calls MUST go through `/workspace/scripts/api.sh`** — it routes through the credential proxy which injects real secrets at request time. Your environment variables contain placeholders, not real secrets. Never use raw `curl`, `gh` CLI, or `git clone` with SSH.
+### Why the credential proxy exists
 
-The `credential-proxy` skill has full documentation: auth patterns for every service, repo cloning, troubleshooting 401s, and examples. Read it before making any API call.
+Your environment variables (`$GITHUB_TOKEN`, `$ATLASSIAN_API_TOKEN`, etc.) contain **placeholders** like `__CRED_GITHUB_TOKEN__` — NOT real secrets. The real tokens live on the host and are injected by the credential proxy at request time. If you use raw `curl`, `gh`, or any tool that reads these env vars directly, you will send a literal placeholder string and get a 401.
 
-**Quick reference:**
+### The two rules
+
+1. **HTTP API calls → `/workspace/scripts/api.sh`** — routes through the credential proxy which substitutes placeholders with real values.
+2. **CLI tools (`gh`, `glab`, `git clone`, `aws`, etc.) → `/workspace/scripts/cred-exec.sh`** — fetches the real credential and injects it for one command only.
+
 ```bash
+# HTTP API calls
 /workspace/scripts/api.sh <service_label> <METHOD> <URL> [CURL_ARGS...]
+
+# CLI tools
+/workspace/scripts/cred-exec.sh <service> <env_var> -- <command...>
 ```
 
 You MUST pass auth headers explicitly — the proxy substitutes placeholder values but doesn't add headers for you.
 
-**Requesting new credentials:** Use `mcp__nanoclaw__request_credential` — it opens a secure popup in the user's browser. Never ask users to paste secrets in chat. Try the API call first; only request credentials if you get a 401.
+**NEVER use any of these directly:**
+- `curl` — bypasses the proxy, sends placeholder tokens
+- `gh` / `glab` — reads placeholder env vars, auth fails
+- `git clone git@...` — SSH not available unless explicitly configured
+- Any tool that reads `$GITHUB_TOKEN` etc. without `cred-exec.sh`
+
+### Common mistakes
+
+| Mistake | What happens | Fix |
+|---------|-------------|-----|
+| Using `curl` instead of `api.sh` | Sends `__CRED_GITHUB_TOKEN__` as the auth token → 401 | Switch to `api.sh` |
+| Using `gh pr list` without `cred-exec.sh` | `gh` reads the placeholder env var → auth failure | Use `cred-exec.sh github GITHUB_TOKEN -- gh pr list` |
+| Seeing `__CRED_*__` in an error message | You bypassed the proxy — the placeholder was sent as-is | Use `api.sh` or `cred-exec.sh` |
+| Calling `request_credential` because env var "looks empty" | The placeholder IS expected — the proxy handles substitution | Try the API call with `api.sh` first; only request if you get a real 401 |
+| Echoing `$GITHUB_TOKEN` to check if it's set | It will print a placeholder — that is correct, not a problem | Don't diagnose by echoing; just use `api.sh`/`cred-exec.sh` and check the result |
+
+### Quick examples
+
+```bash
+# GitHub API
+/workspace/scripts/api.sh github GET "https://api.github.com/repos/OWNER/REPO" \
+  -H "Authorization: token $GITHUB_TOKEN"
+
+# GitHub CLI
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- gh pr list
+
+# Clone a repo
+/workspace/scripts/cred-exec.sh github GITHUB_TOKEN -- \
+  git clone https://x-access-token:${GITHUB_TOKEN}@github.com/OWNER/REPO.git /workspace/group/repo
+
+# Atlassian
+/workspace/scripts/api.sh atlassian GET "$ATLASSIAN_BASE_URL/rest/api/3/myself" \
+  -u "$ATLASSIAN_EMAIL:$ATLASSIAN_API_TOKEN"
+```
+
+### Requesting new credentials
+
+Use `mcp__nanoclaw__request_credential` — it opens a secure popup in the user's browser. Never ask users to paste secrets in chat. **Try the API call first; only request credentials if `api.sh` returns a 401.**
+
+The `credential-proxy` skill has extended documentation: all service auth patterns, SSH forwarding, repo cloning, and detailed troubleshooting.
 
 ## Polaris Browser Sessions
 
