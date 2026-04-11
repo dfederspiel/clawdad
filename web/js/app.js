@@ -312,6 +312,10 @@ api.onSSE('groups_changed', () => {
 });
 
 api.onSSE('credential_request', (data) => {
+  // Deduplicate — ignore if we already have a request for this service active or queued
+  if (credentialRequest.value?.service === data.service) return;
+  if (credentialQueue.value.some((r) => r.service === data.service)) return;
+
   // Queue requests — show one at a time
   if (credentialRequest.value) {
     credentialQueue.value = [...credentialQueue.value, data];
