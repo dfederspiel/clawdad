@@ -44,6 +44,10 @@ The provider adapter owns:
 - provider-specific usage extraction
 - provider-specific limitations and retries
 
+Related design:
+
+- [design-provider-auth-lifecycle.md](design-provider-auth-lifecycle.md) defines the provider-side rules for credential lifecycle, stale auth handling, refresh semantics, and auth health reporting.
+
 ## Required integration boundary
 
 Every provider integration must implement the same conceptual contract:

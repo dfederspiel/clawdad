@@ -61,6 +61,7 @@ Global defaults still matter, but they are defaults, not the source of truth.
 Related standard:
 
 - [design-provider-sdk-integration-standards.md](design-provider-sdk-integration-standards.md) defines the required adapter boundary, fallback behavior, and test bar for each provider SDK/runtime integration.
+- [design-provider-auth-lifecycle.md](design-provider-auth-lifecycle.md) defines how auth, refresh, and provider credential health should sit alongside the runtime boundary.
 
 ---
 

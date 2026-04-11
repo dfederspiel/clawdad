@@ -64,11 +64,19 @@ ANTHROPIC_API_KEY=sk-ant-api03-your-key
 
 ### Refreshing an expired token
 
-OAuth tokens expire. After running `claude setup-token` again:
+OAuth tokens expire. Today, ClawDad re-reads Claude Code's credential store on each request, but it still relies on a valid access token being present there or in `.env`.
 
-1. Copy the new token from `~/.claude/.credentials.json` (see command above)
-2. Update `ANTHROPIC_AUTH_TOKEN` in `.env`
-3. Restart ClawDad — the proxy caches the token at startup
+If the running service has been idle for a while and starts returning `401 Invalid authentication credentials`, refresh the Claude login first:
+
+1. Run `claude setup-token` again if needed
+2. Confirm `~/.claude/.credentials.json` contains a fresh `accessToken`
+3. Retry the request or restart ClawDad if the service is stuck on an older auth state
+
+Current limitation:
+
+- ClawDad does **not** yet use Claude Code's refresh token directly.
+- That means the service can hit a stale-token window after long idle periods, especially in OAuth mode.
+- A stronger long-term fix is to adopt a helper-based or refresh-aware auth flow instead of treating the access token as the durable credential.
 
 ## Custom Anthropic Endpoint
 
@@ -200,6 +208,6 @@ Then restart ClawDad.
 
 ### Token expired after working previously
 
-**Cause:** OAuth tokens (`sk-ant-oat01-`) expire periodically.
+**Cause:** OAuth access tokens can expire while the service is idle. ClawDad currently re-reads the token file, but it does not perform its own refresh-token exchange.
 
-**Fix:** Run `claude setup-token` again, copy the new token from `~/.claude/.credentials.json`, update `ANTHROPIC_AUTH_TOKEN` in `.env`, and restart ClawDad.
+**Fix:** Refresh the Claude login (`claude setup-token` if needed), verify `~/.claude/.credentials.json` has a fresh `accessToken`, then retry. If the service still fails, restart ClawDad.

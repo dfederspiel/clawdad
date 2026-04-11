@@ -59,7 +59,7 @@ curl -sS http://127.0.0.1:3456/api/groups/test-team/agents/coordinator/runtime-p
 General health check:
 
 ```bash
-curl -sS http://127.0.0.1:3456/health
+curl -sS http://127.0.0.1:3456/api/health
 ```
 
 ### 5. Validate message flow when behavior changes

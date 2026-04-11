@@ -12,6 +12,7 @@ The files in this directory are original design documents and developer referenc
 | [design-browser-snapshots-and-rich-media-chat.md](design-browser-snapshots-and-rich-media-chat.md) | Browser screenshots, images in chat, and rich media UX |
 | [plan-provider-aware-multimodal-input.md](plan-provider-aware-multimodal-input.md) | Provider-aware plan for true model-visible image input |
 | [design-provider-sdk-integration-standards.md](design-provider-sdk-integration-standards.md) | Rules and test bar for integrating provider SDKs cleanly |
+| [design-provider-auth-lifecycle.md](design-provider-auth-lifecycle.md) | Provider-aware credential lifecycle, refresh, and auth health |
 | [BRANCH_TESTING_WORKFLOW.md](BRANCH_TESTING_WORKFLOW.md) | Rebuild, restart, and verify branch changes against the live WSL service |
 | [design-internal-agent-event-channel.md](design-internal-agent-event-channel.md) | Internal agent coordination vs user-visible delivery |
 | [skills-as-branches.md](skills-as-branches.md) | [Skills system](https://docs.nanoclaw.dev/integrations/skills-system) |

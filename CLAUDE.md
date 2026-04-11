@@ -289,7 +289,7 @@ node dist/index.js > logs/clawdad.log 2>&1 &
 
 **Service auto-start:** On Windows, both instances start on login via `scripts/start-clawdad.bat` (copied to the Startup folder). This starts the Windows web UI and boots WSL, which triggers `nanoclaw.service` via systemd. To verify after reboot:
 ```bash
-curl -sf http://localhost:3456/health    # Windows web UI
+curl -sf http://localhost:3456/api/health    # Windows web UI
 wsl -d Ubuntu -e bash -ic "systemctl --user status com-nanoclaw-clawdad.service"  # WSL web UI
 ```
 
