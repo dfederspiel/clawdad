@@ -953,8 +953,16 @@ async function processCredentialIpc(
       service || envName,
       true,
       `Saved as ${envName} — available immediately via the credential proxy`,
+      envName,
     );
-    notifyGroupCredentialResult(deps, sourceGroup, service || envName, true);
+    notifyGroupCredentialResult(
+      deps,
+      sourceGroup,
+      service || envName,
+      true,
+      undefined,
+      envName,
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // Never include the secret value in error messages
@@ -984,15 +992,21 @@ function writeCredentialResult(
   service: string,
   success: boolean,
   message: string,
+  envName?: string,
 ): void {
   try {
     const resultPath = path.join(credentialsDir, `result-${service}.json`);
     fs.writeFileSync(
       resultPath,
-      JSON.stringify({ success, message, timestamp: new Date().toISOString() }),
+      JSON.stringify({
+        success,
+        message,
+        envName: envName || undefined,
+        timestamp: new Date().toISOString(),
+      }),
     );
   } catch {
-    // Best-effort — container may check for this but it's not critical
+    // Best-effort — container polls for this file
   }
 }
 
@@ -1007,6 +1021,7 @@ function notifyGroupCredentialResult(
   service: string,
   success: boolean,
   errorMessage?: string,
+  envName?: string,
 ): void {
   // Find the JID for this group folder
   const groups = deps.registeredGroups();
@@ -1014,7 +1029,9 @@ function notifyGroupCredentialResult(
   if (!jid) return;
 
   const text = success
-    ? `[credential_registered] The "${service}" credential has been registered successfully. You can now make API calls to this service.`
+    ? `[credential_registered] The "${service}" credential has been registered successfully (env: ${envName || service}). ` +
+      `Use \`api.sh ${service} GET <url>\` for HTTP calls or \`cred-exec.sh ${service} ${envName || service} -- <command>\` for CLI tools. ` +
+      `Do NOT use raw curl — the credential proxy injects the real value at request time.`
     : `[credential_failed] The "${service}" credential registration failed: ${errorMessage}`;
 
   deps.sendMessage(jid, text).catch((err) => {

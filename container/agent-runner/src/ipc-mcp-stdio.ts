@@ -643,9 +643,15 @@ BEFORE calling this tool, you MUST:
 1. Try the API call using /workspace/scripts/api.sh or /workspace/scripts/cred-exec.sh first
 2. Only if you get a 401/403 AND the error is clearly an auth failure, then call this tool
 
+Use this instead of asking the user to paste secrets into chat. The credential is stored in the vault and injected automatically by the credential proxy into API calls made via api.sh or cred-exec.sh.
+
 Most credentials are ALREADY registered in the credential proxy. The proxy handles substitution automatically — your environment has placeholders, not real secrets. Use api.sh for HTTP calls and cred-exec.sh for CLI tools (gh, glab, etc.). See the credential-proxy skill for details.
 
 DO NOT call this tool just because an environment variable looks empty or contains a placeholder like "__CRED_GITHUB_TOKEN__" — that is EXPECTED. The proxy substitutes the real value at request time.
+
+This tool BLOCKS until the user submits the credential (up to 2 minutes). On success it returns the env var name and usage instructions. You do NOT need to poll or wait separately — the result tells you everything you need to proceed.
+
+IMPORTANT: After registration, use api.sh or cred-exec.sh for all API calls. Do NOT use raw curl with env vars — they contain proxy placeholders, not real credentials.
 
 Known services: atlassian, github, gitlab, launchdarkly. For other services, provide a custom service name and host_pattern.`,
   {
@@ -702,7 +708,7 @@ Known services: atlassian, github, gitlab, launchdarkly. For other services, pro
       };
     }
 
-    // Web UI — send IPC task to open browser popup (non-blocking)
+    // Web UI — send IPC task to open browser popup, then poll for result
     writeIpcFile(TASKS_DIR, {
       type: 'request_credential',
       service: args.service,
@@ -714,16 +720,56 @@ Known services: atlassian, github, gitlab, launchdarkly. For other services, pro
       timestamp: new Date().toISOString(),
     });
 
+    // Poll for the result file (written by the host after the user submits)
+    const resultPath = path.join(CREDENTIALS_DIR, `result-${args.service}.json`);
+    const POLL_INTERVAL_MS = 2000;
+    const TIMEOUT_MS = 120000; // 2 minutes
+    const startTime = Date.now();
+
+    // Remove any stale result file from a previous request
+    try { fs.unlinkSync(resultPath); } catch { /* ignore */ }
+
+    while (Date.now() - startTime < TIMEOUT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      try {
+        const raw = fs.readFileSync(resultPath, 'utf-8');
+        const result = JSON.parse(raw);
+        // Clean up result file
+        try { fs.unlinkSync(resultPath); } catch { /* ignore */ }
+
+        if (result.success) {
+          const envName = result.envName || `${args.service.toUpperCase()}_TOKEN`;
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `Credential "${args.service}" registered successfully.\n\n` +
+                `Environment variable: ${envName}\n` +
+                `Use \`api.sh ${args.service} GET <url>\` for HTTP API calls.\n` +
+                `Use \`cred-exec.sh ${args.service} ${envName} -- <command>\` for CLI tools.\n\n` +
+                `IMPORTANT: Do NOT use raw curl with the env var directly — it contains a placeholder. ` +
+                `The credential proxy injects the real value at request time. Always use api.sh or cred-exec.sh.`,
+            }],
+          };
+        } else {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `Credential registration for "${args.service}" failed: ${result.message}`,
+            }],
+          };
+        }
+      } catch {
+        // Result file not yet written — keep polling
+      }
+    }
+
+    // Timeout — user didn't submit within 2 minutes
     return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `A secure credential form for "${args.service}" has been sent to the browser. ` +
-            `The user will enter their secret there — you will never see it. ` +
-            `A confirmation message will appear in the chat once the credential is registered. ` +
-            `You can continue with other work in the meantime.`,
-        },
-      ],
+      content: [{
+        type: 'text' as const,
+        text: `The credential popup for "${args.service}" timed out after 2 minutes — the user may not have submitted it. ` +
+          `Ask the user if they need help, then try again if needed.`,
+      }],
     };
   },
 );
