@@ -154,3 +154,26 @@ export interface RuntimeCompatibilityReport {
   blockedByModelClass?: string;
   notes: string[];
 }
+
+export type ProviderAuthStatus =
+  | 'ready'
+  | 'stale'
+  | 'missing'
+  | 'misconfigured'
+  | 'unsupported';
+
+export type ProviderAuthSource =
+  | 'env'
+  | 'oauth-store'
+  | 'local-runtime'
+  | 'none';
+
+export interface ProviderAuthHealth {
+  provider: RuntimeProvider;
+  status: ProviderAuthStatus;
+  authMode?: 'api-key' | 'oauth' | 'none';
+  source: ProviderAuthSource;
+  refreshable: boolean;
+  expiresAt?: number;
+  notes: string[];
+}

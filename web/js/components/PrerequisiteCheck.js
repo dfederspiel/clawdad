@@ -170,7 +170,20 @@ export function PrerequisiteCheck({ onReady }) {
 
   function anthropicStatus() {
     if (!health) return 'loading';
-    return health.anthropic.status === 'configured' ? 'ok' : 'error';
+    return health.anthropic.status === 'ready' ? 'ok' : 'error';
+  }
+
+  function anthropicDetail() {
+    if (!health) return '';
+    if (health.anthropic.status === 'ready') {
+      return health.anthropic.authMode === 'api-key'
+        ? 'API key ready'
+        : 'OAuth ready';
+    }
+    if (health.anthropic.status === 'stale') {
+      return 'OAuth token is stale or expiring';
+    }
+    return 'No Anthropic credential available';
   }
 
   function imageStatus() {
@@ -226,14 +239,20 @@ export function PrerequisiteCheck({ onReady }) {
             `}
           <//>
 
-          <!-- Anthropic Key -->
+          <!-- Anthropic Auth -->
           <${StatusCard}
-            title="Anthropic API Key"
+            title="Anthropic Auth"
             status=${anthropicStatus()}
-            detail=${health?.anthropic.status === 'configured' ? 'Key registered' : 'No key registered'}
+            detail=${anthropicDetail()}
           >
             ${health?.anthropic.status === 'missing' && html`
               <${AnthropicForm} onRegistered=${fetchHealth} />
+            `}
+            ${health?.anthropic.status === 'stale' && html`
+              <div class="text-xs text-txt-muted space-y-1">
+                <p>The configured OAuth token looks stale.</p>
+                <p>Refresh your Claude login, then recheck health.</p>
+              </div>
             `}
           <//>
 

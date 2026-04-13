@@ -30,10 +30,14 @@ import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import {
+  detectAuthMode,
+  readClaudeCodeToken,
+  resolveAnthropicCredentials,
+} from './provider-auth.js';
 
 export type AuthMode = 'api-key' | 'oauth';
 
@@ -233,87 +237,6 @@ function validateForwardTarget(
 
 // ── Max body size for substitution (10 MB) ──────────────────────────
 const MAX_SUB_BODY = 10 * 1024 * 1024;
-
-// ── Claude Code credential store ────────────────────────────────────
-
-const CLAUDE_CREDS_PATH = path.join(
-  os.homedir(),
-  '.claude',
-  '.credentials.json',
-);
-
-interface ClaudeCodeCredentials {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
-}
-
-/**
- * Read the OAuth token from Claude Code's credential store.
- * Returns the access token if the file exists and the token hasn't expired,
- * or null otherwise.  Claude Code auto-refreshes this file, so reading it
- * gives us a fresh token without managing refresh ourselves.
- */
-export function readClaudeCodeToken(): string | null {
-  try {
-    const raw = fs.readFileSync(CLAUDE_CREDS_PATH, 'utf-8');
-    const data = JSON.parse(raw);
-    const oauth: ClaudeCodeCredentials | undefined = data.claudeAiOauth;
-    if (!oauth?.accessToken) return null;
-
-    // Check expiry — leave 60s buffer
-    if (oauth.expiresAt && Date.now() > oauth.expiresAt - 60_000) {
-      logger.warn('Claude Code OAuth token is expired or expiring soon');
-      // Return it anyway — Claude Code may refresh it momentarily,
-      // and the caller can still try. Better than returning null.
-      return oauth.accessToken;
-    }
-
-    return oauth.accessToken;
-  } catch {
-    // File doesn't exist or isn't readable — that's fine, fall back to .env
-    return null;
-  }
-}
-
-/** Resolve Anthropic credentials, checking Claude Code store first. */
-interface AnthropicCredentials {
-  authMode: AuthMode;
-  apiKey?: string;
-  oauthToken?: string;
-  baseUrl: string;
-}
-
-export function resolveAnthropicCredentials(): AnthropicCredentials {
-  const env = readEnvFile([
-    'ANTHROPIC_API_KEY',
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_AUTH_TOKEN',
-    'ANTHROPIC_BASE_URL',
-  ]);
-
-  const baseUrl = env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
-
-  // API key takes priority (explicit, no expiry concerns)
-  if (env.ANTHROPIC_API_KEY) {
-    return { authMode: 'api-key', apiKey: env.ANTHROPIC_API_KEY, baseUrl };
-  }
-
-  // Try Claude Code credential store (auto-refreshed by Claude Code CLI)
-  const claudeToken = readClaudeCodeToken();
-  if (claudeToken) {
-    return { authMode: 'oauth', oauthToken: claudeToken, baseUrl };
-  }
-
-  // Fall back to .env OAuth tokens
-  const envToken = env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
-  if (envToken) {
-    return { authMode: 'oauth', oauthToken: envToken, baseUrl };
-  }
-
-  // Nothing configured — return oauth mode with no token
-  return { authMode: 'oauth', baseUrl };
-}
 
 // ── Proxy server ────────────────────────────────────────────────────
 
@@ -691,6 +614,4 @@ function handleForward(
 }
 
 /** Detect which auth mode the host is configured for. */
-export function detectAuthMode(): AuthMode {
-  return resolveAnthropicCredentials().authMode;
-}
+export { detectAuthMode, readClaudeCodeToken, resolveAnthropicCredentials };
