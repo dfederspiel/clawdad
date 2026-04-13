@@ -92,6 +92,11 @@ export const clearMessages = (jid) =>
 
 // Health & onboarding
 export const getHealth = () => fetchJson('/api/health');
+export const getAuthState = () => fetchJson('/api/auth-state');
+export const recheckAuthState = (provider) =>
+  fetchJson(`/api/auth-state/${encodeURIComponent(provider)}/recheck`, {
+    method: 'POST',
+  });
 export const registerAnthropic = (key, customEndpoint) =>
   fetchJson('/api/register-anthropic', {
     method: 'POST',

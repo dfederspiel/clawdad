@@ -28,6 +28,10 @@ import {
 } from '../config.js';
 import { getHealthStatus } from '../health.js';
 import {
+  getProviderAuthHealth,
+  recheckProviderAuth,
+} from '../provider-auth.js';
+import {
   getMessagesSince,
   getMediaArtifact,
   storeMediaArtifact,
@@ -1786,6 +1790,41 @@ export class WebChannel implements Channel {
     if (method === 'GET' && url.pathname === '/api/health') {
       const health = await getHealthStatus();
       return this.json(res, 200, health);
+    }
+
+    // GET /api/auth-state — provider auth health snapshot
+    if (method === 'GET' && url.pathname === '/api/auth-state') {
+      return this.json(res, 200, {
+        providers: {
+          anthropic: getProviderAuthHealth('anthropic'),
+          ollama: getProviderAuthHealth('ollama'),
+        },
+      });
+    }
+
+    // POST /api/auth-state/:provider/recheck — clear failure override and re-read auth state
+    const authRecheckMatch = url.pathname.match(
+      /^\/api\/auth-state\/([A-Za-z0-9_-]+)\/recheck$/,
+    );
+    if (method === 'POST' && authRecheckMatch) {
+      const remote = req.socket.remoteAddress;
+      if (
+        remote !== '127.0.0.1' &&
+        remote !== '::1' &&
+        remote !== '::ffff:127.0.0.1'
+      ) {
+        return this.json(res, 403, { error: 'Localhost only' });
+      }
+
+      const provider = authRecheckMatch[1];
+      if (provider !== 'anthropic' && provider !== 'ollama') {
+        return this.json(res, 400, { error: 'Unsupported provider' });
+      }
+
+      return this.json(res, 200, {
+        ok: true,
+        health: recheckProviderAuth(provider),
+      });
     }
 
     // POST /api/register-anthropic — register Anthropic API key in .env

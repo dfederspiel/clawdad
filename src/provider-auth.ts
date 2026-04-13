@@ -29,6 +29,8 @@ interface ProviderAuthFailureState {
   category: ProviderAuthFailureCategory;
   lastFailureAt: string;
   message: string;
+  source?: ProviderAuthHealth['source'];
+  expiresAt?: number;
 }
 
 const CLAUDE_CREDS_PATH = path.join(
@@ -99,6 +101,15 @@ function applyFailureOverride(
   override: ProviderAuthFailureState | undefined,
 ): ProviderAuthHealth {
   if (!override) return base;
+  if (
+    base.source === 'oauth-store' &&
+    override.source === 'oauth-store' &&
+    typeof base.expiresAt === 'number' &&
+    typeof override.expiresAt === 'number' &&
+    base.expiresAt !== override.expiresAt
+  ) {
+    return base;
+  }
   return {
     ...base,
     status: override.status,
@@ -246,15 +257,27 @@ export function noteProviderAuthFailure(
   const category = classifyProviderAuthFailure(provider, message);
   if (!category) return null;
 
+  const current = getProviderAuthHealth(provider);
+
   authFailureState.set(provider, {
     status: category === 'permission' ? 'misconfigured' : 'stale',
     category,
     lastFailureAt: new Date().toISOString(),
     message,
+    source: current.source,
+    expiresAt: current.expiresAt,
   });
   return category;
 }
 
 export function clearProviderAuthFailure(provider: RuntimeProvider): void {
   authFailureState.delete(provider);
+}
+
+export function recheckProviderAuth(
+  provider: RuntimeProvider,
+  runtime?: AgentRuntimeConfig,
+): ProviderAuthHealth {
+  clearProviderAuthFailure(provider);
+  return getProviderAuthHealth(provider, runtime);
 }

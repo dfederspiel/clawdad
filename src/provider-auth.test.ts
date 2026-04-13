@@ -41,6 +41,7 @@ import {
   getAnthropicAuthHealth,
   noteProviderAuthFailure,
   readClaudeCodeToken,
+  recheckProviderAuth,
   resolveAnthropicCredentials,
 } from './provider-auth.js';
 
@@ -123,6 +124,45 @@ describe('provider-auth', () => {
     clearProviderAuthFailure('anthropic');
 
     const health = getAnthropicAuthHealth();
+    expect(health.status).toBe('ready');
+    expect(health.lastFailureAt).toBeUndefined();
+  });
+
+  it('auto-recovers oauth-store failure state when credential expiry changes', () => {
+    const now = Date.now();
+    mockCredsFileContent = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'sk-ant-oat01-old',
+        refreshToken: 'rt-xxx',
+        expiresAt: now + 60_000,
+      },
+    });
+    noteProviderAuthFailure(
+      'anthropic',
+      'Failed to authenticate. API Error: 401 Invalid authentication credentials',
+    );
+
+    mockCredsFileContent = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'sk-ant-oat01-new',
+        refreshToken: 'rt-xxx',
+        expiresAt: now + 120_000,
+      },
+    });
+
+    const health = getAnthropicAuthHealth();
+    expect(health.status).toBe('ready');
+    expect(health.lastFailureAt).toBeUndefined();
+  });
+
+  it('supports explicit recheck by clearing failure override', () => {
+    Object.assign(mockEnv, { ANTHROPIC_AUTH_TOKEN: 'sk-ant-oat01-fromenv' });
+    noteProviderAuthFailure(
+      'anthropic',
+      'Failed to authenticate. API Error: 401 Invalid authentication credentials',
+    );
+
+    const health = recheckProviderAuth('anthropic');
     expect(health.status).toBe('ready');
     expect(health.lastFailureAt).toBeUndefined();
   });
