@@ -107,11 +107,22 @@ Instructions here...
 ```
 
 **Rules:**
-- Keep SKILL.md **under 500 lines** — move detail to separate reference files
+- Keep SKILL.md **under 150 lines** (~5K tokens) — after auto-compaction, only the first 5K tokens per skill survive in context. Front-load critical instructions (purpose, prerequisites, workflow steps) in the first 150 lines.
+- Move implementation details, code blocks, troubleshooting, and verbose examples to a `references/` subdirectory. Link with `Read ${CLAUDE_SKILL_DIR}/references/X.md` directives.
 - `name`: lowercase, alphanumeric + hyphens, max 64 chars
 - `description`: required — Claude uses this to decide when to invoke the skill
 - Put code in separate files, not inline in the markdown
 - See the [skills standard](https://code.claude.com/docs/en/skills) for all available frontmatter fields
+
+**Compaction-safe structure:**
+```
+my-skill/
+├── SKILL.md              # <150 lines: frontmatter, purpose, prereqs, step list
+├── references/           # Detail loaded on demand
+│   ├── implementation.md # Code blocks, integration points
+│   └── troubleshooting.md
+└── scripts/              # Automation (optional)
+```
 
 ## Testing
 
