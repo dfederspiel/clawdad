@@ -175,5 +175,6 @@ export interface ProviderAuthHealth {
   source: ProviderAuthSource;
   refreshable: boolean;
   expiresAt?: number;
+  lastFailureAt?: string;
   notes: string[];
 }

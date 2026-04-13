@@ -4,37 +4,11 @@ import * as path from 'path';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
-import { AgentRuntimeConfig, RuntimeProvider } from './runtime-types.js';
-
-export type ProviderAuthStatus =
-  | 'ready'
-  | 'stale'
-  | 'missing'
-  | 'misconfigured'
-  | 'unsupported';
-
-export type ProviderAuthSource =
-  | 'env'
-  | 'oauth-store'
-  | 'local-runtime'
-  | 'none';
-
-export interface ProviderAuthMaterial {
-  headers?: Record<string, string>;
-  env?: Record<string, string>;
-  expiresAt?: number;
-  source: ProviderAuthSource;
-}
-
-export interface ProviderAuthHealth {
-  provider: RuntimeProvider;
-  status: ProviderAuthStatus;
-  authMode?: 'api-key' | 'oauth' | 'none';
-  source: ProviderAuthSource;
-  refreshable: boolean;
-  expiresAt?: number;
-  notes: string[];
-}
+import {
+  AgentRuntimeConfig,
+  ProviderAuthHealth,
+  RuntimeProvider,
+} from './runtime-types.js';
 
 interface ClaudeCodeCredentials {
   accessToken?: string;
@@ -42,11 +16,28 @@ interface ClaudeCodeCredentials {
   expiresAt?: number;
 }
 
+export type ProviderAuthFailureCategory =
+  | 'auth'
+  | 'expired'
+  | 'permission'
+  | 'provider_unavailable'
+  | 'transport'
+  | 'unknown';
+
+interface ProviderAuthFailureState {
+  status: 'stale' | 'missing' | 'misconfigured';
+  category: ProviderAuthFailureCategory;
+  lastFailureAt: string;
+  message: string;
+}
+
 const CLAUDE_CREDS_PATH = path.join(
   os.homedir(),
   '.claude',
   '.credentials.json',
 );
+
+const authFailureState = new Map<RuntimeProvider, ProviderAuthFailureState>();
 
 function readClaudeCodeCredentials(): ClaudeCodeCredentials | null {
   try {
@@ -103,6 +94,19 @@ export function resolveAnthropicCredentials(): AnthropicCredentials {
   return { authMode: 'oauth', baseUrl };
 }
 
+function applyFailureOverride(
+  base: ProviderAuthHealth,
+  override: ProviderAuthFailureState | undefined,
+): ProviderAuthHealth {
+  if (!override) return base;
+  return {
+    ...base,
+    status: override.status,
+    lastFailureAt: override.lastFailureAt,
+    notes: [override.message, ...base.notes],
+  };
+}
+
 export function getAnthropicAuthHealth(
   _runtime?: AgentRuntimeConfig,
 ): ProviderAuthHealth {
@@ -113,14 +117,17 @@ export function getAnthropicAuthHealth(
   ]);
 
   if (env.ANTHROPIC_API_KEY) {
-    return {
-      provider: 'anthropic',
-      status: 'ready',
-      authMode: 'api-key',
-      source: 'env',
-      refreshable: false,
-      notes: ['Using a static Anthropic API key from .env.'],
-    };
+    return applyFailureOverride(
+      {
+        provider: 'anthropic',
+        status: 'ready',
+        authMode: 'api-key',
+        source: 'env',
+        refreshable: false,
+        notes: ['Using a static Anthropic API key from .env.'],
+      },
+      authFailureState.get('anthropic'),
+    );
   }
 
   const oauth = readClaudeCodeCredentials();
@@ -129,47 +136,56 @@ export function getAnthropicAuthHealth(
       typeof oauth.expiresAt === 'number' &&
       Date.now() > oauth.expiresAt - 60_000;
 
-    return {
-      provider: 'anthropic',
-      status: stale ? 'stale' : 'ready',
-      authMode: 'oauth',
-      source: 'oauth-store',
-      refreshable: !!oauth.refreshToken,
-      expiresAt: oauth.expiresAt,
-      notes: stale
-        ? [
-            'Claude Code OAuth access token is expired or expiring soon.',
-            'ClawDad re-reads this token, but does not yet perform its own refresh exchange.',
-          ]
-        : [
-            'Using Claude Code OAuth credentials from the local credential store.',
-          ],
-    };
+    return applyFailureOverride(
+      {
+        provider: 'anthropic',
+        status: stale ? 'stale' : 'ready',
+        authMode: 'oauth',
+        source: 'oauth-store',
+        refreshable: !!oauth.refreshToken,
+        expiresAt: oauth.expiresAt,
+        notes: stale
+          ? [
+              'Claude Code OAuth access token is expired or expiring soon.',
+              'ClawDad re-reads this token, but does not yet perform its own refresh exchange.',
+            ]
+          : [
+              'Using Claude Code OAuth credentials from the local credential store.',
+            ],
+      },
+      authFailureState.get('anthropic'),
+    );
   }
 
   const envOauth = env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
   if (envOauth) {
-    return {
-      provider: 'anthropic',
-      status: 'ready',
-      authMode: 'oauth',
-      source: 'env',
-      refreshable: false,
-      notes: [
-        'Using an OAuth bearer token from .env.',
-        'Expiry cannot be validated automatically for this token source.',
-      ],
-    };
+    return applyFailureOverride(
+      {
+        provider: 'anthropic',
+        status: 'ready',
+        authMode: 'oauth',
+        source: 'env',
+        refreshable: false,
+        notes: [
+          'Using an OAuth bearer token from .env.',
+          'Expiry cannot be validated automatically for this token source.',
+        ],
+      },
+      authFailureState.get('anthropic'),
+    );
   }
 
-  return {
-    provider: 'anthropic',
-    status: 'missing',
-    authMode: 'none',
-    source: 'none',
-    refreshable: false,
-    notes: ['No Anthropic API key or OAuth token is configured.'],
-  };
+  return applyFailureOverride(
+    {
+      provider: 'anthropic',
+      status: 'missing',
+      authMode: 'none',
+      source: 'none',
+      refreshable: false,
+      notes: ['No Anthropic API key or OAuth token is configured.'],
+    },
+    authFailureState.get('anthropic'),
+  );
 }
 
 export function getProviderAuthHealth(
@@ -202,4 +218,43 @@ export function getProviderAuthHealth(
 
 export function detectAuthMode(): 'api-key' | 'oauth' {
   return resolveAnthropicCredentials().authMode;
+}
+
+export function classifyProviderAuthFailure(
+  provider: RuntimeProvider,
+  message: string,
+): ProviderAuthFailureCategory | null {
+  switch (provider) {
+    case 'anthropic':
+      if (
+        /401|authentication_error|invalid authentication credentials|failed to authenticate/i.test(
+          message,
+        )
+      ) {
+        return /expired/i.test(message) ? 'expired' : 'auth';
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+export function noteProviderAuthFailure(
+  provider: RuntimeProvider,
+  message: string,
+): ProviderAuthFailureCategory | null {
+  const category = classifyProviderAuthFailure(provider, message);
+  if (!category) return null;
+
+  authFailureState.set(provider, {
+    status: category === 'permission' ? 'misconfigured' : 'stale',
+    category,
+    lastFailureAt: new Date().toISOString(),
+    message,
+  });
+  return category;
+}
+
+export function clearProviderAuthFailure(provider: RuntimeProvider): void {
+  authFailureState.delete(provider);
 }

@@ -36,7 +36,10 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 import {
+  clearProviderAuthFailure,
+  classifyProviderAuthFailure,
   getAnthropicAuthHealth,
+  noteProviderAuthFailure,
   readClaudeCodeToken,
   resolveAnthropicCredentials,
 } from './provider-auth.js';
@@ -45,6 +48,7 @@ describe('provider-auth', () => {
   afterEach(() => {
     for (const key of Object.keys(mockEnv)) delete mockEnv[key];
     mockCredsFileContent = null;
+    clearProviderAuthFailure('anthropic');
   });
 
   it('reports API-key auth as ready', () => {
@@ -86,5 +90,40 @@ describe('provider-auth', () => {
     });
     expect(readClaudeCodeToken()).toBe('sk-ant-oat01-stale');
     expect(resolveAnthropicCredentials().oauthToken).toBe('sk-ant-oat01-stale');
+  });
+
+  it('classifies anthropic authentication failures', () => {
+    expect(
+      classifyProviderAuthFailure(
+        'anthropic',
+        'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}}',
+      ),
+    ).toBe('auth');
+  });
+
+  it('records auth failures in provider health', () => {
+    Object.assign(mockEnv, { ANTHROPIC_AUTH_TOKEN: 'sk-ant-oat01-fromenv' });
+    noteProviderAuthFailure(
+      'anthropic',
+      'Failed to authenticate. API Error: 401 Invalid authentication credentials',
+    );
+
+    const health = getAnthropicAuthHealth();
+    expect(health.status).toBe('stale');
+    expect(health.lastFailureAt).toBeTruthy();
+    expect(health.notes[0]).toContain('Failed to authenticate');
+  });
+
+  it('clears recorded auth failures after recovery', () => {
+    Object.assign(mockEnv, { ANTHROPIC_AUTH_TOKEN: 'sk-ant-oat01-fromenv' });
+    noteProviderAuthFailure(
+      'anthropic',
+      'Failed to authenticate. API Error: 401 Invalid authentication credentials',
+    );
+    clearProviderAuthFailure('anthropic');
+
+    const health = getAnthropicAuthHealth();
+    expect(health.status).toBe('ready');
+    expect(health.lastFailureAt).toBeUndefined();
   });
 });
