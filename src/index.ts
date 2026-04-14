@@ -958,8 +958,9 @@ async function processGroupMessages(
   const pendingOrigin = pendingOrigins[chatJid];
   const isThreadReply = !!pendingOrigin?.threadId;
 
-  // Multi-agent coordinators need to see bot messages (specialist responses)
-  // so they can synthesize results after delegations complete.
+  // Always include bot messages so agents have context of their own prior output
+  // (especially scheduled task output). Multi-agent coordinators also need this
+  // to see specialist responses after delegations complete.
   const groupAgentList = groupAgents[chatJid] || [];
   const isMultiAgent = groupAgentList.length > 1;
 
@@ -968,7 +969,7 @@ async function processGroupMessages(
     getOrRecoverCursor(chatJid),
     ASSISTANT_NAME,
     MAX_MESSAGES_PER_PROMPT,
-    isMultiAgent, // includeBotMessages — coordinators must see specialist output
+    true, // includeBotMessages — agents must see their own prior output for conversational continuity
     !isThreadReply, // excludeThreaded — but include thread replies when processing a thread agent
   );
 
@@ -1039,6 +1040,7 @@ async function processGroupMessages(
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
       (m) =>
+        !m.is_bot_message &&
         triggerPattern.test(m.content.trim()) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
