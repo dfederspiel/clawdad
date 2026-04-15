@@ -601,7 +601,13 @@ async function runQuery(
     if (message.type === 'result') {
       resultCount++;
       const msg = message as Record<string, unknown>;
-      const textResult = typeof msg.result === 'string' ? msg.result : null;
+      const sdkTextResult = typeof msg.result === 'string' ? msg.result : null;
+      // Fallback: if the SDK result is null but we streamed text blocks
+      // (text + tool_use in the same turn), use the accumulated texts.
+      // Without this, the host never delivers the content — TEXT markers
+      // are only shown as ephemeral typing indicator status, not chat messages.
+      const textResult = sdkTextResult
+        || (assistantTexts.length > 0 ? assistantTexts.join('\n\n') : null);
 
       // Extract usage from SDK result message
       const usage = msg.usage as { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } | undefined;
@@ -616,7 +622,7 @@ async function runQuery(
       if (typeof msg.duration_api_ms === 'number') accumulatedUsage.durationApiMs = msg.duration_api_ms;
       if (typeof msg.num_turns === 'number') accumulatedUsage.numTurns = msg.num_turns;
 
-      log(`Result #${resultCount}: subtype=${message.subtype} turns=${accumulatedUsage.numTurns} cost=$${accumulatedUsage.costUsd.toFixed(4)}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
+      log(`Result #${resultCount}: subtype=${message.subtype} turns=${accumulatedUsage.numTurns} cost=$${accumulatedUsage.costUsd.toFixed(4)}${sdkTextResult ? ` text=${sdkTextResult.slice(0, 200)}` : ''}${!sdkTextResult && textResult ? ` (recovered ${assistantTexts.length} streamed text blocks, ${textResult.length} chars)` : ''}`);
 
       // SDK bug workaround: when the agent completes with only tool calls
       // and no text response, result is null. Instead of forwarding null to
