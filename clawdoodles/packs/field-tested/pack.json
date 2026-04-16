@@ -1,0 +1,70 @@
+{
+  "name": "Field Tested",
+  "description": "Agent templates extracted from production — proven patterns for API integration, multi-agent teams, git workflows, and monitoring.",
+  "author": "ClawDad",
+  "version": "1.0.0",
+  "setup": [
+    {
+      "title": "About You",
+      "subtitle": "So your agents know who they're working for.",
+      "fields": [
+        { "key": "user_name", "label": "Name", "placeholder": "Jane Smith", "required": true },
+        { "key": "user_role", "label": "Role", "placeholder": "Senior Engineer" },
+        { "key": "team_name", "label": "Team", "placeholder": "Platform" },
+        { "key": "organization", "label": "Organization", "placeholder": "Acme Corp" }
+      ]
+    },
+    {
+      "title": "Atlassian",
+      "subtitle": "For Jira and Confluence access. Skip if you don't use Atlassian.",
+      "fields": [
+        { "key": "atlassian_instance", "label": "Instance URL", "placeholder": "https://your-team.atlassian.net" },
+        { "key": "atlassian_email", "label": "Email", "placeholder": "you@company.com" },
+        { "key": "jira_project_key", "label": "Jira project key", "placeholder": "PROJ" }
+      ]
+    },
+    {
+      "title": "Source Code",
+      "subtitle": "Where your repos live. Both are optional.",
+      "fields": [
+        { "key": "github_org", "label": "GitHub org", "placeholder": "my-org" },
+        { "key": "gitlab_url", "label": "GitLab URL", "placeholder": "https://gitlab.example.com" }
+      ]
+    }
+  ],
+  "tiers": {
+    "beginner": "Single-agent patterns: API auth, polling, rich dashboards",
+    "advanced": "Multi-agent coordination, browser automation, git workflows",
+    "recipe": "Full production workflows combining multiple patterns"
+  },
+  "achievements": {
+    "foundations": [
+      { "id": "api_handshake", "name": "API Handshake", "description": "Made your first authenticated API call via credential proxy", "xp": 10 },
+      { "id": "plugged_in", "name": "Plugged In", "description": "Registered a credential using the secure popup", "xp": 10 },
+      { "id": "first_watch", "name": "First Watch", "description": "Scheduled your first polling task", "xp": 15 },
+      { "id": "state_change", "name": "State Change", "description": "Detected a change between polling cycles", "xp": 15 },
+      { "id": "dashboard_ready", "name": "Dashboard Ready", "description": "Delivered a report using rich output blocks", "xp": 10 },
+      { "id": "event_recorded", "name": "Event Recorded", "description": "Logged a domain event to the audit trail", "xp": 10 },
+      { "id": "memory_lane", "name": "Memory Lane", "description": "Recalled a preference from a previous session", "xp": 15 },
+      { "id": "config_complete", "name": "Config Complete", "description": "Finished first-run setup", "xp": 10 }
+    ],
+    "workflows": [
+      { "id": "delegation_sent", "name": "Delegation Sent", "description": "Coordinator delegated to a specialist agent", "xp": 20 },
+      { "id": "parallel_ops", "name": "Parallel Ops", "description": "Ran two or more specialists concurrently", "xp": 25 },
+      { "id": "synthesis_complete", "name": "Synthesis Complete", "description": "Coordinator combined specialist results into a unified report", "xp": 20 },
+      { "id": "env_verified", "name": "Env Verified", "description": "Verified an API endpoint in a live environment", "xp": 15 },
+      { "id": "branch_pushed", "name": "Branch Pushed", "description": "Pushed a feature branch via cred-exec.sh", "xp": 20 },
+      { "id": "build_green", "name": "Build Green", "description": "Ran build/lint and all checks passed", "xp": 15 },
+      { "id": "pr_opened", "name": "PR Opened", "description": "Created a pull request from an agent", "xp": 25 },
+      { "id": "cross_service", "name": "Cross Service", "description": "Made API calls to 3+ different services in one session", "xp": 20 }
+    ],
+    "mastery": [
+      { "id": "full_team", "name": "Full Team", "description": "Built a multi-agent group with coordinator + 2 specialists", "xp": 30 },
+      { "id": "autonomous_loop", "name": "Autonomous Loop", "description": "Agent polled, detected change, and acted without user intervention", "xp": 30 },
+      { "id": "pipeline_complete", "name": "Pipeline Complete", "description": "Orchestrated a multi-stage workflow end to end", "xp": 35 },
+      { "id": "zero_touch", "name": "Zero Touch", "description": "Scheduled task ran overnight and delivered results by morning", "xp": 30 },
+      { "id": "triage_cleared", "name": "Triage Cleared", "description": "Processed an entire backlog queue autonomously", "xp": 35 },
+      { "id": "field_tested", "name": "Field Tested", "description": "Used 3+ templates from this pack in production", "xp": 50 }
+    ]
+  }
+}

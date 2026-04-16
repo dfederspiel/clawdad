@@ -70,6 +70,9 @@ export interface ContainerInput {
   mainChatJid?: string; // JID of the main group (for escalation messaging)
   script?: string;
   achievements?: { id: string; name: string; description: string }[];
+  systemContext?: string; // Multi-agent identity context (appended to system prompt)
+  maxTurns?: number;
+  disallowedTools?: string[];
 }
 
 export interface UsageData {

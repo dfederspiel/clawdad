@@ -31,6 +31,8 @@ export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
   sshAgent?: boolean; // Mount host SSH_AUTH_SOCK into container (default: false)
+  maxTurns?: number; // Max SDK turns per query (prevents runaway agents)
+  disallowedTools?: string[]; // Tools to block (e.g., delegate_to_agent for specialists)
 }
 
 export interface RegisteredGroup {

@@ -1,0 +1,9 @@
+{
+  "service": "jira",
+  "project_key": "",
+  "triage_rules": [],
+  "auto_assign": false,
+  "auto_comment": true,
+  "poll_interval_minutes": 30,
+  "backlog_jql": ""
+}

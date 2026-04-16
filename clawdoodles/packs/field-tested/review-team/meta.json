@@ -1,0 +1,5 @@
+{
+  "name": "Review Team",
+  "description": "A complete multi-agent PR review team — coordinator, analyst, verifier, and operator working in parallel. The recipe that production review teams are built from.",
+  "tier": "recipe"
+}

@@ -1,0 +1,5 @@
+{
+  "name": "Ticket Watcher",
+  "description": "Poll Jira, GitHub, or GitLab for ticket changes — scheduling, state tracking, and change detection. Learn the polling pattern that powers production monitoring agents.",
+  "tier": "beginner"
+}

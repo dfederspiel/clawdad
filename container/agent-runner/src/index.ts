@@ -37,6 +37,9 @@ interface ContainerInput {
   mainChatJid?: string;
   script?: string;
   achievements?: { id: string; name: string; description: string }[];
+  systemContext?: string;
+  maxTurns?: number;
+  disallowedTools?: string[];
 }
 
 interface UsageData {
@@ -476,12 +479,17 @@ async function runQuery(
     costUsd: 0, durationMs: 0, durationApiMs: 0, numTurns: 0,
   };
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
+  // Build system prompt appendix from global CLAUDE.md + multi-agent context.
+  // This goes into systemPrompt.append so it survives compaction (unlike user-message injection).
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
-  let globalClaudeMd: string | undefined;
+  const systemParts: string[] = [];
   if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+    systemParts.push(fs.readFileSync(globalClaudeMdPath, 'utf-8'));
   }
+  if (containerInput.systemContext) {
+    systemParts.push(containerInput.systemContext);
+  }
+  const systemAppend = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
@@ -495,6 +503,20 @@ async function runQuery(
       }
     }
   }
+  // Include agent-specific directory if mounted (multi-agent groups).
+  // The host mounts agents/{name}/ at /workspace/agent — its CLAUDE.md
+  // carries the agent's identity and instructions.
+  const agentDir = '/workspace/agent';
+  if (fs.existsSync(agentDir)) {
+    extraDirs.push(agentDir);
+  }
+
+  // Include channel-specific global instructions if mounted
+  const globalWebDir = '/workspace/global-web';
+  if (fs.existsSync(globalWebDir)) {
+    extraDirs.push(globalWebDir);
+  }
+
   if (extraDirs.length > 0) {
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
@@ -513,8 +535,8 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
+      systemPrompt: systemAppend
+        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
         : undefined,
       allowedTools: [
         'Bash',
@@ -527,6 +549,9 @@ async function runQuery(
         'mcp__nanoclaw__*',
         'mcp__ollama__*'
       ],
+      disallowedTools: containerInput.disallowedTools?.length
+        ? containerInput.disallowedTools : undefined,
+      maxTurns: containerInput.maxTurns,
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,

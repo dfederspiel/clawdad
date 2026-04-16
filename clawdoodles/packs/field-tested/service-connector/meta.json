@@ -1,0 +1,5 @@
+{
+  "name": "Service Connector",
+  "description": "Connect to any API securely — credentials, proxy, headers, and error handling. Learn the credential proxy pattern that every production agent uses.",
+  "tier": "beginner"
+}

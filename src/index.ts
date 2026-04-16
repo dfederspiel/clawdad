@@ -738,17 +738,16 @@ async function executeAutomationActions(
               const routingNote = action.messageTemplate
                 ? `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n${action.messageTemplate}\n`
                 : `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n`;
-              const delegationPrompt =
-                multiAgentCtx + conversationCtx + routingNote;
+              const delegationPrompt = conversationCtx + routingNote;
 
               setActiveAgentName(chatJid, agent.displayName);
               await channel.setTyping?.(chatJid, true);
 
-              const status = await runAgent(
+              const status = await runAgent({
                 group,
-                delegationPrompt,
+                prompt: delegationPrompt,
                 chatJid,
-                async (result) => {
+                onOutput: async (result) => {
                   if (result.result) {
                     if (
                       result.textsAlreadyStreamed &&
@@ -790,8 +789,8 @@ async function executeAutomationActions(
                     );
                   }
                 },
-                (event) => broadcastProgress(chatJid, event),
-                async (rawText) => {
+                onProgress: (event) => broadcastProgress(chatJid, event),
+                onText: async (rawText) => {
                   // TEXT markers deliver the actual message content as a chat
                   // message — no extra progress broadcast (would duplicate into
                   // the typing indicator's tool history).
@@ -807,8 +806,8 @@ async function executeAutomationActions(
                   }
                 },
                 agent,
-                true, // isDelegation
-                async (text) => {
+                isDelegation: true,
+                sendMessage: async (text) => {
                   setActiveAgentName(chatJid, agent.displayName);
                   if (
                     await deliverAgentMessage(channel, chatJid, text, lease)
@@ -816,9 +815,10 @@ async function executeAutomationActions(
                     deliveredToUser = true;
                   }
                 },
-                batchId,
-                autoCoordinatorContainer || undefined,
-              );
+                runBatchId: batchId,
+                networkContainer: autoCoordinatorContainer || undefined,
+                systemContext: multiAgentCtx || undefined,
+              });
 
               group.containerConfig = savedConfig;
               clearActiveAgentName(chatJid);
@@ -1000,15 +1000,13 @@ async function processGroupMessages(
         channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
       runAgent: (prompt, onOutput) => {
         const defaultAgent = (groupAgents[chatJid] || [])[0];
-        return runAgent(
+        return runAgent({
           group,
           prompt,
           chatJid,
           onOutput,
-          undefined,
-          undefined, // onText — session commands don't stream intermediate text
-          defaultAgent,
-        );
+          agent: defaultAgent,
+        });
       },
       closeStdin: () => queue.closeStdin(chatJid),
       advanceCursor: (ts) => {
@@ -1229,17 +1227,16 @@ async function processGroupMessages(
               ),
             };
             const multiAgentCtx = buildMultiAgentContext(agent, agents);
-            const agentPrompt = multiAgentCtx ? multiAgentCtx + prompt : prompt;
 
             setActiveAgentName(responseJid, agent.displayName);
             await responseChannel.setTyping?.(responseJid, true, threadId);
             // Intermediate TEXT blocks are shown as status in the typing indicator
 
-            const status = await runAgent(
+            const status = await runAgent({
               group,
-              agentPrompt,
+              prompt,
               chatJid,
-              async (result) => {
+              onOutput: async (result) => {
                 if (result.result) {
                   if (
                     result.textsAlreadyStreamed &&
@@ -1279,8 +1276,8 @@ async function processGroupMessages(
                   );
                 }
               },
-              (event) => broadcastProgress(responseJid, event),
-              async (rawText) => {
+              onProgress: (event) => broadcastProgress(responseJid, event),
+              onText: async (rawText) => {
                 // Deliver intermediate text as a chat message; the typing
                 // indicator's tool history is reserved for actual tool calls.
                 const text = rawText
@@ -1301,8 +1298,8 @@ async function processGroupMessages(
                 }
               },
               agent,
-              true, // isDelegation
-              async (text) => {
+              isDelegation: true,
+              sendMessage: async (text) => {
                 setActiveAgentName(responseJid, agent.displayName);
                 if (
                   await deliverAgentMessage(
@@ -1316,9 +1313,10 @@ async function processGroupMessages(
                   deliveredToUser = true;
                 }
               },
-              batchId,
-              fanoutCoordinatorContainer || undefined,
-            );
+              runBatchId: batchId,
+              networkContainer: fanoutCoordinatorContainer || undefined,
+              systemContext: multiAgentCtx || undefined,
+            });
 
             group.containerConfig = savedConfig;
             clearActiveAgentName(responseJid);
@@ -1399,9 +1397,8 @@ async function processGroupMessages(
   for (const agent of triggeredAgents) {
     const batchId = `run-${randomUUID()}`;
     const lease = beginDeliveryLease(responseJid, batchId);
-    // Build agent-specific prompt with multi-agent context
+    // Build agent-specific multi-agent context (injected as system prompt, not user content)
     const multiAgentCtx = buildMultiAgentContext(agent, agents);
-    const agentPrompt = multiAgentCtx ? multiAgentCtx + prompt : prompt;
 
     // Set active agent name so the channel uses it as sender_name on bot messages.
     // Only set for multi-agent groups — single-agent groups don't need "X is thinking".
@@ -1440,11 +1437,11 @@ async function processGroupMessages(
     let outputSentForCurrentQuery = false;
     let outputSentToUser = false;
     let automationFiredForAgent = false;
-    const output = await runAgent(
+    const output = await runAgent({
       group,
-      agentPrompt,
+      prompt,
       chatJid,
-      async (result) => {
+      onOutput: async (result) => {
         if (result.result) {
           const raw =
             typeof result.result === 'string'
@@ -1557,10 +1554,10 @@ async function processGroupMessages(
           hadError = true;
         }
       },
-      (event) => {
+      onProgress: (event) => {
         broadcastProgress(responseJid, event);
       },
-      async (rawText) => {
+      onText: async (rawText) => {
         // Intermediate text — show as status in typing indicator, not a chat message.
         // The final result will be sent as the real message.
         const text = rawText
@@ -1578,8 +1575,7 @@ async function processGroupMessages(
         resetIdleTimer();
       },
       agent,
-      undefined, // isDelegation
-      async (text) => {
+      sendMessage: async (text) => {
         if (isMultiAgent) setActiveAgentName(responseJid, agent.displayName);
         if (
           await deliverAgentMessage(
@@ -1594,8 +1590,9 @@ async function processGroupMessages(
           outputSentForCurrentQuery = true;
         }
       },
-      batchId,
-    );
+      runBatchId: batchId,
+      systemContext: multiAgentCtx || undefined,
+    });
 
     await responseChannel.setTyping?.(
       responseJid,
@@ -1651,19 +1648,36 @@ async function processGroupMessages(
   return true;
 }
 
-async function runAgent(
-  group: RegisteredGroup,
-  prompt: string,
-  chatJid: string,
-  onOutput?: (output: ContainerOutput) => Promise<void>,
-  onProgress?: (event: ProgressEvent) => void,
-  onText?: (text: string) => Promise<void>,
-  agent?: Agent,
-  isDelegation?: boolean,
-  sendMessage?: (text: string) => Promise<void>,
-  runBatchId?: string,
-  networkContainer?: string,
-): Promise<'success' | 'error'> {
+interface RunAgentOptions {
+  group: RegisteredGroup;
+  prompt: string;
+  chatJid: string;
+  onOutput?: (output: ContainerOutput) => Promise<void>;
+  onProgress?: (event: ProgressEvent) => void;
+  onText?: (text: string) => Promise<void>;
+  agent?: Agent;
+  isDelegation?: boolean;
+  sendMessage?: (text: string) => Promise<void>;
+  runBatchId?: string;
+  networkContainer?: string;
+  systemContext?: string;
+}
+
+async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
+  const {
+    group,
+    prompt,
+    chatJid,
+    onOutput,
+    onProgress,
+    onText,
+    agent,
+    isDelegation,
+    sendMessage,
+    runBatchId,
+    networkContainer,
+    systemContext,
+  } = opts;
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
   const agentName = agent?.name || DEFAULT_AGENT_NAME;
@@ -1675,6 +1689,19 @@ async function runAgent(
   const sessionId =
     sessions[agentId] ||
     (agentName === DEFAULT_AGENT_NAME ? sessions[group.folder] : undefined);
+
+  // Safety rails: maxTurns from agent or group config, disallowedTools with
+  // auto-blocking of delegation for specialists (prevents delegation loops).
+  const isCoordinator = agent ? !agent.trigger : true;
+  const autoDisallowed = isCoordinator
+    ? []
+    : ['mcp__nanoclaw__delegate_to_agent'];
+  const effectiveDisallowed = [
+    ...autoDisallowed,
+    ...(agent?.containerConfig?.disallowedTools || []),
+  ];
+  const effectiveMaxTurns =
+    agent?.containerConfig?.maxTurns || group.containerConfig?.maxTurns;
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -1703,7 +1730,6 @@ async function runAgent(
   );
 
   // Container lifecycle telemetry
-  const isCoordinator = agent ? !agent.trigger : true;
   let containerReuse: 'cold_start' | 'warm_reuse' = 'cold_start';
   logger.info(
     {
@@ -2011,6 +2037,10 @@ async function runAgent(
         poolManaged: true,
         mainChatJid: isMain ? undefined : getMainChatJid(),
         achievements: getAchievementsForContainer(),
+        systemContext,
+        maxTurns: effectiveMaxTurns,
+        disallowedTools:
+          effectiveDisallowed.length > 0 ? effectiveDisallowed : undefined,
       };
 
       const handle = await spawnContainer(group, containerInput);
@@ -2085,6 +2115,10 @@ async function runAgent(
       poolManaged: false,
       mainChatJid: isMain ? undefined : getMainChatJid(),
       achievements: getAchievementsForContainer(),
+      systemContext,
+      maxTurns: effectiveMaxTurns,
+      disallowedTools:
+        effectiveDisallowed.length > 0 ? effectiveDisallowed : undefined,
     };
 
     //
@@ -2987,7 +3021,6 @@ async function main(): Promise<void> {
           );
           const conversationCtx = formatMessages(recentMessages, TIMEZONE);
           const delegationPrompt =
-            multiAgentCtx +
             conversationCtx +
             `\n\n--- Delegation from ${sourceAgent} ---\n${message}\n--- End delegation ---\n`;
 
@@ -2995,11 +3028,11 @@ async function main(): Promise<void> {
           await channel.setTyping?.(chatJid, true);
           // Intermediate TEXT blocks are shown as status in the typing indicator
 
-          const status = await runAgent(
+          const status = await runAgent({
             group,
-            delegationPrompt,
+            prompt: delegationPrompt,
             chatJid,
-            async (result) => {
+            onOutput: async (result) => {
               if (result.result) {
                 if (
                   result.textsAlreadyStreamed &&
@@ -3045,8 +3078,8 @@ async function main(): Promise<void> {
                 );
               }
             },
-            (event) => broadcastProgress(chatJid, event),
-            async (rawText) => {
+            onProgress: (event) => broadcastProgress(chatJid, event),
+            onText: async (rawText) => {
               const text = rawText
                 .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                 .trim();
@@ -3057,16 +3090,17 @@ async function main(): Promise<void> {
               }
             },
             agent,
-            true, // isDelegation — use shorter timeout
-            async (text) => {
+            isDelegation: true,
+            sendMessage: async (text) => {
               setActiveAgentName(chatJid, agent.displayName);
               if (await deliverAgentMessage(channel, chatJid, text, lease)) {
                 deliveredToUser = true;
               }
             },
-            batchId,
-            coordinatorContainer || undefined,
-          );
+            runBatchId: batchId,
+            networkContainer: coordinatorContainer || undefined,
+            systemContext: multiAgentCtx || undefined,
+          });
 
           group.containerConfig = savedConfig; // restore original config
           clearActiveAgentName(chatJid);

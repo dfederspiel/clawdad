@@ -1,0 +1,7 @@
+{
+  "service": "jira",
+  "project_key": "",
+  "poll_interval_minutes": 30,
+  "jql_filter": "",
+  "notify_on": ["new", "status_change"]
+}

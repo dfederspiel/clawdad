@@ -1,0 +1,5 @@
+{
+  "name": "Pipeline Ops",
+  "description": "Orchestrate deployments across multiple services — CI pipelines, security scans, feature flags, and deployment verification. A recipe for multi-service operations.",
+  "tier": "recipe"
+}

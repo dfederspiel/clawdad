@@ -1,0 +1,7 @@
+{
+  "services": {},
+  "pipeline_stages": [],
+  "environments": [],
+  "notification_channel": "",
+  "auto_rollback": false
+}

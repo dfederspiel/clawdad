@@ -1,0 +1,5 @@
+{
+  "name": "Env Prober",
+  "description": "Verify APIs and UIs across live environments — endpoint testing, browser screenshots, and structured verification reports. Learn the patterns used by production verification agents.",
+  "tier": "advanced"
+}

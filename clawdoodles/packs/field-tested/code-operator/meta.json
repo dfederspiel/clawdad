@@ -1,0 +1,5 @@
+{
+  "name": "Code Operator",
+  "description": "Clone repos, create branches, run builds, and push PRs — all through the credential proxy. Learn the git workflow patterns used by production code agents.",
+  "tier": "advanced"
+}

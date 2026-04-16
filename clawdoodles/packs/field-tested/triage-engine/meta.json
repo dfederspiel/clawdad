@@ -1,0 +1,5 @@
+{
+  "name": "Triage Engine",
+  "description": "Autonomous bug triage — poll for tickets, analyze, categorize, and take action. The recipe behind production triage agents that clear backlogs while you sleep.",
+  "tier": "recipe"
+}
