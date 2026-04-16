@@ -96,11 +96,7 @@ import {
   resolveAgentIpcInputPath,
   resolveGroupFolderPath,
 } from './group-folder.js';
-import {
-  startIpcWatcher,
-  getIpcMessageCount,
-  resetIpcMessageCount,
-} from './ipc.js';
+import { startIpcWatcher } from './ipc.js';
 import {
   findChannel,
   formatMessages,
@@ -1420,8 +1416,6 @@ async function processGroupMessages(
     let outputSentForCurrentQuery = false;
     let outputSentToUser = false;
     let automationFiredForAgent = false;
-    resetIpcMessageCount(responseJid);
-
     const output = await runAgent(
       group,
       agentPrompt,
@@ -1456,34 +1450,19 @@ async function processGroupMessages(
             );
           }
           if (text) {
-            // If the agent already sent messages via IPC send_message during
-            // this run, suppress the final OUTPUT to avoid double-responses.
-            const ipcCount = getIpcMessageCount(responseJid);
-            if (ipcCount > 0) {
-              logger.info(
-                {
-                  agent: agent.id,
-                  responseJid,
-                  ipcCount,
-                  outputLen: text.length,
-                },
-                'Suppressing OUTPUT delivery — agent already sent via IPC send_message',
-              );
-            } else {
-              if (isMultiAgent)
-                setActiveAgentName(responseJid, agent.displayName);
-              if (
-                await deliverAgentMessage(
-                  responseChannel,
-                  responseJid,
-                  text,
-                  lease,
-                  threadId,
-                )
-              ) {
-                outputSentToUser = true;
-                outputSentForCurrentQuery = true;
-              }
+            if (isMultiAgent)
+              setActiveAgentName(responseJid, agent.displayName);
+            if (
+              await deliverAgentMessage(
+                responseChannel,
+                responseJid,
+                text,
+                lease,
+                threadId,
+              )
+            ) {
+              outputSentToUser = true;
+              outputSentForCurrentQuery = true;
             }
           }
           resetIdleTimer();
@@ -1857,23 +1836,15 @@ async function runAgent(
           : JSON.stringify(output.result);
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       if (text) {
-        const ipcCount = getIpcMessageCount(chatJid);
-        if (ipcCount > 0) {
-          logger.info(
-            { agent: agentId, chatJid, ipcCount, outputLen: text.length },
-            'Suppressing OUTPUT delivery — agent already sent via IPC send_message (pool path)',
-          );
-        } else {
-          logger.info(
-            { agent: agentId, chatJid },
-            `Agent output: ${raw.length} chars (pool path)`,
-          );
-          if (sendMessage) {
-            await sendMessage(text);
-          } else if (onText) {
-            // Fallback for callers that don't provide sendMessage
-            await onText(text);
-          }
+        logger.info(
+          { agent: agentId, chatJid },
+          `Agent output: ${raw.length} chars (pool path)`,
+        );
+        if (sendMessage) {
+          await sendMessage(text);
+        } else if (onText) {
+          // Fallback for callers that don't provide sendMessage
+          await onText(text);
         }
       }
     }

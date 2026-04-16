@@ -548,7 +548,14 @@ export class ClaudeCodeRuntime implements RuntimeSession {
           accumulatedUsage.numTurns = msg.num_turns;
         }
 
-        if (!textResult && nullResultRetries < 1) {
+        // If the SDK result is null but the agent emitted text blocks during
+        // the turn (mixed with tool_use), use the accumulated texts as the
+        // effective result. This prevents the null-result retry from firing
+        // when the agent already wrote a full response. (#30)
+        const effectiveResult = textResult
+          || (assistantTexts.length > 0 ? assistantTexts.join('\n\n') : null);
+
+        if (!effectiveResult && nullResultRetries < 1) {
           nullResultRetries++;
           stream.push(
             '[system] You completed tool calls but did not send a visible reply. Please respond to the user.',
@@ -559,7 +566,7 @@ export class ClaudeCodeRuntime implements RuntimeSession {
         yield {
           type: 'result',
           status: 'success',
-          result: textResult || null,
+          result: effectiveResult || null,
           newSessionId,
           resumeAt: lastAssistantUuid,
           usage: accumulatedUsage,
