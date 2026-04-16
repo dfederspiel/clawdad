@@ -1171,14 +1171,33 @@ async function processGroupMessages(
     ? findChannel(channels, originJid) || channel
     : channel;
 
-  // When multiple specialist agents are @-mentioned, run them in parallel
-  // via the delegation queue. The coordinator (if any) is excluded from
-  // parallel fan-out — only explicitly triggered specialists run concurrently.
+  // When specialist agents are @-mentioned alongside the coordinator, handle
+  // routing carefully to avoid double-execution. Two cases:
+  //
+  // 1) Multiple specialists triggered → run them in parallel via delegation
+  //    queue. Coordinator excluded from fan-out, re-triggers after completion.
+  // 2) Single specialist + coordinator → run ONLY the coordinator. It will see
+  //    the @-mention and can delegate if appropriate. Running both would cause
+  //    the specialist to execute twice (once directly, once via delegation).
   if (triggeredAgents.length > 1 && isMultiAgent) {
     const specialists = triggeredAgents.filter((a) => a.trigger);
     const coordinator = triggeredAgents.find((a) => !a.trigger);
 
-    if (specialists.length > 1) {
+    if (specialists.length === 1 && coordinator) {
+      // Single @-mention: suppress direct specialist run, let coordinator handle.
+      // The coordinator sees the full message (including the @-mention) and can
+      // delegate to the specialist with proper context.
+      logger.info(
+        {
+          group: group.name,
+          specialist: specialists[0].name,
+          coordinator: coordinator.name,
+        },
+        'Single specialist @-mentioned alongside coordinator — routing to coordinator only to avoid dual execution',
+      );
+      triggeredAgents.length = 0;
+      triggeredAgents.push(coordinator);
+    } else if (specialists.length > 1) {
       const MENTION_TIMEOUT = 120_000; // 2 minutes, same as coordinator delegations
       const batchId = `fanout-${randomUUID()}`;
       const fanoutCoordinatorContainer =
