@@ -373,7 +373,7 @@ async function buildContainerArgs(
   // and host-only settings that are irrelevant inside containers.
   const allEnv = readEnvFile();
   const excludePattern =
-    /^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_MODEL$|WEB_UI_|LOG_LEVEL$|PORT$)/;
+    /^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_MODEL$|WEB_UI_|LOG_LEVEL$|PORT$|OLLAMA_HOST$)/;
   const credentialPattern = /.+_(TOKEN|KEY|SECRET|PASSWORD)$/;
   for (const [key, value] of Object.entries(allEnv)) {
     if (excludePattern.test(key) || !value) continue;
@@ -389,6 +389,11 @@ async function buildContainerArgs(
     '-e',
     `CRED_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
   );
+
+  // Ensure Ollama host is available (for both MCP tool and runtime adapter)
+  const ollamaHost =
+    allEnv.OLLAMA_HOST || `http://${CONTAINER_HOST_GATEWAY}:11434`;
+  args.push('-e', `OLLAMA_HOST=${ollamaHost}`);
 
   // SSH agent forwarding — mount host socket so containers can use SSH
   // without the private key ever entering the container.

@@ -623,6 +623,7 @@ export class WebChannel implements Channel {
         instructions,
         sourceGroupJid,
         sourceAgentName,
+        runtime,
       } = body as {
         name?: string;
         displayName?: string;
@@ -630,6 +631,13 @@ export class WebChannel implements Channel {
         instructions?: string;
         sourceGroupJid?: string;
         sourceAgentName?: string;
+        runtime?: {
+          provider?: string;
+          model?: string;
+          baseUrl?: string;
+          temperature?: number;
+          maxTokens?: number;
+        };
       };
 
       if (!name?.trim()) {
@@ -705,6 +713,19 @@ export class WebChannel implements Channel {
       } else if (!sourceAgentName && 'trigger' in agentConfig) {
         delete agentConfig.trigger;
       }
+      if (runtime?.provider) {
+        agentConfig.runtime = {
+          provider: runtime.provider,
+          ...(runtime.model ? { model: runtime.model } : {}),
+          ...(runtime.baseUrl ? { baseUrl: runtime.baseUrl } : {}),
+          ...(runtime.temperature !== undefined
+            ? { temperature: runtime.temperature }
+            : {}),
+          ...(runtime.maxTokens !== undefined
+            ? { maxTokens: runtime.maxTokens }
+            : {}),
+        };
+      }
 
       fs.writeFileSync(
         path.join(agentDir, 'agent.json'),
@@ -733,9 +754,16 @@ export class WebChannel implements Channel {
         agentName,
       );
       const body = await this.readBody(req);
-      const { displayName, trigger } = body as {
+      const { displayName, trigger, runtime } = body as {
         displayName?: string;
         trigger?: string;
+        runtime?: {
+          provider?: string;
+          model?: string;
+          baseUrl?: string;
+          temperature?: number;
+          maxTokens?: number;
+        } | null;
       };
 
       if (!fs.existsSync(agentDir)) {
@@ -762,6 +790,43 @@ export class WebChannel implements Channel {
           config.trigger = trimmed;
         } else {
           delete config.trigger;
+        }
+      }
+
+      if (runtime !== undefined) {
+        if (runtime === null) {
+          delete config.runtime;
+        } else {
+          const VALID_PROVIDERS = [
+            'anthropic',
+            'ollama',
+            'openai',
+            'github-copilot',
+            'azure-openai',
+            'openrouter',
+            'litellm',
+          ];
+          if (runtime.provider && !VALID_PROVIDERS.includes(runtime.provider)) {
+            return this.json(res, 400, {
+              error: `Invalid provider "${runtime.provider}". Valid: ${VALID_PROVIDERS.join(', ')}`,
+            });
+          }
+          if (runtime.provider === 'ollama' && !runtime.model) {
+            return this.json(res, 400, {
+              error: 'Ollama provider requires a model (e.g. "llama3.2")',
+            });
+          }
+          config.runtime = {
+            ...(runtime.provider ? { provider: runtime.provider } : {}),
+            ...(runtime.model ? { model: runtime.model } : {}),
+            ...(runtime.baseUrl ? { baseUrl: runtime.baseUrl } : {}),
+            ...(runtime.temperature !== undefined
+              ? { temperature: runtime.temperature }
+              : {}),
+            ...(runtime.maxTokens !== undefined
+              ? { maxTokens: runtime.maxTokens }
+              : {}),
+          };
         }
       }
 
@@ -848,6 +913,39 @@ export class WebChannel implements Channel {
 
       fs.rmSync(agentDir, { recursive: true, force: true });
       return this.refreshAgentsAndRespond(res, jid);
+    }
+
+    // GET /api/ollama/models — list locally available Ollama models
+    if (method === 'GET' && url.pathname === '/api/ollama/models') {
+      const ollamaHost = process.env.OLLAMA_HOST || 'http://localhost:11434';
+      try {
+        const response = await fetch(`${ollamaHost}/api/tags`);
+        if (!response.ok) {
+          return this.json(res, 200, {
+            models: [],
+            error: `Ollama returned ${response.status}`,
+          });
+        }
+        const data = (await response.json()) as {
+          models?: Array<{
+            name: string;
+            size: number;
+            modified_at: string;
+          }>;
+        };
+        return this.json(res, 200, {
+          models: (data.models || []).map((m) => ({
+            name: m.name,
+            size: m.size,
+            modified: m.modified_at,
+          })),
+        });
+      } catch {
+        return this.json(res, 200, {
+          models: [],
+          error: `Ollama is not reachable at ${ollamaHost}`,
+        });
+      }
     }
 
     // GET /api/triggers — list triggered agents for @-mention autocomplete

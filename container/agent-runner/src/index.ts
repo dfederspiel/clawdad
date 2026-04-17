@@ -21,6 +21,7 @@ import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-a
 import { fileURLToPath } from 'url';
 import { AgentRuntimeConfig, RuntimeTurnConstraints } from './runtime-interface.js';
 import { ClaudeCodeRuntime } from './claude-runtime.js';
+import { OllamaRuntime } from './ollama-runtime.js';
 
 interface ContainerInput {
   prompt: string;
@@ -442,17 +443,22 @@ async function runQuery(
   let closedDuringQuery = false;
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
-  const runtime = new ClaudeCodeRuntime({
-    containerInput,
-    mcpServerPath,
-    sdkEnv,
-    sessionId,
-    resumeAt,
-    log,
-    shouldClose,
-    drainIpcInput,
-    ipcPollMs: IPC_POLL_MS,
-  });
+
+  const provider = containerInput.runtime?.provider || 'anthropic';
+  const runtime =
+    provider === 'ollama'
+      ? new OllamaRuntime({ containerInput, log })
+      : new ClaudeCodeRuntime({
+          containerInput,
+          mcpServerPath,
+          sdkEnv,
+          sessionId,
+          resumeAt,
+          log,
+          shouldClose,
+          drainIpcInput,
+          ipcPollMs: IPC_POLL_MS,
+        });
 
   for await (const event of runtime.runTurn({
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],

@@ -23,6 +23,12 @@ export interface SmokeTestResult {
   claudeVersion?: string;
 }
 
+export interface OllamaHealth {
+  status: 'running' | 'unreachable' | 'not_configured';
+  modelCount?: number;
+  host?: string;
+}
+
 export interface HealthStatus {
   docker: {
     status: 'running' | 'not_running' | 'not_found';
@@ -37,6 +43,7 @@ export interface HealthStatus {
     image: string;
   };
   container_smoke?: SmokeTestResult;
+  ollama?: OllamaHealth;
   overall: 'ready' | 'needs_setup';
 }
 
@@ -152,11 +159,40 @@ export function checkContainerSmoke(): SmokeTestResult {
   }
 }
 
+async function checkOllama(): Promise<OllamaHealth | undefined> {
+  const env = readEnvFile();
+  const host = env.OLLAMA_HOST || 'http://localhost:11434';
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch(`${host}/api/tags`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      return { status: 'unreachable', host };
+    }
+    const data = (await response.json()) as {
+      models?: Array<{ name: string }>;
+    };
+    return {
+      status: 'running',
+      modelCount: data.models?.length || 0,
+      host,
+    };
+  } catch {
+    return { status: 'unreachable', host };
+  }
+}
+
 export async function getHealthStatus(): Promise<HealthStatus> {
   const docker = checkDocker();
   const credentialProxy = checkCredentials();
   const anthropic = getAnthropicAuthHealth();
   const containerImage = checkContainerImage();
+  const ollama = await checkOllama();
 
   const allGood =
     docker.status === 'running' &&
@@ -171,6 +207,11 @@ export async function getHealthStatus(): Promise<HealthStatus> {
     container_image: containerImage,
     overall: allGood ? 'ready' : 'needs_setup',
   };
+
+  // Ollama is optional — include if reachable
+  if (ollama) {
+    result.ollama = ollama;
+  }
 
   logger.debug({ health: result }, 'Health check completed');
   return result;
