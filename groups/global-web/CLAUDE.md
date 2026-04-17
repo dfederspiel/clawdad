@@ -4,7 +4,25 @@ These instructions apply only to agents running in the web UI. Non-web channels 
 
 ## Rich Content Blocks
 
-Rich content blocks (`:::blocks` fences) are available for structured output — tables, metrics, alerts, buttons, forms, and more. Full block type reference and formatting rules are in the `rich-output` skill.
+Rich content blocks (`:::blocks` fences) are available for structured output — tables, metrics, alerts, buttons, forms, and more. Full block type reference is in the `rich-output` skill.
+
+### Block Syntax Rules (MUST follow)
+
+1. **Only `:::blocks` works** — never `:::card`, `:::alert`, `:::table`, `:::stat`, or any other fence name
+2. **Content MUST be a JSON array** — `[{ ... }]`, even for a single block. Never a bare `{ ... }`
+3. **No prose inside the fence** — only valid JSON between `:::blocks` and `:::`
+4. **Closing `:::` required** — every `:::blocks` must have a matching `:::` on its own line
+5. **Prose goes outside fences** — text before/after, never inside
+
+```
+Here's the result:
+
+:::blocks
+[{ "type": "alert", "level": "success", "body": "All checks passed." }]
+:::
+
+Any questions?
+```
 
 ## Images and Browser Snapshots
 

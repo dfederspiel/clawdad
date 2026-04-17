@@ -5,19 +5,19 @@ description: Rich content blocks for the ClawDad web UI. Use when responding to 
 
 # Rich Output — Web UI Content Blocks
 
-When responding through the **web UI** (group folder starts with `web_`), you can emit structured content blocks that render as rich, interactive components instead of plain text.
+## CRITICAL: Block Syntax Rules
 
-## How to detect web context
+These 5 rules are non-negotiable. Violations render as broken JSON in the chat.
 
-Check your group folder name or workspace path:
-- Folder starts with `web_` (e.g., `web_main`, `web_dev`)
-- Or check `/workspace/group/` path for `web_` prefix
+1. **Only `:::blocks` works** — never use `:::card`, `:::alert`, `:::table`, `:::stat`, or any other fence name
+2. **Content MUST be a JSON array** — `[{ ... }]`, even for a single block. Never a bare `{ ... }` object
+3. **No prose inside the fence** — only valid JSON between `:::blocks` and `:::`
+4. **Closing `:::` required** — every `:::blocks` must have a matching `:::` on its own line
+5. **Prose goes outside fences** — text before/after the fence, never inside it
 
-**If the channel is NOT web (e.g., WhatsApp, Telegram, Slack, Discord):** do NOT use `:::blocks` — stick to plain markdown or the channel's native formatting. Blocks render as raw JSON in non-web channels.
+## Block Protocol
 
-## Block protocol
-
-Wrap a JSON array in `:::blocks` / `:::` fences within your normal response. You can mix prose and block fences freely — they interleave.
+Wrap a JSON array in `:::blocks` / `:::` fences. Mix prose and block fences freely.
 
 ```
 Here's what I found:
@@ -31,193 +31,39 @@ Here's what I found:
 Let me know if you want details.
 ```
 
-Plain markdown still works perfectly — use blocks only when they add clarity or visual value. Don't force everything into blocks.
+Plain markdown still works — use blocks only when they add clarity or visual value.
 
-## Block types
+**Web only:** If the channel is NOT web (Slack, Discord, Telegram), do NOT use blocks — they render as raw JSON.
 
-### text
-Standard markdown prose. You rarely need this explicitly — text outside of `:::blocks` fences is already rendered as markdown with full support for headers, tables, bold, italic, strikethrough, links, code, checkboxes, ordered/unordered lists, and horizontal rules.
+## Block Type Quick Reference
 
-```json
-{ "type": "text", "content": "## Summary\nEverything looks good." }
-```
+For full documentation with JSON examples and field tables: `Read references/block-types.md`
 
-### code
-Syntax-highlighted code with a copy button and optional filename badge.
+| Type | Key Fields | Use for |
+|------|-----------|---------|
+| `text` | `content` | Markdown prose (rarely needed — text outside fences is already markdown) |
+| `code` | `content`, `language?`, `filename?` | Code snippets with syntax highlighting and copy button |
+| `card` | `title`, `body`, `icon?`, `footer?` | Status reports, summaries, self-contained info panels |
+| `table` | `columns`, `rows` | Structured data grids (cleaner than markdown tables) |
+| `stat` | `items: [{ icon?, label, value }]` | Metric badges, counters, quick readouts |
+| `progress` | `label`, `value`, `max`, `color?` | Task completion, build progress |
+| `alert` | `level` (success/warn/error/info), `body`, `title?` | Important status changes, errors, warnings |
+| `diff` | `content`, `filename?` | Unified diffs with colored add/remove lines |
+| `action` | `buttons: [{ id, label, style? }]` | Clickable buttons — user clicks send `[action: id]` |
+| `form` | `id`, `fields`, `title?`, `submitLabel?` | Multi-field input collection — submits send `[form: id]` |
+| `image` | `src`, `alt?` | Inline images |
+| `sound` | `tone`, `label?` | Notification tones |
 
-```json
-{ "type": "code", "language": "typescript", "filename": "handler.ts", "content": "export function handle(req: Request) {\n  return new Response('ok');\n}" }
-```
+## Combining Blocks
 
-**When to use:** Sharing code snippets, file contents, command output, configs. Prefer this over triple-backtick markdown fences when you want the filename badge or when the code is a standalone artifact (not inline in prose).
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `content` | yes | The code string |
-| `language` | no | Language for syntax highlighting (e.g., `typescript`, `python`, `bash`, `json`) |
-| `filename` | no | Filename shown as a badge in the header |
-
-### card
-Titled panel for structured information — status reports, summaries, feature descriptions.
-
-```json
-{ "type": "card", "title": "Deployment Status", "icon": "🚀", "body": "All 3 services deployed successfully.\n\n- **api**: v2.4.1\n- **web**: v1.8.0\n- **worker**: v3.1.2", "footer": "Deployed 2 minutes ago" }
-```
-
-**When to use:** Presenting a self-contained summary, status update, or info block that benefits from visual framing. The body supports markdown.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `title` | yes | Card header text |
-| `icon` | no | Emoji or short string shown before the title |
-| `body` | yes | Card content (supports markdown) |
-| `footer` | no | Muted text at the bottom |
-
-### table
-Structured data grid. Use when presenting tabular data — cleaner than markdown tables for JSON-sourced data.
-
-```json
-{ "type": "table", "columns": ["Service", "Status", "Version"], "rows": [["api", "✅ Running", "2.4.1"], ["web", "✅ Running", "1.8.0"], ["worker", "⚠️ Degraded", "3.1.2"]] }
-```
-
-**When to use:** Comparing items, listing results, showing structured data. If the data is already in a structured form, prefer this over markdown pipe tables.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `columns` | yes | Array of column header strings |
-| `rows` | yes | Array of row arrays (each row is an array of cell values) |
-
-### stat
-Key-value stat badges — game HUD style. Perfect for metrics, counters, quick status readouts.
-
-```json
-{ "type": "stat", "items": [{ "icon": "💬", "label": "Messages", "value": 142 }, { "icon": "✅", "label": "Tasks", "value": 8 }, { "icon": "🔥", "label": "Streak", "value": "5 days" }] }
-```
-
-**When to use:** Displaying metrics, counts, quick summaries of numeric data. Each item renders as a compact badge.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `items` | yes | Array of `{ icon?, label, value }` objects |
-
-### progress
-Progress bar — for task completion, XP, build progress, deployment stages.
-
-```json
-{ "type": "progress", "label": "Build", "value": 7, "max": 10, "color": "green" }
-```
-
-**When to use:** Showing completion status, progress through a sequence, resource usage.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `label` | yes | What is being measured |
-| `value` | yes | Current value |
-| `max` | yes | Maximum value |
-| `color` | no | `gold`, `green`, `blue`, `red`, `purple` (default: `gold`) |
-
-### alert
-Banners for success, warning, error, or info messages. Eye-catching, color-coded.
-
-```json
-{ "type": "alert", "level": "warn", "title": "Rate limit approaching", "body": "API usage at 85% of daily quota. Consider spacing out requests." }
-```
-
-**When to use:** Important status changes, errors, warnings, success confirmations — anything that deserves visual emphasis.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `level` | yes | `success`, `warn`, `error`, `info` |
-| `title` | no | Bold header text |
-| `body` | yes | Alert content (supports markdown) |
-
-### diff
-Unified diff display with add/remove line coloring.
-
-```json
-{ "type": "diff", "filename": "config.ts", "content": "@@ -1,3 +1,3 @@\n const port = 3000;\n-const host = 'localhost';\n+const host = '0.0.0.0';\n const debug = false;" }
-```
-
-**When to use:** Showing code changes, before/after comparisons, patch results.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `content` | yes | Unified diff text (lines starting with `+`, `-`, `@@`) |
-| `filename` | no | File being diffed |
-
-### action
-Clickable buttons the user can press. Clicking sends `[action: button_id]` as a chat message back to you.
-
-```json
-{ "type": "action", "buttons": [{ "id": "approve", "label": "Approve", "style": "primary" }, { "id": "reject", "label": "Reject", "style": "danger" }, { "id": "skip", "label": "Skip", "style": "default" }] }
-```
-
-**When to use:** Presenting choices that require user input — approve/deny, pick an option, confirm an action. When you receive `[action: <id>]` in a follow-up message, that's the user clicking the button.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `buttons` | yes | Array of `{ id, label, style? }` objects |
-| `style` | no | `primary` (blue), `danger` (red), `default` (gray) |
-
-### form
-Interactive form for collecting structured input from the user. Renders as labeled fields with a submit button. When submitted, sends a structured `[form: id]...[/form]` message back to you.
-
-```json
-{ "type": "form", "id": "project-setup", "title": "Project Configuration", "fields": [{ "name": "repo_url", "label": "Repository URL", "type": "text", "required": true, "placeholder": "https://github.com/..." }, { "name": "environment", "label": "Environment", "type": "select", "options": ["dev", "staging", "prod"] }, { "name": "auto_deploy", "label": "Enable auto-deploy", "type": "checkbox" }, { "name": "notes", "label": "Additional notes", "type": "textarea" }], "submitLabel": "Configure" }
-```
-
-**When to use:** Collecting multiple pieces of non-secret information at once — configuration, preferences, project details, onboarding data. Much better UX than asking questions one at a time. For secrets (API keys, tokens), use the credential popup instead.
-
-When submitted, you'll receive a message like:
-```
-[form: project-setup]
-repo_url: https://github.com/user/repo
-environment: staging
-auto_deploy: true
-notes: Use the beta branch
-[/form]
-```
-
-If the user cancels:
-```
-[form: project-setup]
-cancelled: true
-[/form]
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `id` | yes | Unique identifier — used in the response tag |
-| `title` | no | Header text above the form |
-| `description` | no | Muted help text below the title |
-| `fields` | yes | Array of field objects (see below) |
-| `submitLabel` | no | Submit button text (default: "Submit") |
-| `cancelLabel` | no | Cancel button text (default: "Cancel", set to `false` to hide) |
-
-**Field types:**
-
-| Type | Description | Extra fields |
-|------|-------------|-------------|
-| `text` | Single-line text input | `placeholder` |
-| `email` | Email input with validation | `placeholder` |
-| `url` | URL input with validation | `placeholder` |
-| `number` | Numeric input | `placeholder` |
-| `select` | Dropdown menu | `options` (array of strings or `{ value, label }` objects) |
-| `checkbox` | Boolean toggle | — |
-| `textarea` | Multi-line text | `placeholder` |
-
-**Common field properties:** `name` (required), `label` (required), `type`, `required`, `default`, `placeholder`, `helpText`
-
-## Combining blocks
-
-You can include multiple blocks in one fence, and interleave fences with prose:
+Multiple blocks in one fence, interleaved with prose:
 
 ```
-I've analyzed your deployment. Here's the summary:
+I've analyzed your deployment:
 
 :::blocks
 [
-  { "type": "alert", "level": "success", "body": "Deployment completed successfully." },
+  { "type": "alert", "level": "success", "body": "Deployment completed." },
   { "type": "table", "columns": ["Service", "Version", "Status"], "rows": [["api", "2.4.1", "✅"], ["web", "1.8.0", "✅"]] },
   { "type": "stat", "items": [{ "icon": "⏱️", "label": "Duration", "value": "3m 42s" }, { "icon": "📦", "label": "Images", "value": 2 }] }
 ]
@@ -232,48 +78,20 @@ Want me to run the smoke tests?
 :::
 ```
 
-## Critical: always use a JSON array
+## Common Mistakes
 
-The content inside `:::blocks` **MUST** be a JSON array (`[...]`), even for a single block. This is the most common mistake.
-
-```
-✅ CORRECT — array with one item:
-:::blocks
-[{ "type": "card", "title": "Status", "body": "All good." }]
-:::
-
-✅ CORRECT — array with multiple items:
-:::blocks
-[
-  { "type": "alert", "level": "success", "body": "Deployed." },
-  { "type": "stat", "items": [{ "label": "Duration", "value": "2m" }] }
-]
-:::
-
-❌ WRONG — bare object (no array):
-:::blocks
-{ "type": "card", "title": "Status", "body": "All good." }
-:::
-
-❌ WRONG — multiple objects without array wrapping:
-:::blocks
-{ "type": "alert", "level": "success", "body": "Deployed." }
-{ "type": "stat", "items": [{ "label": "Duration", "value": "2m" }] }
-:::
-```
-
-## Common mistakes to avoid
-
-1. **Bare objects without `[...]` wrapper** — Always wrap in an array, even for one block.
-2. **Broken markdown links inside blocks** — Use `[Title](url)` not `*[Title (url)*`. Block body fields support standard markdown.
-3. **Mixing blocks and prose inside the same fence** — Prose goes OUTSIDE the `:::blocks` fence. Inside is JSON only.
-4. **Forgetting the closing `:::`** — Every `:::blocks` must have a matching `:::` on its own line.
+1. **Bare objects without `[...]` wrapper** — Always wrap in an array, even for one block
+2. **Using `:::card` or `:::alert` instead of `:::blocks`** — Only `:::blocks` is the correct fence name
+3. **Mixing prose and JSON inside the same fence** — Prose goes OUTSIDE the `:::blocks` fence
+4. **Forgetting the closing `:::`** — Every `:::blocks` must have a matching `:::` on its own line
+5. **Broken markdown links inside blocks** — Use `[Title](url)` not `*[Title (url)*`
+6. **Invalid JSON** — Missing commas, trailing commas, unquoted keys, unescaped newlines in strings
 
 ## Guidelines
 
 1. **Don't overuse blocks.** A simple text answer doesn't need blocks. Use them when structure adds value.
 2. **Mix prose and blocks.** Blocks work best as visual anchors within a conversational response, not as a replacement for explanation.
-3. **Keep JSON valid.** Invalid JSON inside `:::blocks` falls back to plain text rendering — the UI won't crash, but the user sees raw JSON.
-4. **Action buttons are for real choices.** Don't present actions for trivial things. Use them when the user's decision drives your next step.
-5. **Cards for self-contained info.** If the content makes sense as a standalone panel with a title, use a card. If it's part of a flowing explanation, use regular prose.
-6. **One alert per concern.** Don't stack 5 alerts — combine related info into a single alert with a clear level.
+3. **Keep JSON valid.** Invalid JSON falls back to plain text rendering — the user sees raw JSON.
+4. **Action buttons are for real choices.** Don't present actions for trivial things.
+5. **Cards for self-contained info.** If the content makes sense as a standalone panel with a title, use a card.
+6. **One alert per concern.** Don't stack 5 alerts — combine related info into a single alert.
