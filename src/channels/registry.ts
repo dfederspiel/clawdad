@@ -17,6 +17,13 @@ export interface ChannelOpts {
     displayName: string;
     trigger?: string;
     status?: string;
+    runtime?: {
+      provider: string;
+      model?: string;
+      baseUrl?: string;
+      temperature?: number;
+      maxTokens?: number;
+    };
   }>;
   refreshGroupAgents?: (jid: string) => Array<{
     id: string;
@@ -24,7 +31,15 @@ export interface ChannelOpts {
     displayName: string;
     trigger?: string;
     status?: string;
+    runtime?: {
+      provider: string;
+      model?: string;
+      baseUrl?: string;
+      temperature?: number;
+      maxTokens?: number;
+    };
   }>;
+  onAgentRuntimeChanged?: (groupFolder: string, agentName: string) => void;
   onRegisterGroup?: (jid: string, group: RegisteredGroup) => void;
   onDeleteGroup?: (jid: string, group: RegisteredGroup) => void;
   /** Optional status provider for web UI telemetry/task management */

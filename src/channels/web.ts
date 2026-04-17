@@ -831,6 +831,13 @@ export class WebChannel implements Channel {
       }
 
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+
+      // Evict warm pool container when runtime config changes —
+      // the pooled container has the old provider/model baked in.
+      if (runtime !== undefined) {
+        this.opts.onAgentRuntimeChanged?.(group.folder, agentName);
+      }
+
       return this.refreshAgentsAndRespond(res, jid);
     }
 

@@ -2565,6 +2565,17 @@ async function main(): Promise<void> {
     onDeleteGroup: (jid: string, group: RegisteredGroup) => {
       unregisterGroup(jid, group);
     },
+    onAgentRuntimeChanged: async (groupFolder: string, agentName: string) => {
+      const agentId = `${groupFolder}/${agentName}`;
+      logger.info(
+        { agentId },
+        'Agent runtime changed, evicting warm pool container',
+      );
+      await pool.reclaim(agentId);
+      // Clear session — new provider may not support resume
+      delete sessions[agentId];
+      deleteSession(agentId);
+    },
     onResetSession: async (groupFolder: string) => {
       logger.info({ groupFolder }, 'Resetting session');
 
@@ -2647,6 +2658,7 @@ async function main(): Promise<void> {
         displayName: a.displayName,
         trigger: a.trigger,
         status: a.status,
+        runtime: a.runtime,
       })),
     refreshGroupAgents: (jid: string) =>
       refreshGroupAgents(jid).map((a) => ({
@@ -2655,6 +2667,7 @@ async function main(): Promise<void> {
         displayName: a.displayName,
         trigger: a.trigger,
         status: a.status,
+        runtime: a.runtime,
       })),
     getStatus: () => ({
       containers: queue.getSnapshot(),
