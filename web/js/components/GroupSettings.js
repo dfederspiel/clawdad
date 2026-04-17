@@ -381,7 +381,10 @@ export function GroupSettings({ group, open, onClose }) {
                           }))}
                         />`;
                       })()}
-                      ${agentRuntimeEdits[agent.name] && html`<button
+                      ${agentRuntimeEdits[agent.name] && (
+                        agentRuntimeEdits[agent.name].provider !== (agent.runtime?.provider || 'anthropic') ||
+                        agentRuntimeEdits[agent.name].model !== (agent.runtime?.model || '')
+                      ) && html`<button
                         class="px-1.5 py-0.5 text-xs bg-bg-3 border border-border rounded text-txt-2 hover:border-accent disabled:opacity-50"
                         onClick=${() => handleSaveAgentRuntime(agent.name)}
                         disabled=${agentBusy}

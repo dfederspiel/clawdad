@@ -834,8 +834,10 @@ export class WebChannel implements Channel {
 
       // Evict warm pool container when runtime config changes —
       // the pooled container has the old provider/model baked in.
+      // Await to ensure the old container is stopped before responding,
+      // so the next message uses the new runtime.
       if (runtime !== undefined) {
-        this.opts.onAgentRuntimeChanged?.(group.folder, agentName);
+        await this.opts.onAgentRuntimeChanged?.(group.folder, agentName);
       }
 
       return this.refreshAgentsAndRespond(res, jid);
