@@ -47,6 +47,11 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
+  // Provider/model state
+  const [provider, setProvider] = useState('anthropic');
+  const [model, setModel] = useState('');
+  const [ollamaModels, setOllamaModels] = useState([]);
+
   // Team creation state
   const [teamCoordinator, setTeamCoordinator] = useState({ displayName: 'Coordinator', instructions: '' });
   const [teamSpecialists, setTeamSpecialists] = useState([DEFAULT_SPECIALIST()]);
@@ -59,6 +64,7 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
       setView(initialView);
       setError('');
       api.getTemplates().then((data) => setTemplates(data.templates || [])).catch(() => {});
+      api.getOllamaModels().then((data) => setOllamaModels(data.models || [])).catch(() => {});
     } else if (dialogRef.current?.open) {
       dialogRef.current.close();
     }
@@ -147,6 +153,8 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
     setAgentType('standalone');
     setManual(false);
     setView('pick');
+    setProvider('anthropic');
+    setModel('');
     setTeamCoordinator({ displayName: 'Coordinator', instructions: '' });
     setTeamSpecialists([DEFAULT_SPECIALIST()]);
   }
@@ -167,6 +175,16 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
         : {};
 
       const result = await createGroup(name.trim(), folder.trim(), undefined, opts);
+
+      // Create explicit default agent with runtime if non-default provider/model selected
+      if (provider !== 'anthropic' || model.trim()) {
+        const folderSlug = folder.trim();
+        await api.addGroupAgent(folderSlug, {
+          name: 'default',
+          displayName: name.trim(),
+          runtime: { provider, ...(model.trim() ? { model: model.trim() } : {}) },
+        }).catch(() => {});
+      }
 
       if (agentType === 'standalone' && description.trim()) {
         await api.sendMessage(result.jid, description.trim());
@@ -233,6 +251,42 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function renderProviderModelRow(prov, setProv, mod, setMod, labelPrefix = '') {
+    return html`
+      <div class="flex flex-col gap-1.5">
+        <span class="text-sm text-txt-2">${labelPrefix ? `${labelPrefix} ` : ''}Provider / Model</span>
+        <div class="flex gap-2">
+          <select
+            class="bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent"
+            value=${prov}
+            onChange=${(e) => { setProv(e.target.value); setMod(''); }}
+          >
+            <option value="anthropic">Anthropic</option>
+            <option value="ollama">Ollama</option>
+          </select>
+          ${prov === 'ollama' && ollamaModels.length > 0 ? html`
+            <select
+              class="flex-1 bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent"
+              value=${mod}
+              onChange=${(e) => setMod(e.target.value)}
+            >
+              <option value="">Select model...</option>
+              ${ollamaModels.map((m) => html`<option value=${m.name}>${m.name}</option>`)}
+            </select>
+          ` : html`
+            <input
+              type="text"
+              class="flex-1 bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent"
+              placeholder=${prov === 'ollama' ? 'Model name (required)' : 'Model (optional, uses default)'}
+              value=${mod}
+              onInput=${(e) => setMod(e.target.value)}
+            />
+          `}
+        </div>
+      </div>
+    `;
   }
 
   const isTriggered = agentType === 'triggered';
@@ -453,6 +507,8 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
             </label>
           `}
 
+          ${renderProviderModelRow(provider, setProvider, model, setModel)}
+
           <label class="flex flex-col gap-1.5">
             <span class="text-sm text-txt-2">
               Description${' '}
@@ -485,7 +541,7 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
             <button
               type="submit"
               class="px-4 py-2 bg-accent text-bg font-semibold rounded-lg text-sm hover:brightness-110 disabled:opacity-40 transition-all"
-              disabled=${!name.trim() || !folder.trim() || (isTriggered && !description.trim()) || submitting}
+              disabled=${!name.trim() || !folder.trim() || (isTriggered && !description.trim()) || (provider === 'ollama' && !model.trim()) || submitting}
             >
               ${submitting ? 'Creating...' : 'Create'}
             </button>

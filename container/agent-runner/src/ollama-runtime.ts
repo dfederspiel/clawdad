@@ -59,27 +59,17 @@ export class OllamaRuntime {
     // Build Ollama message array
     const messages: OllamaMessage[] = [];
 
-    // System prompt: combine global CLAUDE.md + multi-agent context
+    // System prompt for Ollama: only load agent-specific identity and
+    // multi-agent context. Skip global and group CLAUDE.md — those contain
+    // Claude-specific infrastructure (MCP tools, credential proxy, api.sh)
+    // that confuses non-Claude models.
     const systemParts: string[] = [];
-    const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
-    if (
-      !this.options.containerInput.isMain &&
-      fs.existsSync(globalClaudeMdPath)
-    ) {
-      systemParts.push(fs.readFileSync(globalClaudeMdPath, 'utf-8'));
-    }
-    if (this.options.containerInput.systemContext) {
-      systemParts.push(this.options.containerInput.systemContext);
-    }
-    // Also load agent-specific CLAUDE.md if present
     const agentClaudeMdPath = '/workspace/agent/CLAUDE.md';
     if (fs.existsSync(agentClaudeMdPath)) {
       systemParts.push(fs.readFileSync(agentClaudeMdPath, 'utf-8'));
     }
-    // Group CLAUDE.md
-    const groupClaudeMdPath = '/workspace/group/CLAUDE.md';
-    if (fs.existsSync(groupClaudeMdPath)) {
-      systemParts.push(fs.readFileSync(groupClaudeMdPath, 'utf-8'));
+    if (this.options.containerInput.systemContext) {
+      systemParts.push(this.options.containerInput.systemContext);
     }
 
     if (systemParts.length > 0) {
