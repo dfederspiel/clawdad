@@ -1,8 +1,26 @@
 // Parse message content into typed blocks.
-// Supports :::blocks JSON fences and :::sound fences interleaved with plain markdown.
+// Supports :::blocks JSON fences, :::sound fences, and :::<type> shorthand
+// fences (e.g. :::card, :::alert) interleaved with plain markdown.
 // If no fences found, entire content becomes a single text block.
 
-const FENCE_RE = /:::(blocks|sound)\n([\s\S]*?)\n:::/g;
+const KNOWN_BLOCK_TYPES = new Set([
+  'text',
+  'code',
+  'alert',
+  'card',
+  'table',
+  'stat',
+  'progress',
+  'action',
+  'diff',
+  'form',
+  'sound',
+  'image',
+]);
+
+// Match :::<type> optionally with {modifiers} like :::card{variant="muted"}.
+// The <type> is captured; modifiers are tolerated but discarded.
+const FENCE_RE = /:::([a-zA-Z][a-zA-Z0-9_-]*)(?:\{[^}\n]*\})?\n([\s\S]*?)\n:::/g;
 
 export function parseBlocks(content) {
   if (!content) return [{ type: 'text', content: '' }];
@@ -13,43 +31,24 @@ export function parseBlocks(content) {
 
   FENCE_RE.lastIndex = 0;
   while ((match = FENCE_RE.exec(content)) !== null) {
-    // Text before this fence
     const before = content.slice(lastIndex, match.index).trim();
     if (before) blocks.push({ type: 'text', content: before });
 
-    const fenceType = match[1]; // 'blocks' or 'sound'
+    const fenceType = match[1];
     const fenceBody = match[2];
 
-    if (fenceType === 'sound') {
-      // Sound block — parse JSON for tone name or custom definition
-      try {
-        const parsed = JSON.parse(fenceBody);
-        blocks.push({ type: 'sound', ...parsed });
-      } catch {
-        // Invalid JSON — render as text
-        blocks.push({ type: 'text', content: fenceBody });
-      }
+    if (fenceType === 'blocks') {
+      parseBlocksFence(fenceBody, blocks);
+    } else if (KNOWN_BLOCK_TYPES.has(fenceType)) {
+      parseTypedFence(fenceType, fenceBody, blocks);
     } else {
-      // Regular blocks
-      try {
-        const parsed = JSON.parse(fenceBody);
-        const arr = Array.isArray(parsed) ? parsed : [parsed];
-        for (const block of arr) {
-          if (block && block.type) {
-            blocks.push(block);
-          }
-        }
-      } catch {
-        // JSON.parse failed — attempt recovery for common LLM mistakes:
-        // multiple bare objects not wrapped in an array, or objects
-        // separated by blank lines.
-        const recovered = tryRecoverBareObjects(fenceBody);
-        if (recovered.length > 0) {
-          for (const block of recovered) blocks.push(block);
-        } else {
-          blocks.push({ type: 'text', content: fenceBody });
-        }
+      if (typeof console !== 'undefined' && console.warn) {
+        console.warn(
+          `[block-parser] Unknown fence type :::${fenceType} — rendering as text. Use :::blocks with a JSON type field instead.`,
+        );
       }
+      // Render the raw fence as text so the operator can see what the agent emitted.
+      blocks.push({ type: 'text', content: match[0] });
     }
 
     lastIndex = match.index + match[0].length;
@@ -60,6 +59,44 @@ export function parseBlocks(content) {
   if (after) blocks.push({ type: 'text', content: after });
 
   return blocks.length > 0 ? blocks : [{ type: 'text', content }];
+}
+
+function parseBlocksFence(body, blocks) {
+  try {
+    const parsed = JSON.parse(body);
+    const arr = Array.isArray(parsed) ? parsed : [parsed];
+    for (const block of arr) {
+      if (block && block.type) blocks.push(block);
+    }
+    return;
+  } catch {
+    // fall through to recovery
+  }
+  const recovered = tryRecoverBareObjects(body);
+  if (recovered.length > 0) {
+    for (const block of recovered) blocks.push(block);
+  } else {
+    blocks.push({ type: 'text', content: body });
+  }
+}
+
+// Recovery for :::<type> shorthand: parse body as JSON and assume the fence
+// type. Handles the common LLM mistake of emitting :::card { ... } instead
+// of the documented :::blocks [{ "type": "card", ... }] form.
+function parseTypedFence(type, body, blocks) {
+  try {
+    const parsed = JSON.parse(body);
+    blocks.push({ ...parsed, type });
+    return;
+  } catch {
+    // fall through
+  }
+  if (typeof console !== 'undefined' && console.warn) {
+    console.warn(
+      `[block-parser] Fence :::${type} body is not valid JSON — rendering as text.`,
+    );
+  }
+  blocks.push({ type: 'text', content: body });
 }
 
 /**
