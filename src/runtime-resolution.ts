@@ -3,8 +3,10 @@ import path from 'path';
 
 import { GROUPS_DIR } from './config.js';
 import { resolveGroupFolderPath } from './group-folder.js';
-import { AgentRuntimeConfig } from './runtime-types.js';
-import { Agent } from './types.js';
+import { AgentRuntimeConfig, RuntimeTurnConstraints } from './runtime-types.js';
+import { Agent, ContainerConfig, RegisteredGroup } from './types.js';
+
+const SPECIALIST_AUTO_BLOCKED_TOOL = 'mcp__nanoclaw__delegate_to_agent';
 
 export type PartialRuntimeConfig = Partial<AgentRuntimeConfig>;
 
@@ -112,4 +114,43 @@ export function resolveEffectiveRuntime(
     envRuntimeFallback(env),
     agent?.runtime,
   );
+}
+
+/**
+ * Resolve per-turn constraints by merging group and agent containerConfig.
+ *
+ * maxTurns: agent value wins if set; otherwise group value; otherwise undefined.
+ * disallowedTools: union of group + agent lists, deduped.
+ * Specialists (agents with a trigger) cannot delegate, so
+ * mcp__nanoclaw__delegate_to_agent is always added for them regardless of
+ * config. This is belt-and-suspenders — the MCP tool isn't registered for
+ * specialists either — but it makes the safety rail explicit at the SDK layer.
+ *
+ * Returns undefined when neither cap nor blocklist applies, so the container
+ * input stays minimal.
+ */
+export function resolveTurnConstraints(
+  agent: Agent | undefined,
+  group: RegisteredGroup,
+): RuntimeTurnConstraints | undefined {
+  const groupConfig: ContainerConfig | undefined = group.containerConfig;
+  const agentConfig: ContainerConfig | undefined = agent?.containerConfig;
+
+  const maxTurns = agentConfig?.maxTurns ?? groupConfig?.maxTurns;
+
+  const disallowed = new Set<string>();
+  for (const tool of groupConfig?.disallowedTools ?? []) disallowed.add(tool);
+  for (const tool of agentConfig?.disallowedTools ?? []) disallowed.add(tool);
+
+  // Specialist = agent with a trigger (non-coordinator). Auto-block delegation.
+  if (agent?.trigger) {
+    disallowed.add(SPECIALIST_AUTO_BLOCKED_TOOL);
+  }
+
+  if (maxTurns === undefined && disallowed.size === 0) return undefined;
+
+  return {
+    ...(maxTurns !== undefined ? { maxTurns } : {}),
+    ...(disallowed.size > 0 ? { disallowedTools: [...disallowed] } : {}),
+  };
 }

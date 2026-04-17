@@ -109,7 +109,10 @@ import {
   startRemoteControl,
   stopRemoteControl,
 } from './remote-control.js';
-import { resolveEffectiveRuntime } from './runtime-resolution.js';
+import {
+  resolveEffectiveRuntime,
+  resolveTurnConstraints,
+} from './runtime-resolution.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -2009,6 +2012,7 @@ async function runAgent(
         agentName: agent?.name || DEFAULT_AGENT_NAME,
         runBatchId,
         runtime: resolveEffectiveRuntime(agent, group.folder),
+        constraints: resolveTurnConstraints(agent, group),
         canDelegate: agent ? !agent.trigger : false,
         isDelegation: isDelegation || false,
         poolManaged: true,
@@ -2083,6 +2087,7 @@ async function runAgent(
       agentName: agent?.name || DEFAULT_AGENT_NAME,
       runBatchId,
       runtime: resolveEffectiveRuntime(agent, group.folder),
+      constraints: resolveTurnConstraints(agent, group),
       canDelegate: agent ? !agent.trigger : false,
       isDelegation: isDelegation || false,
       poolManaged: false,
