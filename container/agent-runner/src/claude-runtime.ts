@@ -382,6 +382,8 @@ export class ClaudeCodeRuntime implements RuntimeSession {
       process.env.CLAUDE_MODEL ||
       undefined;
 
+    const { maxTurns, disallowedTools } = input.constraints ?? {};
+
     for await (const message of query({
       prompt: stream,
       options: {
@@ -390,6 +392,8 @@ export class ClaudeCodeRuntime implements RuntimeSession {
         additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
         resume: this.options.sessionId,
         resumeSessionAt: this.options.resumeAt,
+        maxTurns,
+        disallowedTools,
         systemPrompt: globalClaudeMd
           ? {
               type: 'preset' as const,

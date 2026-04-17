@@ -55,6 +55,14 @@ export interface RuntimeMessage {
   content: RuntimeInputPart[];
 }
 
+export interface RuntimeTurnConstraints {
+  // Hard cap on SDK turns before the runtime stops the agent.
+  maxTurns?: number;
+  // Tools the runtime must refuse to expose for this turn.
+  // Exact names (e.g. "WebSearch") or MCP patterns (e.g. "mcp__nanoclaw__delegate_to_agent").
+  disallowedTools?: string[];
+}
+
 export interface RuntimeTurnInput {
   systemPrompt?: string;
   messages: RuntimeMessage[];
@@ -62,6 +70,7 @@ export interface RuntimeTurnInput {
   threadId?: string;
   agentId: string;
   runtime: AgentRuntimeConfig;
+  constraints?: RuntimeTurnConstraints;
 }
 
 export interface RuntimeUsageData {

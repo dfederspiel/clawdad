@@ -19,7 +19,7 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
-import { AgentRuntimeConfig } from './runtime-interface.js';
+import { AgentRuntimeConfig, RuntimeTurnConstraints } from './runtime-interface.js';
 import { ClaudeCodeRuntime } from './claude-runtime.js';
 
 interface ContainerInput {
@@ -39,6 +39,7 @@ interface ContainerInput {
   mainChatJid?: string;
   script?: string;
   runtime?: AgentRuntimeConfig;
+  constraints?: RuntimeTurnConstraints;
   achievements?: { id: string; name: string; description: string }[];
 }
 
@@ -459,6 +460,7 @@ async function runQuery(
     threadId: undefined,
     agentId: containerInput.agentId || containerInput.agentName || 'default',
     runtime: containerInput.runtime || { provider: 'anthropic' },
+    constraints: containerInput.constraints,
   })) {
     if (event.type === 'progress') {
       writeProgress({

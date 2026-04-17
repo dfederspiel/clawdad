@@ -46,6 +46,11 @@ export interface RuntimeMessage {
   content: RuntimeInputPart[];
 }
 
+export interface RuntimeTurnConstraints {
+  maxTurns?: number;
+  disallowedTools?: string[];
+}
+
 export interface RuntimeTurnInput {
   systemPrompt?: string;
   messages: RuntimeMessage[];
@@ -53,6 +58,7 @@ export interface RuntimeTurnInput {
   threadId?: string;
   agentId: string;
   runtime: AgentRuntimeConfig;
+  constraints?: RuntimeTurnConstraints;
 }
 
 export interface RuntimeUsageData {

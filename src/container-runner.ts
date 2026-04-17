@@ -35,7 +35,7 @@ import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { readEnvFile } from './env.js';
 import { RegisteredGroup } from './types.js';
-import { AgentRuntimeConfig } from './runtime-types.js';
+import { AgentRuntimeConfig, RuntimeTurnConstraints } from './runtime-types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -68,6 +68,7 @@ export interface ContainerInput {
   mainChatJid?: string; // JID of the main group (for escalation messaging)
   script?: string;
   runtime?: AgentRuntimeConfig; // future provider/runtime boundary
+  constraints?: RuntimeTurnConstraints; // per-turn safety rails (maxTurns, disallowedTools)
   achievements?: { id: string; name: string; description: string }[];
 }
 
