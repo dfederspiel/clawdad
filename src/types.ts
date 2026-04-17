@@ -1,3 +1,5 @@
+import { AgentRuntimeConfig } from './runtime-types.js';
+
 export interface AdditionalMount {
   hostPath: string; // Absolute path on host (supports ~ for home)
   containerPath?: string; // Optional — defaults to basename of hostPath. Mounted at /workspace/extra/{value}
@@ -95,6 +97,7 @@ export interface Agent {
   trigger?: string; // Agent-specific trigger pattern (overrides group trigger)
   status?: string; // Agent-settable status line shown under the agent row
   containerConfig?: ContainerConfig; // Agent-specific overrides
+  runtime?: AgentRuntimeConfig; // Provider/model execution boundary
 }
 
 export type WorkPhase =

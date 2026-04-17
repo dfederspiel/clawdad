@@ -12,9 +12,10 @@ import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
 } from './container-runtime.js';
-import { detectAuthMode } from './credential-proxy.js';
+import { detectAuthMode, getAnthropicAuthHealth } from './provider-auth.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import { ProviderAuthHealth } from './runtime-types.js';
 
 export interface SmokeTestResult {
   status: 'passed' | 'failed' | 'skipped';
@@ -30,9 +31,7 @@ export interface HealthStatus {
   credential_proxy: {
     status: 'configured' | 'missing';
   };
-  anthropic: {
-    status: 'configured' | 'missing';
-  };
+  anthropic: ProviderAuthHealth;
   container_image: {
     status: 'built' | 'not_found';
     image: string;
@@ -156,14 +155,13 @@ export function checkContainerSmoke(): SmokeTestResult {
 export async function getHealthStatus(): Promise<HealthStatus> {
   const docker = checkDocker();
   const credentialProxy = checkCredentials();
-  const anthropic: HealthStatus['anthropic'] = {
-    status: credentialProxy.status,
-  };
+  const anthropic = getAnthropicAuthHealth();
   const containerImage = checkContainerImage();
 
   const allGood =
     docker.status === 'running' &&
     credentialProxy.status === 'configured' &&
+    anthropic.status === 'ready' &&
     containerImage.status === 'built';
 
   const result: HealthStatus = {

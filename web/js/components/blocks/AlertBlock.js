@@ -3,9 +3,9 @@ import { md } from '../../markdown.js';
 
 const ICONS = { success: '\u2714', warn: '\u26A0', error: '\u2718', info: '\u2139' };
 
-export function AlertBlock({ level, style, title, body, message }) {
+export function AlertBlock({ level, style, title, body, message, content: contentProp }) {
   const lvl = level || style || 'info';
-  const content = body || message || '';
+  const content = body || message || contentProp || '';
   return html`
     <div class="alert-block alert-${lvl}">
       <span class="alert-icon">${ICONS[lvl] || ICONS.info}</span>

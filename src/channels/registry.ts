@@ -1,5 +1,6 @@
 import {
   Channel,
+  Agent,
   OnInboundMessage,
   OnChatMetadata,
   RegisteredGroup,
@@ -42,6 +43,8 @@ export interface ChannelOpts {
   ) => void;
   /** Reset session for a group (clears SDK session, evicts warm pool) */
   onResetSession?: (groupFolder: string) => Promise<void>;
+  /** Get fully discovered agents for a group with runtime metadata */
+  getDiscoveredAgents?: (jid: string) => Agent[];
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

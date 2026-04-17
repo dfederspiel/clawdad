@@ -241,6 +241,8 @@ When changing a group's CLAUDE.md, the warm pool container still has the old ins
 
 Use `/test-agent` for the full automated cycle, or run the steps manually when you need finer control.
 
+If a branch adds or changes web routes, runtime inspection, or other server-side behavior, also use the rebuild + restart workflow in [docs/BRANCH_TESTING_WORKFLOW.md](docs/BRANCH_TESTING_WORKFLOW.md). This avoids the common case where the running WSL service is still serving an older in-memory build.
+
 ## Development
 
 Run commands directly—don't tell the user to run them.
@@ -259,9 +261,9 @@ launchctl unload ~/Library/LaunchAgents/com.clawdad.plist
 launchctl kickstart -k gui/$(id -u)/com.clawdad  # restart
 
 # Linux (systemd)
-systemctl --user start nanoclaw
-systemctl --user stop nanoclaw
-systemctl --user restart nanoclaw
+systemctl --user start com-nanoclaw-clawdad.service
+systemctl --user stop com-nanoclaw-clawdad.service
+systemctl --user restart com-nanoclaw-clawdad.service
 
 # Windows — both services start on login via scripts/start-clawdad.bat
 # (installed to the Windows Startup folder)
@@ -287,8 +289,8 @@ node dist/index.js > logs/clawdad.log 2>&1 &
 
 **Service auto-start:** On Windows, both instances start on login via `scripts/start-clawdad.bat` (copied to the Startup folder). This starts the Windows web UI and boots WSL, which triggers `nanoclaw.service` via systemd. To verify after reboot:
 ```bash
-curl -sf http://localhost:3456/health    # Windows web UI
-wsl -d Ubuntu -e bash -ic "systemctl --user status nanoclaw.service"  # WSL Discord + Gmail
+curl -sf http://localhost:3456/api/health    # Windows web UI
+wsl -d Ubuntu -e bash -ic "systemctl --user status com-nanoclaw-clawdad.service"  # WSL web UI
 ```
 
 ## Instance Architecture

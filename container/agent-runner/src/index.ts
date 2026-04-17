@@ -19,6 +19,8 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { AgentRuntimeConfig } from './runtime-interface.js';
+import { ClaudeCodeRuntime } from './claude-runtime.js';
 
 interface ContainerInput {
   prompt: string;
@@ -36,6 +38,7 @@ interface ContainerInput {
   poolManaged?: boolean;
   mainChatJid?: string;
   script?: string;
+  runtime?: AgentRuntimeConfig;
   achievements?: { id: string; name: string; description: string }[];
 }
 
@@ -435,232 +438,62 @@ async function runQuery(
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
-  const stream = new MessageStream();
-  stream.push(prompt);
-
-  // Poll IPC for follow-up messages and _close sentinel during the query
-  let ipcPolling = true;
   let closedDuringQuery = false;
-  const pollIpcDuringQuery = () => {
-    if (!ipcPolling) return;
-    if (shouldClose()) {
-      log('Close sentinel detected during query, ending stream');
-      closedDuringQuery = true;
-      stream.end();
-      ipcPolling = false;
-      return;
-    }
-    const messages = drainIpcInput();
-    for (const text of messages) {
-      log(`Piping IPC message into active query (${text.length} chars)`);
-      stream.push(text);
-    }
-    setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
-  };
-  setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
-
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
-  let messageCount = 0;
-  let resultCount = 0;
-  let nullResultRetries = 0;
-  const MAX_NULL_RESULT_RETRIES = 1;
-  const assistantTexts: string[] = [];
-  let lastTurnHadTools = false;
+  const runtime = new ClaudeCodeRuntime({
+    containerInput,
+    mcpServerPath,
+    sdkEnv,
+    sessionId,
+    resumeAt,
+    log,
+    shouldClose,
+    drainIpcInput,
+    ipcPollMs: IPC_POLL_MS,
+  });
 
-  // Accumulate usage across all result messages in this query
-  const accumulatedUsage: UsageData = {
-    inputTokens: 0, outputTokens: 0,
-    cacheReadTokens: 0, cacheWriteTokens: 0,
-    costUsd: 0, durationMs: 0, durationApiMs: 0, numTurns: 0,
-  };
-
-  // Load global CLAUDE.md as additional system context (shared across all groups)
-  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
-  let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
-  }
-
-  // Discover additional directories mounted at /workspace/extra/*
-  // These are passed to the SDK so their CLAUDE.md files are loaded automatically
-  const extraDirs: string[] = [];
-  const extraBase = '/workspace/extra';
-  if (fs.existsSync(extraBase)) {
-    for (const entry of fs.readdirSync(extraBase)) {
-      const fullPath = path.join(extraBase, entry);
-      if (fs.statSync(fullPath).isDirectory()) {
-        extraDirs.push(fullPath);
-      }
-    }
-  }
-  if (extraDirs.length > 0) {
-    log(`Additional directories: ${extraDirs.join(', ')}`);
-  }
-
-  // Model override: use CLAUDE_MODEL env var if set (e.g., for LiteLLM proxy model names)
-  const modelOverride = process.env.CLAUDE_MODEL || undefined;
-  if (modelOverride) {
-    log(`Using model override: ${modelOverride}`);
-  }
-
-  for await (const message of query({
-    prompt: stream,
-    options: {
-      model: modelOverride,
-      cwd: '/workspace/group',
-      additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
-      resume: sessionId,
-      resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
-        : undefined,
-      allowedTools: [
-        'Bash',
-        'Read', 'Write', 'Edit', 'Glob', 'Grep',
-        'WebSearch', 'WebFetch',
-        'Task', 'TaskOutput', 'TaskStop',
-        'TeamCreate', 'TeamDelete', 'SendMessage',
-        'TodoWrite', 'ToolSearch', 'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*',
-        'mcp__ollama__*'
-      ],
-      env: sdkEnv,
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
-      settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-            NANOCLAW_AGENT_NAME: containerInput.agentName || 'default',
-            NANOCLAW_AGENT_ID: containerInput.agentId || '',
-            NANOCLAW_RUN_BATCH_ID: containerInput.runBatchId || '',
-            NANOCLAW_SESSION_ID: sessionId || '',
-            NANOCLAW_CAN_DELEGATE: containerInput.canDelegate ? '1' : '0',
-            NANOCLAW_MAIN_JID: containerInput.mainChatJid || '',
-            NANOCLAW_ACHIEVEMENTS: JSON.stringify(containerInput.achievements || []),
-          },
-        },
-        ollama: {
-          command: 'node',
-          args: [path.join(path.dirname(mcpServerPath), 'ollama-mcp-stdio.js')],
-        },
-      },
-      hooks: {
-        PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
-      },
-    }
+  for await (const event of runtime.runTurn({
+    messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+    attachments: [],
+    threadId: undefined,
+    agentId: containerInput.agentId || containerInput.agentName || 'default',
+    runtime: containerInput.runtime || { provider: 'anthropic' },
   })) {
-    messageCount++;
-    const msgType = message.type === 'system' ? `system/${(message as { subtype?: string }).subtype}` : message.type;
-    log(`[msg #${messageCount}] type=${msgType}`);
-
-    if (message.type === 'assistant' && 'uuid' in message) {
-      lastAssistantUuid = (message as { uuid: string }).uuid;
-      // When we get a new assistant message after tool calls, the tools have
-      // finished executing and the model is thinking again — emit a progress
-      // event so the UI doesn't go silent during the gap.
-      if (lastTurnHadTools) {
-        writeProgress({ summary: 'Thinking\u2026', timestamp: new Date().toISOString() });
-      }
-      lastTurnHadTools = false;
-      // Collect text and emit progress for tool_use blocks
-      const assistantMsg = message as { message?: { content?: { type: string; text?: string; name?: string; input?: Record<string, unknown> }[] } };
-      if (assistantMsg.message?.content) {
-        for (const block of assistantMsg.message.content) {
-          if (block.type === 'text' && block.text) {
-            assistantTexts.push(block.text);
-            writeText(block.text);
-          }
-          if (block.type === 'tool_use' && block.name) {
-            lastTurnHadTools = true;
-            const summary = summarizeTool(block.name, block.input);
-            writeProgress({ tool: block.name, summary, timestamp: new Date().toISOString() });
-          }
-        }
-      }
-    }
-
-    if (message.type === 'system' && message.subtype === 'init') {
-      newSessionId = message.session_id;
-      log(`Session initialized: ${newSessionId}`);
-    }
-
-    if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_notification') {
-      const tn = message as { task_id: string; status: string; summary: string };
-      log(`Task notification: task=${tn.task_id} status=${tn.status} summary=${tn.summary}`);
-    }
-
-    if (message.type === 'result') {
-      resultCount++;
-      const msg = message as Record<string, unknown>;
-      const textResult = typeof msg.result === 'string' ? msg.result : null;
-
-      // Extract usage from SDK result message
-      const usage = msg.usage as { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } | undefined;
-      if (usage) {
-        accumulatedUsage.inputTokens += usage.input_tokens || 0;
-        accumulatedUsage.outputTokens += usage.output_tokens || 0;
-        accumulatedUsage.cacheReadTokens += usage.cache_read_input_tokens || 0;
-        accumulatedUsage.cacheWriteTokens += usage.cache_creation_input_tokens || 0;
-      }
-      if (typeof msg.total_cost_usd === 'number') accumulatedUsage.costUsd = msg.total_cost_usd;
-      if (typeof msg.duration_ms === 'number') accumulatedUsage.durationMs = msg.duration_ms;
-      if (typeof msg.duration_api_ms === 'number') accumulatedUsage.durationApiMs = msg.duration_api_ms;
-      if (typeof msg.num_turns === 'number') accumulatedUsage.numTurns = msg.num_turns;
-
-      log(`Result #${resultCount}: subtype=${message.subtype} turns=${accumulatedUsage.numTurns} cost=$${accumulatedUsage.costUsd.toFixed(4)}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
-
-      // SDK bug workaround: when the agent completes with only tool calls
-      // and no text response, result is null. Instead of forwarding null to
-      // the host (which leaves the user with no reply), push a follow-up
-      // message into the stream so the agent continues within this session.
-      if (!textResult && nullResultRetries < MAX_NULL_RESULT_RETRIES) {
-        nullResultRetries++;
-        log(`Null result on user query — injecting retry prompt (attempt ${nullResultRetries}/${MAX_NULL_RESULT_RETRIES})`);
-        stream.push('[system] You completed tool calls but did not send a visible reply. Please respond to the user.');
-        // Don't emit this null result to the host — wait for the retry
-        continue;
-      }
-
-      writeOutput({
-        status: 'success',
-        result: textResult || null,
-        newSessionId,
-        usage: accumulatedUsage,
-        textsAlreadyStreamed: assistantTexts.length,
+    if (event.type === 'progress') {
+      writeProgress({
+        tool: event.tool,
+        summary: event.summary,
+        timestamp: event.timestamp,
       });
-      // Reset retry counter on successful text output
-      if (textResult) {
-        nullResultRetries = 0;
-      }
-      // End the stream after emitting a result so the for-await loop
-      // terminates. Without this, MessageStream keeps the SDK alive
-      // waiting for more user messages, and the query never returns.
-      ipcPolling = false;
-      stream.end();
+      continue;
     }
-  }
 
-  ipcPolling = false;
-  log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
+    if (event.type === 'text') {
+      writeText(event.text);
+      continue;
+    }
 
-  // If no result was emitted but we have assistant text, send completion.
-  // Text was already streamed via writeText markers — just emit usage/session.
-  if (resultCount === 0 && assistantTexts.length > 0) {
-    log(`No result message received, ${assistantTexts.length} text blocks already streamed`);
+    newSessionId = event.newSessionId || newSessionId;
+    lastAssistantUuid = event.resumeAt || lastAssistantUuid;
+
+    if (
+      event.status === 'success' &&
+      event.result === null &&
+      !event.usage &&
+      !event.textsAlreadyStreamed
+    ) {
+      closedDuringQuery = true;
+      continue;
+    }
+
     writeOutput({
-      status: 'success',
-      result: null,
-      newSessionId,
-      usage: accumulatedUsage,
-      textsAlreadyStreamed: assistantTexts.length,
+      status: event.status,
+      result: event.result,
+      newSessionId: event.newSessionId,
+      error: event.error,
+      usage: event.usage,
+      textsAlreadyStreamed: event.textsAlreadyStreamed,
     });
   }
 

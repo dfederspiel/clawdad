@@ -18,6 +18,10 @@ import {
   shouldDeliverForLease,
 } from './message-supersession.js';
 import {
+  clearProviderAuthFailure,
+  noteProviderAuthFailure,
+} from './provider-auth.js';
+import {
   ASSISTANT_NAME,
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
@@ -92,11 +96,7 @@ import {
   resolveAgentIpcInputPath,
   resolveGroupFolderPath,
 } from './group-folder.js';
-import {
-  startIpcWatcher,
-  getIpcMessageCount,
-  resetIpcMessageCount,
-} from './ipc.js';
+import { startIpcWatcher } from './ipc.js';
 import {
   findChannel,
   formatMessages,
@@ -109,6 +109,7 @@ import {
   startRemoteControl,
   stopRemoteControl,
 } from './remote-control.js';
+import { resolveEffectiveRuntime } from './runtime-resolution.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -1415,8 +1416,6 @@ async function processGroupMessages(
     let outputSentForCurrentQuery = false;
     let outputSentToUser = false;
     let automationFiredForAgent = false;
-    resetIpcMessageCount(responseJid);
-
     const output = await runAgent(
       group,
       agentPrompt,
@@ -1451,34 +1450,19 @@ async function processGroupMessages(
             );
           }
           if (text) {
-            // If the agent already sent messages via IPC send_message during
-            // this run, suppress the final OUTPUT to avoid double-responses.
-            const ipcCount = getIpcMessageCount(responseJid);
-            if (ipcCount > 0) {
-              logger.info(
-                {
-                  agent: agent.id,
-                  responseJid,
-                  ipcCount,
-                  outputLen: text.length,
-                },
-                'Suppressing OUTPUT delivery — agent already sent via IPC send_message',
-              );
-            } else {
-              if (isMultiAgent)
-                setActiveAgentName(responseJid, agent.displayName);
-              if (
-                await deliverAgentMessage(
-                  responseChannel,
-                  responseJid,
-                  text,
-                  lease,
-                  threadId,
-                )
-              ) {
-                outputSentToUser = true;
-                outputSentForCurrentQuery = true;
-              }
+            if (isMultiAgent)
+              setActiveAgentName(responseJid, agent.displayName);
+            if (
+              await deliverAgentMessage(
+                responseChannel,
+                responseJid,
+                text,
+                lease,
+                threadId,
+              )
+            ) {
+              outputSentToUser = true;
+              outputSentForCurrentQuery = true;
             }
           }
           resetIdleTimer();
@@ -1658,6 +1642,7 @@ async function runAgent(
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
   const agentName = agent?.name || DEFAULT_AGENT_NAME;
+  const runtimeProvider = agent?.runtime?.provider || 'anthropic';
   // Legacy session fallback: only use the group-level session for the default
   // agent. Named agents (added after the group was created) get their own
   // session directory and must not inherit the old single-agent session ID —
@@ -1730,6 +1715,33 @@ async function runAgent(
   // Wrap onOutput to track session ID and usage from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
+        const authFailureText =
+          typeof output.error === 'string'
+            ? output.error
+            : output.status === 'success' && typeof output.result === 'string'
+              ? output.result
+              : null;
+        if (authFailureText) {
+          const authCategory = noteProviderAuthFailure(
+            runtimeProvider,
+            authFailureText,
+          );
+          if (authCategory) {
+            logger.warn(
+              {
+                provider: runtimeProvider,
+                category: authCategory,
+                agent: agentId,
+              },
+              'Recorded provider auth failure from agent output',
+            );
+          } else if (output.status === 'success') {
+            clearProviderAuthFailure(runtimeProvider);
+          }
+        } else if (output.status === 'success') {
+          clearProviderAuthFailure(runtimeProvider);
+        }
+
         // Only save session from successful outputs — error outputs carry the
         // broken session ID and would re-poison the cache after the error
         // handler clears it (race: outputChain settles after error resolve).
@@ -1824,23 +1836,15 @@ async function runAgent(
           : JSON.stringify(output.result);
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       if (text) {
-        const ipcCount = getIpcMessageCount(chatJid);
-        if (ipcCount > 0) {
-          logger.info(
-            { agent: agentId, chatJid, ipcCount, outputLen: text.length },
-            'Suppressing OUTPUT delivery — agent already sent via IPC send_message (pool path)',
-          );
-        } else {
-          logger.info(
-            { agent: agentId, chatJid },
-            `Agent output: ${raw.length} chars (pool path)`,
-          );
-          if (sendMessage) {
-            await sendMessage(text);
-          } else if (onText) {
-            // Fallback for callers that don't provide sendMessage
-            await onText(text);
-          }
+        logger.info(
+          { agent: agentId, chatJid },
+          `Agent output: ${raw.length} chars (pool path)`,
+        );
+        if (sendMessage) {
+          await sendMessage(text);
+        } else if (onText) {
+          // Fallback for callers that don't provide sendMessage
+          await onText(text);
         }
       }
     }
@@ -2004,6 +2008,7 @@ async function runAgent(
         agentId,
         agentName: agent?.name || DEFAULT_AGENT_NAME,
         runBatchId,
+        runtime: resolveEffectiveRuntime(agent, group.folder),
         canDelegate: agent ? !agent.trigger : false,
         isDelegation: isDelegation || false,
         poolManaged: true,
@@ -2077,6 +2082,7 @@ async function runAgent(
       agentId,
       agentName: agent?.name || DEFAULT_AGENT_NAME,
       runBatchId,
+      runtime: resolveEffectiveRuntime(agent, group.folder),
       canDelegate: agent ? !agent.trigger : false,
       isDelegation: isDelegation || false,
       poolManaged: false,
@@ -2648,6 +2654,10 @@ async function main(): Promise<void> {
       uptime: process.uptime(),
     }),
     getThreadInfo: (threadId: string) => activeThreads.get(threadId),
+    getDiscoveredAgents: (jid: string) => {
+      const group = registeredGroups[jid];
+      return group ? discoverAgents(group) : [];
+    },
     onThreadReply: (threadId: string, agentJid: string) => {
       pendingOrigins[agentJid] = {
         originJid: activeThreads.get(threadId)!.originJid,
