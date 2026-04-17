@@ -27,6 +27,7 @@ interface ContainerInputLike {
   runBatchId?: string;
   canDelegate?: boolean;
   mainChatJid?: string;
+  systemContext?: string;
   achievements?: { id: string; name: string; description: string }[];
   runtime?: AgentRuntimeConfig;
 }
@@ -377,6 +378,17 @@ export class ClaudeCodeRuntime implements RuntimeSession {
       }
     }
 
+    // Add agent-specific and global-web CLAUDE.md dirs so the SDK loads them.
+    // Without this, only /workspace/group/CLAUDE.md is auto-discovered (cwd).
+    const agentDir = '/workspace/agent';
+    if (fs.existsSync(agentDir)) {
+      extraDirs.push(agentDir);
+    }
+    const globalWebDir = '/workspace/global-web';
+    if (fs.existsSync(globalWebDir)) {
+      extraDirs.push(globalWebDir);
+    }
+
     const modelOverride =
       this.options.containerInput.runtime?.model ||
       process.env.CLAUDE_MODEL ||
@@ -394,13 +406,20 @@ export class ClaudeCodeRuntime implements RuntimeSession {
         resumeSessionAt: this.options.resumeAt,
         maxTurns,
         disallowedTools,
-        systemPrompt: globalClaudeMd
-          ? {
-              type: 'preset' as const,
-              preset: 'claude_code' as const,
-              append: globalClaudeMd,
-            }
-          : undefined,
+        systemPrompt: (() => {
+          const parts: string[] = [];
+          if (globalClaudeMd) parts.push(globalClaudeMd);
+          if (this.options.containerInput.systemContext) {
+            parts.push(this.options.containerInput.systemContext);
+          }
+          return parts.length > 0
+            ? {
+                type: 'preset' as const,
+                preset: 'claude_code' as const,
+                append: parts.join('\n\n'),
+              }
+            : undefined;
+        })(),
         allowedTools: [
           'Bash',
           'Read',

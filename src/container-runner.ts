@@ -69,6 +69,7 @@ export interface ContainerInput {
   script?: string;
   runtime?: AgentRuntimeConfig; // future provider/runtime boundary
   constraints?: RuntimeTurnConstraints; // per-turn safety rails (maxTurns, disallowedTools)
+  systemContext?: string; // multi-agent context injected into systemPrompt.append (survives compaction)
   achievements?: { id: string; name: string; description: string }[];
 }
 

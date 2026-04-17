@@ -742,8 +742,7 @@ async function executeAutomationActions(
               const routingNote = action.messageTemplate
                 ? `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n${action.messageTemplate}\n`
                 : `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n`;
-              const delegationPrompt =
-                multiAgentCtx + conversationCtx + routingNote;
+              const delegationPrompt = conversationCtx + routingNote;
 
               setActiveAgentName(chatJid, agent.displayName);
               await channel.setTyping?.(chatJid, true);
@@ -821,6 +820,7 @@ async function executeAutomationActions(
                   }
                 },
                 batchId,
+                multiAgentCtx || undefined,
               );
 
               group.containerConfig = savedConfig;
@@ -1209,7 +1209,6 @@ async function processGroupMessages(
               ),
             };
             const multiAgentCtx = buildMultiAgentContext(agent, agents);
-            const agentPrompt = multiAgentCtx ? multiAgentCtx + prompt : prompt;
 
             setActiveAgentName(responseJid, agent.displayName);
             await responseChannel.setTyping?.(responseJid, true, threadId);
@@ -1217,7 +1216,7 @@ async function processGroupMessages(
 
             const status = await runAgent(
               group,
-              agentPrompt,
+              prompt,
               chatJid,
               async (result) => {
                 if (result.result) {
@@ -1297,6 +1296,7 @@ async function processGroupMessages(
                 }
               },
               batchId,
+              multiAgentCtx || undefined,
             );
 
             group.containerConfig = savedConfig;
@@ -1378,9 +1378,8 @@ async function processGroupMessages(
   for (const agent of triggeredAgents) {
     const batchId = `run-${randomUUID()}`;
     const lease = beginDeliveryLease(responseJid, batchId);
-    // Build agent-specific prompt with multi-agent context
+    // Build agent-specific multi-agent context (injected as system prompt, not user content)
     const multiAgentCtx = buildMultiAgentContext(agent, agents);
-    const agentPrompt = multiAgentCtx ? multiAgentCtx + prompt : prompt;
 
     // Set active agent name so the channel uses it as sender_name on bot messages.
     // Only set for multi-agent groups — single-agent groups don't need "X is thinking".
@@ -1421,7 +1420,7 @@ async function processGroupMessages(
     let automationFiredForAgent = false;
     const output = await runAgent(
       group,
-      agentPrompt,
+      prompt,
       chatJid,
       async (result) => {
         if (result.result) {
@@ -1574,6 +1573,7 @@ async function processGroupMessages(
         }
       },
       batchId,
+      multiAgentCtx || undefined,
     );
 
     await responseChannel.setTyping?.(
@@ -1641,6 +1641,7 @@ async function runAgent(
   isDelegation?: boolean,
   sendMessage?: (text: string) => Promise<void>,
   runBatchId?: string,
+  systemContext?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
@@ -2017,6 +2018,7 @@ async function runAgent(
         isDelegation: isDelegation || false,
         poolManaged: true,
         mainChatJid: isMain ? undefined : getMainChatJid(),
+        systemContext,
         achievements: getAchievementsForContainer(),
       };
 
@@ -2092,6 +2094,7 @@ async function runAgent(
       isDelegation: isDelegation || false,
       poolManaged: false,
       mainChatJid: isMain ? undefined : getMainChatJid(),
+      systemContext,
       achievements: getAchievementsForContainer(),
     };
 
@@ -2993,7 +2996,6 @@ async function main(): Promise<void> {
           );
           const conversationCtx = formatMessages(recentMessages, TIMEZONE);
           const delegationPrompt =
-            multiAgentCtx +
             conversationCtx +
             `\n\n--- Delegation from ${sourceAgent} ---\n${message}\n--- End delegation ---\n`;
 
@@ -3071,6 +3073,7 @@ async function main(): Promise<void> {
               }
             },
             batchId,
+            multiAgentCtx || undefined,
           );
 
           group.containerConfig = savedConfig; // restore original config
