@@ -1,14 +1,14 @@
 {
   "version": 2,
-  "activePack": "starter",
+  "activePack": "field-tested",
   "packs": {
     "starter": {
       "path": "packs/starter",
       "description": "The default set — approachable templates that teach agent fundamentals"
     },
-    "team-ops": {
-      "path": "packs/team-ops",
-      "description": "Engineering team workflows — bug triage, deployments, status reports"
+    "field-tested": {
+      "path": "packs/field-tested",
+      "description": "Production-proven patterns — API auth, multi-agent teams, git workflows, monitoring"
     }
   },
   "blocks": [

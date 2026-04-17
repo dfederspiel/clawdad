@@ -720,12 +720,17 @@ export function updateTask(
       | 'schedule_value'
       | 'next_run'
       | 'status'
+      | 'title'
     >
   >,
 ): void {
   const fields: string[] = [];
   const values: unknown[] = [];
 
+  if (updates.title !== undefined) {
+    fields.push('title = ?');
+    values.push(updates.title);
+  }
   if (updates.prompt !== undefined) {
     fields.push('prompt = ?');
     values.push(updates.prompt);

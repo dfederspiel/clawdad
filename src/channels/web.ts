@@ -1420,6 +1420,29 @@ export class WebChannel implements Channel {
       return this.json(res, 200, { ok: true });
     }
 
+    // PATCH /api/tasks/:id — update task metadata (title, prompt, schedule, etc.)
+    const taskPatchMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    if (method === 'PATCH' && taskPatchMatch) {
+      const taskId = decodeURIComponent(taskPatchMatch[1]);
+      const task = getTaskById(taskId);
+      if (!task) return this.json(res, 404, { error: 'Task not found' });
+      const body = await this.readBody(req);
+      const updates: Record<string, unknown> = {};
+      for (const key of [
+        'title',
+        'prompt',
+        'schedule_type',
+        'schedule_value',
+      ] as const) {
+        if (body[key] !== undefined) updates[key] = body[key];
+      }
+      if (Object.keys(updates).length === 0) {
+        return this.json(res, 400, { error: 'No updatable fields provided' });
+      }
+      updateTask(taskId, updates);
+      return this.json(res, 200, { ok: true, ...updates });
+    }
+
     // DELETE /api/tasks/:id — cancel/delete a task
     const taskDeleteMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
     if (method === 'DELETE' && taskDeleteMatch) {
