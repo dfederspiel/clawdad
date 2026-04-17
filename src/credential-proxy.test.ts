@@ -11,39 +11,39 @@ vi.mock('./logger.js', () => ({
   logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
 }));
 
-// Mock for Claude Code credential store — default: file not found
-let mockCredsFileContent: string | null = null;
-vi.mock('fs', async (importOriginal) => {
-  const actual = (await importOriginal()) as typeof import('fs');
+vi.mock('./provider-auth.js', async (importOriginal) => {
+  const actual =
+    (await importOriginal()) as typeof import('./provider-auth.js');
+
+  function resolveFromMockEnv() {
+    const baseUrl = mockEnv.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+    if (mockEnv.ANTHROPIC_API_KEY) {
+      return {
+        authMode: 'api-key' as const,
+        apiKey: mockEnv.ANTHROPIC_API_KEY,
+        baseUrl,
+      };
+    }
+    const envToken =
+      mockEnv.CLAUDE_CODE_OAUTH_TOKEN || mockEnv.ANTHROPIC_AUTH_TOKEN;
+    if (envToken) {
+      return {
+        authMode: 'oauth' as const,
+        oauthToken: envToken,
+        baseUrl,
+      };
+    }
+    return {
+      authMode: 'oauth' as const,
+      baseUrl,
+    };
+  }
+
   return {
     ...actual,
-    default: {
-      ...actual,
-      readFileSync: vi.fn(((filepath: string, ...args: unknown[]) => {
-        if (
-          typeof filepath === 'string' &&
-          filepath.includes('.credentials.json')
-        ) {
-          if (mockCredsFileContent === null) {
-            throw new Error('ENOENT: no such file');
-          }
-          return mockCredsFileContent;
-        }
-        return actual.readFileSync(filepath, ...(args as [any]));
-      }) as typeof actual.readFileSync),
-    },
-    readFileSync: vi.fn(((filepath: string, ...args: unknown[]) => {
-      if (
-        typeof filepath === 'string' &&
-        filepath.includes('.credentials.json')
-      ) {
-        if (mockCredsFileContent === null) {
-          throw new Error('ENOENT: no such file');
-        }
-        return mockCredsFileContent;
-      }
-      return actual.readFileSync(filepath, ...(args as [any]));
-    }) as typeof actual.readFileSync),
+    readClaudeCodeToken: vi.fn(() => null),
+    resolveAnthropicCredentials: vi.fn(() => resolveFromMockEnv()),
+    detectAuthMode: vi.fn(() => resolveFromMockEnv().authMode),
   };
 });
 
@@ -51,8 +51,6 @@ import {
   startCredentialProxy,
   buildCredMap,
   substituteCredentials,
-  readClaudeCodeToken,
-  resolveAnthropicCredentials,
   isAllowedCredentialTarget,
 } from './credential-proxy.js';
 
@@ -111,7 +109,6 @@ describe('credential-proxy', () => {
     await new Promise<void>((r) => proxyServer?.close(() => r()));
     await new Promise<void>((r) => upstreamServer?.close(() => r()));
     for (const key of Object.keys(mockEnv)) delete mockEnv[key];
-    mockCredsFileContent = null;
   });
 
   async function startProxy(env: Record<string, string>): Promise<number> {
@@ -483,92 +480,5 @@ describe('isAllowedCredentialTarget', () => {
         },
       ),
     ).toBe(true);
-  });
-});
-
-describe('readClaudeCodeToken', () => {
-  afterEach(() => {
-    mockCredsFileContent = null;
-  });
-
-  it('returns access token from Claude Code credential store', () => {
-    mockCredsFileContent = JSON.stringify({
-      claudeAiOauth: {
-        accessToken: 'sk-ant-oat01-fresh',
-        refreshToken: 'rt-xxx',
-        expiresAt: Date.now() + 3600_000, // 1 hour from now
-      },
-    });
-    expect(readClaudeCodeToken()).toBe('sk-ant-oat01-fresh');
-  });
-
-  it('returns null when file does not exist', () => {
-    mockCredsFileContent = null;
-    expect(readClaudeCodeToken()).toBeNull();
-  });
-
-  it('still returns token even if expired (Claude Code may refresh soon)', () => {
-    mockCredsFileContent = JSON.stringify({
-      claudeAiOauth: {
-        accessToken: 'sk-ant-oat01-expired',
-        refreshToken: 'rt-xxx',
-        expiresAt: Date.now() - 60_000, // expired 1 min ago
-      },
-    });
-    expect(readClaudeCodeToken()).toBe('sk-ant-oat01-expired');
-  });
-
-  it('returns null when accessToken is missing', () => {
-    mockCredsFileContent = JSON.stringify({
-      claudeAiOauth: { refreshToken: 'rt-xxx' },
-    });
-    expect(readClaudeCodeToken()).toBeNull();
-  });
-});
-
-describe('resolveAnthropicCredentials', () => {
-  afterEach(() => {
-    for (const key of Object.keys(mockEnv)) delete mockEnv[key];
-    mockCredsFileContent = null;
-  });
-
-  it('prefers API key from .env over everything else', () => {
-    Object.assign(mockEnv, { ANTHROPIC_API_KEY: 'sk-ant-api03-xxx' });
-    mockCredsFileContent = JSON.stringify({
-      claudeAiOauth: {
-        accessToken: 'sk-ant-oat01-fromclaude',
-        expiresAt: Date.now() + 3600_000,
-      },
-    });
-    const creds = resolveAnthropicCredentials();
-    expect(creds.authMode).toBe('api-key');
-    expect(creds.apiKey).toBe('sk-ant-api03-xxx');
-  });
-
-  it('uses Claude Code credential store when no API key in .env', () => {
-    mockCredsFileContent = JSON.stringify({
-      claudeAiOauth: {
-        accessToken: 'sk-ant-oat01-fromclaude',
-        expiresAt: Date.now() + 3600_000,
-      },
-    });
-    const creds = resolveAnthropicCredentials();
-    expect(creds.authMode).toBe('oauth');
-    expect(creds.oauthToken).toBe('sk-ant-oat01-fromclaude');
-  });
-
-  it('falls back to .env ANTHROPIC_AUTH_TOKEN when Claude Code store unavailable', () => {
-    Object.assign(mockEnv, { ANTHROPIC_AUTH_TOKEN: 'sk-ant-oat01-fromenv' });
-    mockCredsFileContent = null;
-    const creds = resolveAnthropicCredentials();
-    expect(creds.authMode).toBe('oauth');
-    expect(creds.oauthToken).toBe('sk-ant-oat01-fromenv');
-  });
-
-  it('returns oauth mode with no token when nothing is configured', () => {
-    mockCredsFileContent = null;
-    const creds = resolveAnthropicCredentials();
-    expect(creds.authMode).toBe('oauth');
-    expect(creds.oauthToken).toBeUndefined();
   });
 });

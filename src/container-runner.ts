@@ -37,6 +37,7 @@ import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { readEnvFile } from './env.js';
 import { RegisteredGroup } from './types.js';
+import { AgentRuntimeConfig, RuntimeTurnConstraints } from './runtime-types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -69,10 +70,10 @@ export interface ContainerInput {
   poolManaged?: boolean; // true = stay alive for follow-up queries (warm pool)
   mainChatJid?: string; // JID of the main group (for escalation messaging)
   script?: string;
+  runtime?: AgentRuntimeConfig; // future provider/runtime boundary
+  constraints?: RuntimeTurnConstraints; // per-turn safety rails (maxTurns, disallowedTools)
+  systemContext?: string; // multi-agent context injected into systemPrompt.append (survives compaction)
   achievements?: { id: string; name: string; description: string }[];
-  systemContext?: string; // Multi-agent identity context (appended to system prompt)
-  maxTurns?: number;
-  disallowedTools?: string[];
 }
 
 export interface UsageData {
@@ -258,9 +259,10 @@ function buildVolumeMounts(
   const markerPath = path.join(agentInputDir, '.agent-name');
   fs.writeFileSync(markerPath, effectiveAgentName);
 
-  // Mount agent-specific directory (for multi-agent groups with explicit agents/)
-  // The agent's CLAUDE.md lives here, mounted at /workspace/agent
-  if (agentName && agentName !== 'default') {
+  // Mount agent-specific directory — the agent's CLAUDE.md lives here,
+  // mounted at /workspace/agent. For non-Claude runtimes (e.g. Ollama),
+  // this is the only identity context the model receives.
+  if (agentName) {
     const agentDir = path.join(groupDir, 'agents', agentName);
     if (fs.existsSync(agentDir)) {
       mounts.push({
@@ -377,7 +379,7 @@ async function buildContainerArgs(
   // and host-only settings that are irrelevant inside containers.
   const allEnv = readEnvFile();
   const excludePattern =
-    /^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_MODEL$|WEB_UI_|LOG_LEVEL$|PORT$)/;
+    /^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_MODEL$|WEB_UI_|LOG_LEVEL$|PORT$|OLLAMA_HOST$)/;
   const credentialPattern = /.+_(TOKEN|KEY|SECRET|PASSWORD)$/;
   for (const [key, value] of Object.entries(allEnv)) {
     if (excludePattern.test(key) || !value) continue;
@@ -393,6 +395,11 @@ async function buildContainerArgs(
     '-e',
     `CRED_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
   );
+
+  // Ensure Ollama host is available (for both MCP tool and runtime adapter)
+  const ollamaHost =
+    allEnv.OLLAMA_HOST || `http://${CONTAINER_HOST_GATEWAY}:11434`;
+  args.push('-e', `OLLAMA_HOST=${ollamaHost}`);
 
   // SSH agent forwarding — mount host socket so containers can use SSH
   // without the private key ever entering the container.

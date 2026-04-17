@@ -12,14 +12,21 @@ import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
 } from './container-runtime.js';
-import { detectAuthMode } from './credential-proxy.js';
+import { detectAuthMode, getAnthropicAuthHealth } from './provider-auth.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import { ProviderAuthHealth } from './runtime-types.js';
 
 export interface SmokeTestResult {
   status: 'passed' | 'failed' | 'skipped';
   error?: string;
   claudeVersion?: string;
+}
+
+export interface OllamaHealth {
+  status: 'running' | 'unreachable' | 'not_configured';
+  modelCount?: number;
+  host?: string;
 }
 
 export interface HealthStatus {
@@ -30,14 +37,13 @@ export interface HealthStatus {
   credential_proxy: {
     status: 'configured' | 'missing';
   };
-  anthropic: {
-    status: 'configured' | 'missing';
-  };
+  anthropic: ProviderAuthHealth;
   container_image: {
     status: 'built' | 'not_found';
     image: string;
   };
   container_smoke?: SmokeTestResult;
+  ollama?: OllamaHealth;
   overall: 'ready' | 'needs_setup';
 }
 
@@ -153,17 +159,45 @@ export function checkContainerSmoke(): SmokeTestResult {
   }
 }
 
+async function checkOllama(): Promise<OllamaHealth | undefined> {
+  const env = readEnvFile();
+  const host = env.OLLAMA_HOST || 'http://localhost:11434';
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch(`${host}/api/tags`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      return { status: 'unreachable', host };
+    }
+    const data = (await response.json()) as {
+      models?: Array<{ name: string }>;
+    };
+    return {
+      status: 'running',
+      modelCount: data.models?.length || 0,
+      host,
+    };
+  } catch {
+    return { status: 'unreachable', host };
+  }
+}
+
 export async function getHealthStatus(): Promise<HealthStatus> {
   const docker = checkDocker();
   const credentialProxy = checkCredentials();
-  const anthropic: HealthStatus['anthropic'] = {
-    status: credentialProxy.status,
-  };
+  const anthropic = getAnthropicAuthHealth();
   const containerImage = checkContainerImage();
+  const ollama = await checkOllama();
 
   const allGood =
     docker.status === 'running' &&
     credentialProxy.status === 'configured' &&
+    anthropic.status === 'ready' &&
     containerImage.status === 'built';
 
   const result: HealthStatus = {
@@ -173,6 +207,11 @@ export async function getHealthStatus(): Promise<HealthStatus> {
     container_image: containerImage,
     overall: allGood ? 'ready' : 'needs_setup',
   };
+
+  // Ollama is optional — include if reachable
+  if (ollama) {
+    result.ollama = ollama;
+  }
 
   logger.debug({ health: result }, 'Health check completed');
   return result;

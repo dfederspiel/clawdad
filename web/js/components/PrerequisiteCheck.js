@@ -115,6 +115,7 @@ function PathSelector({ onReady }) {
 export function PrerequisiteCheck({ onReady }) {
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [recheckingAnthropic, setRecheckingAnthropic] = useState(false);
   const pollRef = useRef(null);
 
   async function fetchHealth() {
@@ -170,12 +171,35 @@ export function PrerequisiteCheck({ onReady }) {
 
   function anthropicStatus() {
     if (!health) return 'loading';
-    return health.anthropic.status === 'configured' ? 'ok' : 'error';
+    return health.anthropic.status === 'ready' ? 'ok' : 'error';
+  }
+
+  function anthropicDetail() {
+    if (!health) return '';
+    if (health.anthropic.status === 'ready') {
+      return health.anthropic.authMode === 'api-key'
+        ? 'API key ready'
+        : 'OAuth ready';
+    }
+    if (health.anthropic.status === 'stale') {
+      return 'OAuth token is stale or expiring';
+    }
+    return 'No Anthropic credential available';
   }
 
   function imageStatus() {
     if (!health) return 'loading';
     return health.container_image.status === 'built' ? 'ok' : 'error';
+  }
+
+  async function handleAnthropicRecheck() {
+    setRecheckingAnthropic(true);
+    try {
+      await api.recheckAuthState('anthropic');
+      await fetchHealth();
+    } finally {
+      setRecheckingAnthropic(false);
+    }
   }
 
   return html`
@@ -226,14 +250,27 @@ export function PrerequisiteCheck({ onReady }) {
             `}
           <//>
 
-          <!-- Anthropic Key -->
+          <!-- Anthropic Auth -->
           <${StatusCard}
-            title="Anthropic API Key"
+            title="Anthropic Auth"
             status=${anthropicStatus()}
-            detail=${health?.anthropic.status === 'configured' ? 'Key registered' : 'No key registered'}
+            detail=${anthropicDetail()}
           >
             ${health?.anthropic.status === 'missing' && html`
               <${AnthropicForm} onRegistered=${fetchHealth} />
+            `}
+            ${health?.anthropic.status === 'stale' && html`
+              <div class="text-xs text-txt-muted space-y-1">
+                <p>The configured OAuth token looks stale.</p>
+                <p>Refresh your Claude login, then recheck health.</p>
+                <button
+                  class="mt-1 px-2 py-1 bg-bg border border-border rounded text-[11px] text-txt hover:border-accent/50 disabled:opacity-50"
+                  onClick=${handleAnthropicRecheck}
+                  disabled=${recheckingAnthropic}
+                >
+                  ${recheckingAnthropic ? 'Rechecking...' : 'Recheck Auth'}
+                </button>
+              </div>
             `}
           <//>
 

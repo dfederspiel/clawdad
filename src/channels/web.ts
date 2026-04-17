@@ -9,6 +9,11 @@ import {
   resolveAgentClaudeMdPath,
 } from '../agent-discovery.js';
 import {
+  compareRuntimeProfiles,
+  resolveRuntimeProfile,
+} from '../runtime-profile.js';
+import { resolveEffectiveRuntime } from '../runtime-resolution.js';
+import {
   getAchievementResponse,
   checkTelemetryAchievements,
   AchievementDef,
@@ -22,6 +27,10 @@ import {
   ASSISTANT_NAME,
 } from '../config.js';
 import { getHealthStatus } from '../health.js';
+import {
+  getProviderAuthHealth,
+  recheckProviderAuth,
+} from '../provider-auth.js';
 import {
   getMessagesSince,
   getMediaArtifact,
@@ -614,6 +623,7 @@ export class WebChannel implements Channel {
         instructions,
         sourceGroupJid,
         sourceAgentName,
+        runtime,
       } = body as {
         name?: string;
         displayName?: string;
@@ -621,6 +631,13 @@ export class WebChannel implements Channel {
         instructions?: string;
         sourceGroupJid?: string;
         sourceAgentName?: string;
+        runtime?: {
+          provider?: string;
+          model?: string;
+          baseUrl?: string;
+          temperature?: number;
+          maxTokens?: number;
+        };
       };
 
       if (!name?.trim()) {
@@ -696,6 +713,19 @@ export class WebChannel implements Channel {
       } else if (!sourceAgentName && 'trigger' in agentConfig) {
         delete agentConfig.trigger;
       }
+      if (runtime?.provider) {
+        agentConfig.runtime = {
+          provider: runtime.provider,
+          ...(runtime.model ? { model: runtime.model } : {}),
+          ...(runtime.baseUrl ? { baseUrl: runtime.baseUrl } : {}),
+          ...(runtime.temperature !== undefined
+            ? { temperature: runtime.temperature }
+            : {}),
+          ...(runtime.maxTokens !== undefined
+            ? { maxTokens: runtime.maxTokens }
+            : {}),
+        };
+      }
 
       fs.writeFileSync(
         path.join(agentDir, 'agent.json'),
@@ -724,9 +754,16 @@ export class WebChannel implements Channel {
         agentName,
       );
       const body = await this.readBody(req);
-      const { displayName, trigger } = body as {
+      const { displayName, trigger, runtime } = body as {
         displayName?: string;
         trigger?: string;
+        runtime?: {
+          provider?: string;
+          model?: string;
+          baseUrl?: string;
+          temperature?: number;
+          maxTokens?: number;
+        } | null;
       };
 
       if (!fs.existsSync(agentDir)) {
@@ -756,8 +793,92 @@ export class WebChannel implements Channel {
         }
       }
 
+      if (runtime !== undefined) {
+        if (runtime === null) {
+          delete config.runtime;
+        } else {
+          const VALID_PROVIDERS = [
+            'anthropic',
+            'ollama',
+            'openai',
+            'github-copilot',
+            'azure-openai',
+            'openrouter',
+            'litellm',
+          ];
+          if (runtime.provider && !VALID_PROVIDERS.includes(runtime.provider)) {
+            return this.json(res, 400, {
+              error: `Invalid provider "${runtime.provider}". Valid: ${VALID_PROVIDERS.join(', ')}`,
+            });
+          }
+          if (runtime.provider === 'ollama' && !runtime.model) {
+            return this.json(res, 400, {
+              error: 'Ollama provider requires a model (e.g. "llama3.2")',
+            });
+          }
+          config.runtime = {
+            ...(runtime.provider ? { provider: runtime.provider } : {}),
+            ...(runtime.model ? { model: runtime.model } : {}),
+            ...(runtime.baseUrl ? { baseUrl: runtime.baseUrl } : {}),
+            ...(runtime.temperature !== undefined
+              ? { temperature: runtime.temperature }
+              : {}),
+            ...(runtime.maxTokens !== undefined
+              ? { maxTokens: runtime.maxTokens }
+              : {}),
+          };
+        }
+      }
+
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+
+      // Evict warm pool container when runtime config changes —
+      // the pooled container has the old provider/model baked in.
+      if (runtime !== undefined) {
+        this.opts.onAgentRuntimeChanged?.(group.folder, agentName);
+      }
+
       return this.refreshAgentsAndRespond(res, jid);
+    }
+
+    // GET /api/groups/:folder/agents/:agent/runtime-profile — inspect
+    // declared/effective runtime and resolved capabilities for an agent.
+    const runtimeProfileMatch = url.pathname.match(
+      /^\/api\/groups\/([A-Za-z0-9_-]+)\/agents\/([A-Za-z0-9_-]+)\/runtime-profile$/,
+    );
+    if (method === 'GET' && runtimeProfileMatch) {
+      const folderSlug = decodeURIComponent(runtimeProfileMatch[1]);
+      const agentName = decodeURIComponent(runtimeProfileMatch[2]);
+      const jid = `web:${folderSlug}`;
+      const group = this.opts.registeredGroups()[jid];
+      if (!group) {
+        return this.json(res, 404, { error: 'Group not found' });
+      }
+
+      const agents =
+        this.opts.getDiscoveredAgents?.(jid) || discoverAgents(group);
+      const agent = agents.find((entry) => entry.name === agentName);
+      if (!agent) {
+        return this.json(res, 404, { error: 'Agent not found' });
+      }
+
+      const declaredRuntime = agent.runtime || null;
+      const effectiveRuntime = resolveEffectiveRuntime(agent, group.folder);
+      const profile = resolveRuntimeProfile(effectiveRuntime);
+      const currentProfile = resolveRuntimeProfile(agent.runtime);
+      const compatibility = compareRuntimeProfiles(currentProfile, profile);
+
+      return this.json(res, 200, {
+        agent: {
+          id: agent.id,
+          name: agent.name,
+          displayName: agent.displayName,
+        },
+        declaredRuntime,
+        effectiveRuntime,
+        resolvedProfile: profile,
+        compatibilityFromDeclared: compatibility,
+      });
     }
 
     // DELETE /api/groups/:folder/agents/:agent — remove an agent from a group
@@ -799,6 +920,39 @@ export class WebChannel implements Channel {
 
       fs.rmSync(agentDir, { recursive: true, force: true });
       return this.refreshAgentsAndRespond(res, jid);
+    }
+
+    // GET /api/ollama/models — list locally available Ollama models
+    if (method === 'GET' && url.pathname === '/api/ollama/models') {
+      const ollamaHost = process.env.OLLAMA_HOST || 'http://localhost:11434';
+      try {
+        const response = await fetch(`${ollamaHost}/api/tags`);
+        if (!response.ok) {
+          return this.json(res, 200, {
+            models: [],
+            error: `Ollama returned ${response.status}`,
+          });
+        }
+        const data = (await response.json()) as {
+          models?: Array<{
+            name: string;
+            size: number;
+            modified_at: string;
+          }>;
+        };
+        return this.json(res, 200, {
+          models: (data.models || []).map((m) => ({
+            name: m.name,
+            size: m.size,
+            modified: m.modified_at,
+          })),
+        });
+      } catch {
+        return this.json(res, 200, {
+          models: [],
+          error: `Ollama is not reachable at ${ollamaHost}`,
+        });
+      }
     }
 
     // GET /api/triggers — list triggered agents for @-mention autocomplete
@@ -1764,6 +1918,41 @@ export class WebChannel implements Channel {
     if (method === 'GET' && url.pathname === '/api/health') {
       const health = await getHealthStatus();
       return this.json(res, 200, health);
+    }
+
+    // GET /api/auth-state — provider auth health snapshot
+    if (method === 'GET' && url.pathname === '/api/auth-state') {
+      return this.json(res, 200, {
+        providers: {
+          anthropic: getProviderAuthHealth('anthropic'),
+          ollama: getProviderAuthHealth('ollama'),
+        },
+      });
+    }
+
+    // POST /api/auth-state/:provider/recheck — clear failure override and re-read auth state
+    const authRecheckMatch = url.pathname.match(
+      /^\/api\/auth-state\/([A-Za-z0-9_-]+)\/recheck$/,
+    );
+    if (method === 'POST' && authRecheckMatch) {
+      const remote = req.socket.remoteAddress;
+      if (
+        remote !== '127.0.0.1' &&
+        remote !== '::1' &&
+        remote !== '::ffff:127.0.0.1'
+      ) {
+        return this.json(res, 403, { error: 'Localhost only' });
+      }
+
+      const provider = authRecheckMatch[1];
+      if (provider !== 'anthropic' && provider !== 'ollama') {
+        return this.json(res, 400, { error: 'Unsupported provider' });
+      }
+
+      return this.json(res, 200, {
+        ok: true,
+        health: recheckProviderAuth(provider),
+      });
     }
 
     // POST /api/register-anthropic — register Anthropic API key in .env

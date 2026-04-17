@@ -19,6 +19,10 @@ export function GroupSettings({ group, open, onClose }) {
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentError, setAgentError] = useState('');
   const [agentDisplayNames, setAgentDisplayNames] = useState({});
+  const [agentProvider, setAgentProvider] = useState('anthropic');
+  const [agentModel, setAgentModel] = useState('');
+  const [ollamaModels, setOllamaModels] = useState([]);
+  const [agentRuntimeEdits, setAgentRuntimeEdits] = useState({}); // { [agentName]: { provider, model } }
 
   useEffect(() => {
     if (!group || !open) return;
@@ -40,6 +44,13 @@ export function GroupSettings({ group, open, onClose }) {
         agent.displayName || agent.name,
       ])),
     );
+    setAgentRuntimeEdits({});
+    setAgentProvider('anthropic');
+    setAgentModel('');
+    // Fetch Ollama models (best-effort)
+    api.getOllamaModels().then((data) => {
+      setOllamaModels(data.models || []);
+    }).catch(() => {});
   }, [group?.jid, open]);
 
   if (!open || !group) return null;
@@ -77,6 +88,8 @@ export function GroupSettings({ group, open, onClose }) {
     setAgentTrigger('');
     setAgentInstructions('');
     setSelectedSource('');
+    setAgentProvider('anthropic');
+    setAgentModel('');
     setAgentError('');
   }
 
@@ -86,12 +99,19 @@ export function GroupSettings({ group, open, onClose }) {
     setAgentBusy(true);
     setAgentError('');
     try {
-      await api.addGroupAgent(folderName, {
+      const payload = {
         name: agentName.trim(),
         displayName: agentDisplayName.trim(),
         trigger: agentTrigger.trim(),
         instructions: agentInstructions.trim(),
-      });
+      };
+      if (agentProvider !== 'anthropic' || agentModel.trim()) {
+        payload.runtime = {
+          provider: agentProvider,
+          ...(agentModel.trim() ? { model: agentModel.trim() } : {}),
+        };
+      }
+      await api.addGroupAgent(folderName, payload);
       await loadGroups();
       resetAgentForm();
     } catch (err) {
@@ -149,6 +169,31 @@ export function GroupSettings({ group, open, onClose }) {
       await loadGroups();
     } catch (err) {
       setAgentError(err.message || 'Failed to update agent display name');
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function handleSaveAgentRuntime(name) {
+    if (agentBusy) return;
+    const edit = agentRuntimeEdits[name];
+    if (!edit) return;
+    setAgentBusy(true);
+    setAgentError('');
+    try {
+      const runtime =
+        edit.provider === 'anthropic' && !edit.model
+          ? null // reset to default
+          : { provider: edit.provider, model: edit.model || undefined };
+      await api.updateGroupAgent(folderName, name, { runtime });
+      await loadGroups();
+      setAgentRuntimeEdits((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+    } catch (err) {
+      setAgentError(err.message || 'Failed to update agent runtime');
     } finally {
       setAgentBusy(false);
     }
@@ -292,6 +337,56 @@ export function GroupSettings({ group, open, onClose }) {
                       >Save</button>
                     </div>
                     <div class="text-xs text-txt-muted font-mono mt-1">${agent.name}${agent.trigger ? ` · ${agent.trigger}` : ' · coordinator'}</div>
+                    <div class="flex gap-2 items-center mt-1.5">
+                      <select
+                        class="bg-bg border border-border rounded px-1.5 py-0.5 text-xs text-txt focus:outline-none focus:border-accent"
+                        value=${agentRuntimeEdits[agent.name]?.provider ?? agent.runtime?.provider ?? 'anthropic'}
+                        onChange=${(e) => setAgentRuntimeEdits((prev) => ({
+                          ...prev,
+                          [agent.name]: {
+                            provider: e.target.value,
+                            model: e.target.value === (agent.runtime?.provider || 'anthropic')
+                              ? (prev[agent.name]?.model ?? agent.runtime?.model ?? '')
+                              : '',
+                          },
+                        }))}
+                      >
+                        <option value="anthropic">Anthropic</option>
+                        <option value="ollama">Ollama</option>
+                      </select>
+                      ${(() => {
+                        const prov = agentRuntimeEdits[agent.name]?.provider ?? agent.runtime?.provider ?? 'anthropic';
+                        const modelVal = agentRuntimeEdits[agent.name]?.model ?? agent.runtime?.model ?? '';
+                        if (prov === 'ollama' && ollamaModels.length > 0) {
+                          return html`<select
+                            class="bg-bg border border-border rounded px-1.5 py-0.5 text-xs text-txt focus:outline-none focus:border-accent"
+                            value=${modelVal}
+                            onChange=${(e) => setAgentRuntimeEdits((prev) => ({
+                              ...prev,
+                              [agent.name]: { ...prev[agent.name], provider: prov, model: e.target.value },
+                            }))}
+                          >
+                            <option value="">Select model...</option>
+                            ${ollamaModels.map((m) => html`<option value=${m.name}>${m.name}</option>`)}
+                          </select>`;
+                        }
+                        return html`<input
+                          type="text"
+                          class="bg-bg border border-border rounded px-1.5 py-0.5 text-xs text-txt placeholder-txt-muted focus:outline-none focus:border-accent w-32"
+                          placeholder=${prov === 'ollama' ? 'Model name' : 'Default model'}
+                          value=${modelVal}
+                          onInput=${(e) => setAgentRuntimeEdits((prev) => ({
+                            ...prev,
+                            [agent.name]: { ...prev[agent.name], provider: prov, model: e.target.value },
+                          }))}
+                        />`;
+                      })()}
+                      ${agentRuntimeEdits[agent.name] && html`<button
+                        class="px-1.5 py-0.5 text-xs bg-bg-3 border border-border rounded text-txt-2 hover:border-accent disabled:opacity-50"
+                        onClick=${() => handleSaveAgentRuntime(agent.name)}
+                        disabled=${agentBusy}
+                      >Save</button>`}
+                    </div>
                   </div>
                   <button
                     class="px-2 py-1 text-xs border border-border rounded-md text-txt-2 hover:border-red-400 hover:text-red-300 disabled:opacity-50"
@@ -326,6 +421,34 @@ export function GroupSettings({ group, open, onClose }) {
               value=${agentTrigger}
               onInput=${(e) => setAgentTrigger(e.target.value)}
             />
+            <div class="flex gap-2">
+              <select
+                class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt focus:outline-none focus:border-accent"
+                value=${agentProvider}
+                onChange=${(e) => { setAgentProvider(e.target.value); setAgentModel(''); }}
+              >
+                <option value="anthropic">Anthropic</option>
+                <option value="ollama">Ollama</option>
+              </select>
+              ${agentProvider === 'ollama' && ollamaModels.length > 0 ? html`
+                <select
+                  class="flex-1 bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt focus:outline-none focus:border-accent"
+                  value=${agentModel}
+                  onChange=${(e) => setAgentModel(e.target.value)}
+                >
+                  <option value="">Select model...</option>
+                  ${ollamaModels.map((m) => html`<option value=${m.name}>${m.name}</option>`)}
+                </select>
+              ` : html`
+                <input
+                  type="text"
+                  class="flex-1 bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt placeholder-txt-muted focus:outline-none focus:border-accent"
+                  placeholder=${agentProvider === 'ollama' ? 'Model name (required)' : 'Model (optional)'}
+                  value=${agentModel}
+                  onInput=${(e) => setAgentModel(e.target.value)}
+                />
+              `}
+            </div>
             <textarea
               class="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-txt placeholder-txt-muted focus:outline-none focus:border-accent min-h-24"
               placeholder="Optional starter instructions"
@@ -335,7 +458,7 @@ export function GroupSettings({ group, open, onClose }) {
             <button
               type="submit"
               class="px-3 py-1.5 text-xs bg-accent text-bg rounded-lg hover:opacity-90 disabled:opacity-50 self-start"
-              disabled=${agentBusy || !agentName.trim()}
+              disabled=${agentBusy || !agentName.trim() || (agentProvider === 'ollama' && !agentModel.trim())}
             >${agentBusy ? 'Working...' : 'Add Agent'}</button>
           </form>
 

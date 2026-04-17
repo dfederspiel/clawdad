@@ -1,5 +1,6 @@
 import {
   Channel,
+  Agent,
   OnInboundMessage,
   OnChatMetadata,
   RegisteredGroup,
@@ -16,6 +17,13 @@ export interface ChannelOpts {
     displayName: string;
     trigger?: string;
     status?: string;
+    runtime?: {
+      provider: string;
+      model?: string;
+      baseUrl?: string;
+      temperature?: number;
+      maxTokens?: number;
+    };
   }>;
   refreshGroupAgents?: (jid: string) => Array<{
     id: string;
@@ -23,7 +31,15 @@ export interface ChannelOpts {
     displayName: string;
     trigger?: string;
     status?: string;
+    runtime?: {
+      provider: string;
+      model?: string;
+      baseUrl?: string;
+      temperature?: number;
+      maxTokens?: number;
+    };
   }>;
+  onAgentRuntimeChanged?: (groupFolder: string, agentName: string) => void;
   onRegisterGroup?: (jid: string, group: RegisteredGroup) => void;
   onDeleteGroup?: (jid: string, group: RegisteredGroup) => void;
   /** Optional status provider for web UI telemetry/task management */
@@ -42,6 +58,8 @@ export interface ChannelOpts {
   ) => void;
   /** Reset session for a group (clears SDK session, evicts warm pool) */
   onResetSession?: (groupFolder: string) => Promise<void>;
+  /** Get fully discovered agents for a group with runtime metadata */
+  getDiscoveredAgents?: (jid: string) => Agent[];
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

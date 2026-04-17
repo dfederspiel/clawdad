@@ -1,3 +1,5 @@
+import { AgentRuntimeConfig } from './runtime-types.js';
+
 export interface AdditionalMount {
   hostPath: string; // Absolute path on host (supports ~ for home)
   containerPath?: string; // Optional — defaults to basename of hostPath. Mounted at /workspace/extra/{value}
@@ -31,8 +33,8 @@ export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
   sshAgent?: boolean; // Mount host SSH_AUTH_SOCK into container (default: false)
-  maxTurns?: number; // Max SDK turns per query (prevents runaway agents)
-  disallowedTools?: string[]; // Tools to block (e.g., delegate_to_agent for specialists)
+  maxTurns?: number; // Hard cap on SDK turns per run
+  disallowedTools?: string[]; // Tools refused for this agent (exact names or MCP patterns)
 }
 
 export interface RegisteredGroup {
@@ -97,6 +99,7 @@ export interface Agent {
   trigger?: string; // Agent-specific trigger pattern (overrides group trigger)
   status?: string; // Agent-settable status line shown under the agent row
   containerConfig?: ContainerConfig; // Agent-specific overrides
+  runtime?: AgentRuntimeConfig; // Provider/model execution boundary
 }
 
 export type WorkPhase =

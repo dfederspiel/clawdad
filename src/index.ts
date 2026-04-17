@@ -18,6 +18,10 @@ import {
   shouldDeliverForLease,
 } from './message-supersession.js';
 import {
+  clearProviderAuthFailure,
+  noteProviderAuthFailure,
+} from './provider-auth.js';
+import {
   ASSISTANT_NAME,
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
@@ -106,6 +110,10 @@ import {
   startRemoteControl,
   stopRemoteControl,
 } from './remote-control.js';
+import {
+  resolveEffectiveRuntime,
+  resolveTurnConstraints,
+} from './runtime-resolution.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -1681,6 +1689,7 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
   const agentName = agent?.name || DEFAULT_AGENT_NAME;
+  const runtimeProvider = agent?.runtime?.provider || 'anthropic';
   // Legacy session fallback: only use the group-level session for the default
   // agent. Named agents (added after the group was created) get their own
   // session directory and must not inherit the old single-agent session ID —
@@ -1765,6 +1774,33 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
   // Wrap onOutput to track session ID and usage from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
+        const authFailureText =
+          typeof output.error === 'string'
+            ? output.error
+            : output.status === 'success' && typeof output.result === 'string'
+              ? output.result
+              : null;
+        if (authFailureText) {
+          const authCategory = noteProviderAuthFailure(
+            runtimeProvider,
+            authFailureText,
+          );
+          if (authCategory) {
+            logger.warn(
+              {
+                provider: runtimeProvider,
+                category: authCategory,
+                agent: agentId,
+              },
+              'Recorded provider auth failure from agent output',
+            );
+          } else if (output.status === 'success') {
+            clearProviderAuthFailure(runtimeProvider);
+          }
+        } else if (output.status === 'success') {
+          clearProviderAuthFailure(runtimeProvider);
+        }
+
         // Only save session from successful outputs — error outputs carry the
         // broken session ID and would re-poison the cache after the error
         // handler clears it (race: outputChain settles after error resolve).
@@ -2031,16 +2067,15 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
         agentId,
         agentName: agent?.name || DEFAULT_AGENT_NAME,
         runBatchId,
+        runtime: resolveEffectiveRuntime(agent, group.folder),
+        constraints: resolveTurnConstraints(agent, group),
         canDelegate: agent ? !agent.trigger : false,
         isDelegation: isDelegation || false,
         networkContainer,
         poolManaged: true,
         mainChatJid: isMain ? undefined : getMainChatJid(),
-        achievements: getAchievementsForContainer(),
         systemContext,
-        maxTurns: effectiveMaxTurns,
-        disallowedTools:
-          effectiveDisallowed.length > 0 ? effectiveDisallowed : undefined,
+        achievements: getAchievementsForContainer(),
       };
 
       const handle = await spawnContainer(group, containerInput);
@@ -2109,16 +2144,15 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
       agentId,
       agentName: agent?.name || DEFAULT_AGENT_NAME,
       runBatchId,
+      runtime: resolveEffectiveRuntime(agent, group.folder),
+      constraints: resolveTurnConstraints(agent, group),
       canDelegate: agent ? !agent.trigger : false,
       isDelegation: isDelegation || false,
       networkContainer,
       poolManaged: false,
       mainChatJid: isMain ? undefined : getMainChatJid(),
-      achievements: getAchievementsForContainer(),
       systemContext,
-      maxTurns: effectiveMaxTurns,
-      disallowedTools:
-        effectiveDisallowed.length > 0 ? effectiveDisallowed : undefined,
+      achievements: getAchievementsForContainer(),
     };
 
     //
@@ -2590,6 +2624,17 @@ async function main(): Promise<void> {
     onDeleteGroup: (jid: string, group: RegisteredGroup) => {
       unregisterGroup(jid, group);
     },
+    onAgentRuntimeChanged: async (groupFolder: string, agentName: string) => {
+      const agentId = `${groupFolder}/${agentName}`;
+      logger.info(
+        { agentId },
+        'Agent runtime changed, evicting warm pool container',
+      );
+      await pool.reclaim(agentId);
+      // Clear session — new provider may not support resume
+      delete sessions[agentId];
+      deleteSession(agentId);
+    },
     onResetSession: async (groupFolder: string) => {
       logger.info({ groupFolder }, 'Resetting session');
 
@@ -2672,6 +2717,7 @@ async function main(): Promise<void> {
         displayName: a.displayName,
         trigger: a.trigger,
         status: a.status,
+        runtime: a.runtime,
       })),
     refreshGroupAgents: (jid: string) =>
       refreshGroupAgents(jid).map((a) => ({
@@ -2680,6 +2726,7 @@ async function main(): Promise<void> {
         displayName: a.displayName,
         trigger: a.trigger,
         status: a.status,
+        runtime: a.runtime,
       })),
     getStatus: () => ({
       containers: queue.getSnapshot(),
@@ -2687,6 +2734,10 @@ async function main(): Promise<void> {
       uptime: process.uptime(),
     }),
     getThreadInfo: (threadId: string) => activeThreads.get(threadId),
+    getDiscoveredAgents: (jid: string) => {
+      const group = registeredGroups[jid];
+      return group ? discoverAgents(group) : [];
+    },
     onThreadReply: (threadId: string, agentJid: string) => {
       pendingOrigins[agentJid] = {
         originJid: activeThreads.get(threadId)!.originJid,
