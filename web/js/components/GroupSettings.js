@@ -187,11 +187,10 @@ export function GroupSettings({ group, open, onClose }) {
           : { provider: edit.provider, model: edit.model || undefined };
       await api.updateGroupAgent(folderName, name, { runtime });
       await loadGroups();
-      setAgentRuntimeEdits((prev) => {
-        const next = { ...prev };
-        delete next[name];
-        return next;
-      });
+      // Don't clear agentRuntimeEdits — the edit state keeps the UI
+      // showing the saved value until the group prop re-renders with
+      // the updated agent data. The Save button hides automatically
+      // when the edit matches the persisted value.
     } catch (err) {
       setAgentError(err.message || 'Failed to update agent runtime');
     } finally {
