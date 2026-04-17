@@ -28,9 +28,46 @@ interface OllamaStreamChunk {
   prompt_eval_duration?: number;
 }
 
+/**
+ * Parse the XML-formatted conversation history produced by the host's
+ * formatMessages() into individual Ollama chat messages. Bot messages
+ * become assistant role, everything else becomes user role.
+ */
+function parseXmlMessages(
+  text: string,
+  assistantName?: string,
+): OllamaMessage[] {
+  // Match <message sender="..." time="...">content</message>
+  const msgRegex =
+    /<message\s+sender="([^"]*)"\s+time="[^"]*">([^<]*(?:<(?!\/message>)[^<]*)*)<\/message>/g;
+  const results: OllamaMessage[] = [];
+  let match;
+  while ((match = msgRegex.exec(text)) !== null) {
+    const sender = match[1];
+    const content = match[2]
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .trim();
+    if (!content) continue;
+    // Messages from the agent's own display name are assistant messages;
+    // everything else is user messages.
+    const isBot =
+      (assistantName && sender === assistantName) ||
+      /^(Andy|Assistant|Bot)$/i.test(sender);
+    results.push({
+      role: isBot ? 'assistant' : 'user',
+      content,
+    });
+  }
+  return results;
+}
+
 interface ContainerInputLike {
   isMain: boolean;
   systemContext?: string;
+  assistantName?: string;
 }
 
 export class OllamaRuntime {
@@ -76,13 +113,27 @@ export class OllamaRuntime {
       messages.push({ role: 'system', content: systemParts.join('\n\n') });
     }
 
-    // Convert input messages
+    // Convert input messages — the host wraps conversation history in XML
+    // (<context/><messages><message sender="..." time="...">text</message>...</messages>)
+    // which confuses non-Claude models. Parse out individual messages and
+    // convert to proper Ollama chat format.
     for (const msg of input.messages) {
       const textParts = msg.content
         .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
         .map((p) => p.text);
-      if (textParts.length > 0) {
-        messages.push({ role: msg.role, content: textParts.join('\n') });
+      const fullText = textParts.join('\n');
+
+      // Try to parse XML-formatted conversation history
+      const xmlMessages = parseXmlMessages(
+        fullText,
+        this.options.containerInput.assistantName,
+      );
+      if (xmlMessages.length > 0) {
+        for (const xm of xmlMessages) {
+          messages.push(xm);
+        }
+      } else if (fullText.trim()) {
+        messages.push({ role: msg.role, content: fullText });
       }
     }
 

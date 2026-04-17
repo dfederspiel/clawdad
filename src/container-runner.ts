@@ -255,9 +255,10 @@ function buildVolumeMounts(
   const markerPath = path.join(agentInputDir, '.agent-name');
   fs.writeFileSync(markerPath, effectiveAgentName);
 
-  // Mount agent-specific directory (for multi-agent groups with explicit agents/)
-  // The agent's CLAUDE.md lives here, mounted at /workspace/agent
-  if (agentName && agentName !== 'default') {
+  // Mount agent-specific directory — the agent's CLAUDE.md lives here,
+  // mounted at /workspace/agent. For non-Claude runtimes (e.g. Ollama),
+  // this is the only identity context the model receives.
+  if (agentName) {
     const agentDir = path.join(groupDir, 'agents', agentName);
     if (fs.existsSync(agentDir)) {
       mounts.push({
