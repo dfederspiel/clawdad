@@ -3,6 +3,7 @@
  * Spawns agent execution in containers and handles IPC
  */
 import { ChildProcess, execSync, spawn } from 'child_process';
+import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
@@ -97,6 +98,46 @@ interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+}
+
+/**
+ * Hash every CLAUDE.md file that will be loaded into this agent's Claude Code
+ * session. Lets the warm pool detect host-side edits and evict stale
+ * containers on the next acquire. Mirrors the path set used by
+ * buildVolumeMounts so any file that's actually mounted gets fingerprinted.
+ */
+export function computeClaudeMdFingerprint(
+  groupFolder: string,
+  isMain: boolean,
+  chatJid: string,
+  agentName?: string,
+): string {
+  const groupDir = resolveGroupFolderPath(groupFolder);
+  const paths: string[] = [path.join(groupDir, 'CLAUDE.md')];
+
+  if (agentName) {
+    paths.push(path.join(groupDir, 'agents', agentName, 'CLAUDE.md'));
+  }
+
+  if (!isMain) {
+    paths.push(path.join(GROUPS_DIR, 'global', 'CLAUDE.md'));
+    if (chatJid.startsWith('web:')) {
+      paths.push(path.join(GROUPS_DIR, 'global-web', 'CLAUDE.md'));
+    }
+  }
+
+  const hash = createHash('sha256');
+  for (const p of paths) {
+    hash.update(p);
+    hash.update('\0');
+    try {
+      hash.update(fs.readFileSync(p));
+    } catch {
+      hash.update('MISSING');
+    }
+    hash.update('\0');
+  }
+  return hash.digest('hex');
 }
 
 function buildVolumeMounts(
@@ -531,6 +572,7 @@ export interface ContainerHandle {
   exited: boolean;
   readonly exitPromise: Promise<{ code: number | null }>;
   queryCount: number;
+  claudeMdFingerprint?: string;
 
   /**
    * Run one query cycle: wait for the next output marker that represents
@@ -871,6 +913,12 @@ export async function spawnContainer(
     exited: false,
     exitPromise,
     queryCount: 0,
+    claudeMdFingerprint: computeClaudeMdFingerprint(
+      group.folder,
+      input.isMain,
+      input.chatJid,
+      input.agentName,
+    ),
     queryOnce: null as unknown as ContainerHandle['queryOnce'],
   };
 
