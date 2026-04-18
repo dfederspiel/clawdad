@@ -49,6 +49,8 @@ export interface RuntimeMessage {
 export interface RuntimeTurnConstraints {
   maxTurns?: number;
   disallowedTools?: string[];
+  /** Positive allowlist — when set, only these tools are exposed. */
+  allowedTools?: string[];
 }
 
 export interface RuntimeTurnInput {
