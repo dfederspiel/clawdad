@@ -3,7 +3,20 @@ import { useState, useRef, useEffect } from 'preact/hooks';
 import { createGroup, createTeam } from '../app.js';
 import * as api from '../api.js';
 
-const DEFAULT_SPECIALIST = () => ({ name: '', displayName: '', trigger: '', instructions: '' });
+const DEFAULT_SPECIALIST = () => ({
+  name: '',
+  displayName: '',
+  trigger: '',
+  instructions: '',
+  provider: 'anthropic',
+  model: '',
+});
+const DEFAULT_COORDINATOR = () => ({
+  displayName: 'Coordinator',
+  instructions: '',
+  provider: 'anthropic',
+  model: '',
+});
 
 const TIER_META = {
   beginner: { label: 'Getting Started', desc: 'Learn the basics — each template guides you step by step' },
@@ -53,7 +66,7 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
   const [ollamaModels, setOllamaModels] = useState([]);
 
   // Team creation state
-  const [teamCoordinator, setTeamCoordinator] = useState({ displayName: 'Coordinator', instructions: '' });
+  const [teamCoordinator, setTeamCoordinator] = useState(DEFAULT_COORDINATOR());
   const [teamSpecialists, setTeamSpecialists] = useState([DEFAULT_SPECIALIST()]);
 
   useEffect(() => {
@@ -155,7 +168,7 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
     setView('pick');
     setProvider('anthropic');
     setModel('');
-    setTeamCoordinator({ displayName: 'Coordinator', instructions: '' });
+    setTeamCoordinator(DEFAULT_COORDINATOR());
     setTeamSpecialists([DEFAULT_SPECIALIST()]);
   }
 
@@ -217,6 +230,16 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
     });
   }
 
+  // Build a runtime config payload only when the user picked something
+  // non-default. Anthropic with no model is the platform default, so we
+  // omit it to keep agent.json clean.
+  function buildRuntime(provider, model) {
+    if (provider === 'anthropic' && !model) return undefined;
+    const out = { provider };
+    if (model) out.model = model;
+    return out;
+  }
+
   function addSpecialist() {
     setTeamSpecialists((prev) => [...prev, DEFAULT_SPECIALIST()]);
   }
@@ -236,12 +259,17 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
       await createTeam({
         name: name.trim(),
         folder: folder.trim(),
-        coordinator: teamCoordinator,
+        coordinator: {
+          displayName: teamCoordinator.displayName,
+          instructions: teamCoordinator.instructions,
+          runtime: buildRuntime(teamCoordinator.provider, teamCoordinator.model),
+        },
         specialists: validSpecs.map((s) => ({
           name: s.name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-'),
           displayName: s.displayName.trim() || s.name.trim(),
           trigger: s.trigger.trim(),
           instructions: s.instructions.trim(),
+          runtime: buildRuntime(s.provider, s.model),
         })),
       });
       resetForm();
@@ -599,6 +627,13 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
               value=${teamCoordinator.displayName}
               onInput=${(e) => setTeamCoordinator((prev) => ({ ...prev, displayName: e.target.value }))}
             />
+            ${renderProviderModelRow(
+              teamCoordinator.provider,
+              (v) => setTeamCoordinator((prev) => ({ ...prev, provider: v })),
+              teamCoordinator.model,
+              (v) => setTeamCoordinator((prev) => ({ ...prev, model: v })),
+              'Coordinator',
+            )}
             <textarea
               class="bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent resize-none"
               rows="2"
@@ -657,6 +692,13 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
                   value=${spec.displayName}
                   onInput=${(e) => updateSpecialist(i, 'displayName', e.target.value)}
                 />
+                ${renderProviderModelRow(
+                  spec.provider,
+                  (v) => updateSpecialist(i, 'provider', v),
+                  spec.model,
+                  (v) => updateSpecialist(i, 'model', v),
+                  'Specialist',
+                )}
                 <textarea
                   class="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt focus:outline-none focus:border-accent resize-none"
                   rows="2"
