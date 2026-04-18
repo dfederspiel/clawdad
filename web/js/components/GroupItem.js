@@ -70,7 +70,22 @@ export function GroupItem({ group, isActive, onSelect, onSettings }) {
   const activeList = activeAgents.value[group.jid] || [];
   const hasActiveAgents = isMultiAgent && activeList.length > 0;
   const groupTasks = tasks.value.filter(t => t.group_folder === group.folder);
-  const taskCount = groupTasks.filter(t => t.status === 'active').length;
+  const activeTaskCount = groupTasks.filter(t => t.status === 'active').length;
+  const pausedTaskCount = groupTasks.filter(t => t.status === 'paused').length;
+  const completedTaskCount = groupTasks.filter(t => t.status === 'completed').length;
+  const hasTasks = groupTasks.length > 0;
+  // Label: lead with whatever's non-zero so paused-only and completed-only
+  // groups still surface a badge the user can click.
+  const taskBadgeLabel = activeTaskCount > 0
+    ? `${activeTaskCount}t`
+    : pausedTaskCount > 0
+      ? `${pausedTaskCount}p`
+      : `${completedTaskCount}✓`;
+  const taskBadgeTooltip = [
+    activeTaskCount > 0 && `${activeTaskCount} active`,
+    pausedTaskCount > 0 && `${pausedTaskCount} paused`,
+    completedTaskCount > 0 && `${completedTaskCount} completed`,
+  ].filter(Boolean).join(', ');
 
   // Auto-expand drawer when specialists activate (don't auto-collapse — that's jarring)
   useEffect(() => {
@@ -124,12 +139,12 @@ export function GroupItem({ group, isActive, onSelect, onSettings }) {
         ${group.isMain && !group.isSystem && html`
           <span class="text-[10px] px-1.5 py-0.5 rounded bg-accent-dim text-accent font-medium shrink-0">main</span>
         `}
-        ${taskCount > 0 && !count && html`
+        ${hasTasks && !count && html`
           <button
-            class="text-[9px] px-1 py-0.5 rounded bg-bg-3 text-txt-muted hover:text-txt hover:bg-bg-hover font-mono shrink-0 ${tasksExpanded ? 'ring-1 ring-accent/40 text-txt' : ''}"
-            title="${taskCount} active task${taskCount > 1 ? 's' : ''} — click to ${tasksExpanded ? 'collapse' : 'expand'}"
+            class="text-[9px] px-1 py-0.5 rounded bg-bg-3 ${activeTaskCount > 0 ? 'text-txt-muted' : 'text-txt-muted/60'} hover:text-txt hover:bg-bg-hover font-mono shrink-0 ${tasksExpanded ? 'ring-1 ring-accent/40 text-txt' : ''}"
+            title="${taskBadgeTooltip} — click to ${tasksExpanded ? 'collapse' : 'expand'}"
             onClick=${handleTasksExpand}
-          >${taskCount}t</button>
+          >${taskBadgeLabel}</button>
         `}
         ${count > 0 && html`
           <span class="min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-accent text-bg text-[11px] font-semibold px-1 shrink-0">
