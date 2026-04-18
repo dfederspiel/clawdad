@@ -58,19 +58,26 @@ Syntax-highlighted code with a copy button and optional filename badge.
 | `filename` | no | Filename shown as a badge in the header |
 
 ### card
-Titled panel for structured information — status reports, summaries, feature descriptions.
+Titled panel for structured information — status reports, summaries, feature descriptions. Supports both free-form markdown (`body`) and structured key-value data (`rows`).
 
 ```json
 { "type": "card", "title": "Deployment Status", "icon": "🚀", "body": "All 3 services deployed successfully.\n\n- **api**: v2.4.1\n- **web**: v1.8.0\n- **worker**: v3.1.2", "footer": "Deployed 2 minutes ago" }
 ```
 
-**When to use:** Presenting a self-contained summary, status update, or info block that benefits from visual framing. The body supports markdown.
+With structured rows and a status indicator:
+```json
+{ "type": "card", "title": "Triage Run", "status": "success", "rows": [{ "label": "New Bugs", "value": "0" }, { "label": "Open PRs", "value": "1" }] }
+```
+
+**When to use:** Presenting a self-contained summary, status update, or info block that benefits from visual framing. Use `body` for markdown prose, `rows` for key-value data, or both.
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `title` | yes | Card header text |
 | `icon` | no | Emoji or short string shown before the title |
-| `body` | yes | Card content (supports markdown) |
+| `body` | one of `body` or `rows` | Card content (supports markdown). `content` is accepted as an alias. |
+| `rows` | one of `body` or `rows` | Array of `{ label, value }` objects rendered as a key-value list |
+| `status` | no | Colored dot on the header: `success` (green), `warn` (yellow), `error` (red), `info` (blue) |
 | `footer` | no | Muted text at the bottom |
 
 ### table
@@ -87,18 +94,18 @@ Structured data grid. Use when presenting tabular data — cleaner than markdown
 | `columns` | yes | Array of column header strings |
 | `rows` | yes | Array of row arrays (each row is an array of cell values) |
 
-### stat
+### stats
 Key-value stat badges — game HUD style. Perfect for metrics, counters, quick status readouts.
 
 ```json
-{ "type": "stat", "items": [{ "icon": "💬", "label": "Messages", "value": 142 }, { "icon": "✅", "label": "Tasks", "value": 8 }, { "icon": "🔥", "label": "Streak", "value": "5 days" }] }
+{ "type": "stats", "stats": [{ "icon": "💬", "label": "Messages", "value": 142 }, { "icon": "✅", "label": "Tasks", "value": 8 }, { "icon": "🔥", "label": "Streak", "value": "5 days" }] }
 ```
 
-**When to use:** Displaying metrics, counts, quick summaries of numeric data. Each item renders as a compact badge.
+**When to use:** Displaying metrics, counts, quick summaries of numeric data. Each stat renders as a compact badge.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `items` | yes | Array of `{ icon?, label, value }` objects |
+| `stats` | yes | Array of `{ icon?, label, value }` objects |
 
 ### progress
 Progress bar — for task completion, XP, build progress, deployment stages.
@@ -219,7 +226,7 @@ I've analyzed your deployment. Here's the summary:
 [
   { "type": "alert", "level": "success", "body": "Deployment completed successfully." },
   { "type": "table", "columns": ["Service", "Version", "Status"], "rows": [["api", "2.4.1", "✅"], ["web", "1.8.0", "✅"]] },
-  { "type": "stat", "items": [{ "icon": "⏱️", "label": "Duration", "value": "3m 42s" }, { "icon": "📦", "label": "Images", "value": 2 }] }
+  { "type": "stats", "stats": [{ "icon": "⏱️", "label": "Duration", "value": "3m 42s" }, { "icon": "📦", "label": "Images", "value": 2 }] }
 ]
 :::
 
@@ -246,7 +253,7 @@ The content inside `:::blocks` **MUST** be a JSON array (`[...]`), even for a si
 :::blocks
 [
   { "type": "alert", "level": "success", "body": "Deployed." },
-  { "type": "stat", "items": [{ "label": "Duration", "value": "2m" }] }
+  { "type": "stats", "stats": [{ "label": "Duration", "value": "2m" }] }
 ]
 :::
 
@@ -258,7 +265,7 @@ The content inside `:::blocks` **MUST** be a JSON array (`[...]`), even for a si
 ❌ WRONG — multiple objects without array wrapping:
 :::blocks
 { "type": "alert", "level": "success", "body": "Deployed." }
-{ "type": "stat", "items": [{ "label": "Duration", "value": "2m" }] }
+{ "type": "stats", "stats": [{ "label": "Duration", "value": "2m" }] }
 :::
 ```
 
@@ -268,6 +275,11 @@ The content inside `:::blocks` **MUST** be a JSON array (`[...]`), even for a si
 2. **Broken markdown links inside blocks** — Use `[Title](url)` not `*[Title (url)*`. Block body fields support standard markdown.
 3. **Mixing blocks and prose inside the same fence** — Prose goes OUTSIDE the `:::blocks` fence. Inside is JSON only.
 4. **Forgetting the closing `:::`** — Every `:::blocks` must have a matching `:::` on its own line.
+
+## Field Naming
+
+- **`body` and `content` are interchangeable** on all block types. Use whichever feels natural.
+- **Array fields are named after what they contain:** `stats`, `buttons`, `fields`, `rows`, `columns`.
 
 ## Guidelines
 
