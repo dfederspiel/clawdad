@@ -1212,12 +1212,14 @@ export class WebChannel implements Channel {
           name?: string;
           displayName?: string;
           instructions?: string;
+          runtime?: { provider?: string; model?: string };
         };
         specialists: Array<{
           name: string;
           displayName?: string;
           trigger: string;
           instructions?: string;
+          runtime?: { provider?: string; model?: string };
         }>;
       };
       if (
@@ -1266,6 +1268,56 @@ export class WebChannel implements Channel {
       const groupFolder = `web_${folder}`;
       const groupDir = path.resolve(process.cwd(), 'groups', groupFolder);
 
+      // Build a "first specialist" hint for the coordinator's example.
+      // Falls back to a placeholder if (somehow) no specialists.
+      const exampleSpec = specialists[0];
+      const exampleAgent = exampleSpec
+        ? exampleSpec.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-')
+        : 'specialist';
+
+      const defaultCoordinatorMd = (displayName: string) => `# ${displayName}
+
+You are the coordinator for the ${name} team.
+
+## How to delegate
+
+When a request fits a specialist, **call the tool** — do not narrate what you would do:
+
+\`\`\`
+mcp__nanoclaw__delegate_to_agent({
+  agent: "${exampleAgent}",
+  message: "Specific instructions for the specialist",
+  completion_policy: "final_response"
+})
+\`\`\`
+
+Saying "I'll send this to ${exampleAgent}" without invoking the tool is a bug — the specialist will never run.
+
+## When to respond directly
+
+For general questions that don't fit a specialist, answer yourself.
+
+## Synthesis
+
+When all delegated specialists finish, synthesize their outputs into one response. Don't relay raw specialist output unless it's already final-quality.
+`;
+
+      const defaultSpecialistMd = (
+        displayName: string,
+        trigger: string,
+      ) => `# ${displayName}
+
+You are a specialist on the ${name} team. Your trigger is \`${trigger}\`.
+
+## Your role
+
+Focus on the work the coordinator delegates to you. Respond directly with the answer or artifact — the coordinator will handle synthesis and follow-up.
+
+## Boundaries
+
+You do not delegate. If something falls outside your role, say so plainly in your response and the coordinator will route it.
+`;
+
       // Group-level CLAUDE.md
       fs.mkdirSync(groupDir, { recursive: true });
       fs.writeFileSync(
@@ -1276,18 +1328,20 @@ export class WebChannel implements Channel {
       // Coordinator agent
       const coordDir = path.join(groupDir, 'agents', coordName);
       fs.mkdirSync(coordDir, { recursive: true });
+      const coordDisplayName = coordinator.displayName || 'Coordinator';
       fs.writeFileSync(
         path.join(coordDir, 'CLAUDE.md'),
-        coordinator.instructions ||
-          `# ${coordinator.displayName || 'Coordinator'}\n\nYou are the coordinator for the ${name} team.\n`,
+        coordinator.instructions || defaultCoordinatorMd(coordDisplayName),
       );
+      const coordAgentJson: Record<string, unknown> = {
+        displayName: coordDisplayName,
+      };
+      if (coordinator.runtime && coordinator.runtime.provider) {
+        coordAgentJson.runtime = coordinator.runtime;
+      }
       fs.writeFileSync(
         path.join(coordDir, 'agent.json'),
-        JSON.stringify(
-          { displayName: coordinator.displayName || 'Coordinator' },
-          null,
-          2,
-        ) + '\n',
+        JSON.stringify(coordAgentJson, null, 2) + '\n',
       );
 
       // Specialist agents
@@ -1295,21 +1349,22 @@ export class WebChannel implements Channel {
         const specName = spec.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
         const specDir = path.join(groupDir, 'agents', specName);
         fs.mkdirSync(specDir, { recursive: true });
+        const specDisplayName = spec.displayName || spec.name;
         fs.writeFileSync(
           path.join(specDir, 'CLAUDE.md'),
           spec.instructions ||
-            `# ${spec.displayName || spec.name}\n\nYou are a specialist on the ${name} team.\n`,
+            defaultSpecialistMd(specDisplayName, spec.trigger),
         );
+        const specAgentJson: Record<string, unknown> = {
+          displayName: specDisplayName,
+          trigger: spec.trigger,
+        };
+        if (spec.runtime && spec.runtime.provider) {
+          specAgentJson.runtime = spec.runtime;
+        }
         fs.writeFileSync(
           path.join(specDir, 'agent.json'),
-          JSON.stringify(
-            {
-              displayName: spec.displayName || spec.name,
-              trigger: spec.trigger,
-            },
-            null,
-            2,
-          ) + '\n',
+          JSON.stringify(specAgentJson, null, 2) + '\n',
         );
       }
 
