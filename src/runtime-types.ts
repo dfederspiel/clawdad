@@ -61,6 +61,13 @@ export interface RuntimeTurnConstraints {
   // Tools the runtime must refuse to expose for this turn.
   // Exact names (e.g. "WebSearch") or MCP patterns (e.g. "mcp__nanoclaw__delegate_to_agent").
   disallowedTools?: string[];
+  // When set, only these tools are exposed — a positive allowlist that
+  // overrides the runtime's default tool set. Used for role-scoped
+  // narrowing (e.g. Ollama specialists get just
+  // mcp__nanoclaw__send_message + set_agent_status so small models
+  // don't hallucinate picking from 18 simultaneous options). Leave
+  // unset to use the runtime's default wide allowlist.
+  allowedTools?: string[];
 }
 
 export interface RuntimeTurnInput {

@@ -320,7 +320,17 @@ export class OllamaRuntime {
     try {
       await bridge.connect();
       toolDescriptors = await bridge.listTools(input.constraints?.disallowedTools);
-      toolsForOllama = bridge.toProviderSpecs(toolDescriptors).map(specToOllamaTool);
+      // When the host passed an allowedTools list (role-scoped narrowing —
+      // see runtime-resolution.resolveTurnConstraints), filter to only
+      // those. Small tool-capable models hallucinate when given many
+      // simultaneous tools; narrow scopes stop that.
+      const allowSet = input.constraints?.allowedTools
+        ? new Set(input.constraints.allowedTools)
+        : null;
+      const narrowed = allowSet
+        ? toolDescriptors.filter((d) => allowSet.has(d.qualifiedName))
+        : toolDescriptors;
+      toolsForOllama = bridge.toProviderSpecs(narrowed).map(specToOllamaTool);
     } catch (err) {
       await bridge.close();
       yield {
@@ -333,7 +343,9 @@ export class OllamaRuntime {
     }
 
     log(
-      `Ollama: calling ${model} with ${seedMessages.length} messages, ${toolsForOllama.length} tools (tool-capable)`,
+      `Ollama: calling ${model} with ${seedMessages.length} messages, ${toolsForOllama.length} tools (tool-capable${
+        input.constraints?.allowedTools ? ', narrowed' : ''
+      })`,
     );
 
     const messages: Message[] = [...seedMessages];
