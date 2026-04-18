@@ -647,19 +647,34 @@ export function deleteThreadsForGroup(jid: string): void {
   );
 }
 
+// A sentence is treated as role/identity preamble if it starts with one of
+// these phrases. Such sentences describe *who* the agent is, not what the
+// task does — useless as a title.
+const ROLE_PREAMBLE_RE =
+  /^(you are|you're|your (role|job|task|goal|responsibility) is|as (the|a|an)\b|i am|i'm)\b/i;
+
 /** Generate a short display title from a task prompt. */
-function generateTaskTitle(prompt: string): string {
-  // Take first sentence or first line, whichever is shorter
+export function generateTaskTitle(prompt: string): string {
   const firstLine = prompt.split('\n')[0].trim();
-  const firstSentence = firstLine.split(/[.!?]/)[0].trim();
-  const raw =
-    firstSentence.length < firstLine.length ? firstSentence : firstLine;
-  // Strip common prefixes
+
+  // Split into sentences and find the first non-preamble one.
+  // Falls back to the first line if every sentence is preamble (e.g. an
+  // identity-only prompt with no action).
+  const sentences = firstLine
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const firstAction = sentences.find((s) => !ROLE_PREAMBLE_RE.test(s));
+  const raw = firstAction || firstLine;
+
+  // Drop any trailing punctuation left behind by the split, then strip
+  // common prefixes that add no signal.
   const cleaned = raw
+    .replace(/[.!?]+$/, '')
     .replace(/^\[.*?\]\s*/, '') // [SCHEDULED TASK]
     .replace(/^(please|can you|i want you to|every\s+\w+,?\s*)/i, '')
     .trim();
-  // Capitalize first letter, truncate
+
   const title = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   return title.length > 60 ? title.slice(0, 57) + '...' : title;
 }
