@@ -2721,6 +2721,32 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Shared callback: tasks mutated or a run completed. Refreshes per-group
+  // task snapshots and nudges the web UI to re-sort the sidebar (used when
+  // the user has chosen "upcoming schedule" mode).
+  const onTasksChanged = () => {
+    const tasks = getAllTasks();
+    const taskRows = tasks.map((t) => ({
+      id: t.id,
+      groupFolder: t.group_folder,
+      prompt: t.prompt,
+      script: t.script || undefined,
+      schedule_type: t.schedule_type,
+      schedule_value: t.schedule_value,
+      status: t.status,
+      next_run: t.next_run,
+    }));
+    for (const group of Object.values(registeredGroups)) {
+      writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
+    }
+    for (const ch of channels) {
+      if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
+        (ch as { broadcastGroupsChanged: () => void }).broadcastGroupsChanged();
+        break;
+      }
+    }
+  };
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
@@ -2759,6 +2785,7 @@ async function main(): Promise<void> {
     },
     onProgress: (jid, event) => broadcastProgress(jid, event),
     getMainChatJid,
+    onTasksChanged,
   });
   startIpcWatcher({
     sendMessage: (jid, rawText) => {
@@ -2796,22 +2823,7 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
-    onTasksChanged: () => {
-      const tasks = getAllTasks();
-      const taskRows = tasks.map((t) => ({
-        id: t.id,
-        groupFolder: t.group_folder,
-        prompt: t.prompt,
-        script: t.script || undefined,
-        schedule_type: t.schedule_type,
-        schedule_value: t.schedule_value,
-        status: t.status,
-        next_run: t.next_run,
-      }));
-      for (const group of Object.values(registeredGroups)) {
-        writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
-      }
-    },
+    onTasksChanged,
     onAchievement: (achievement, group) => {
       // Broadcast to web UI via any web channel
       for (const ch of channels) {
