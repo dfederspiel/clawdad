@@ -52,6 +52,7 @@ import {
   ContainerOutput,
   ProgressEvent,
   UsageData,
+  computeClaudeMdFingerprint,
   runContainerAgent,
   spawnContainer,
   writeGroupsSnapshot,
@@ -1910,7 +1911,13 @@ async function runAgent(
       // container's IPC dir, and they get consumed with no listener.
       queue.setNoPipe(chatJid, true);
 
-      const warmHandle = pool.acquire(agentId);
+      const expectedFingerprint = computeClaudeMdFingerprint(
+        group.folder,
+        isMain,
+        chatJid,
+        agent?.name,
+      );
+      const warmHandle = pool.acquire(agentId, expectedFingerprint);
 
       if (warmHandle) {
         // ── Warm reuse: query existing container ───────────────────
