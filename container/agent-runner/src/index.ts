@@ -447,7 +447,7 @@ async function runQuery(
   const provider = containerInput.runtime?.provider || 'anthropic';
   const runtime =
     provider === 'ollama'
-      ? new OllamaRuntime({ containerInput, log })
+      ? new OllamaRuntime({ containerInput, mcpServerPath, sessionId, log })
       : new ClaudeCodeRuntime({
           containerInput,
           mcpServerPath,

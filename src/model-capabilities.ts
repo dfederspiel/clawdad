@@ -9,10 +9,11 @@
  * Important distinction: this reports *effective* capabilities given the
  * orchestrator plumbing we have today, not the model's theoretical maximum.
  * Ollama models that advertise `tools: true` via `/api/show` still return
- * `receivesMcpTools: false` here because the Ollama runtime adapter does
- * not currently pass a `tools` array to `/api/chat`. Wiring that up is
- * Phase 4b of #69 — until then, telling an Ollama agent about MCP tools
- * is misinformation regardless of what model it runs.
+ * `receivesMcpTools: false` here unless we've validated the full loop
+ * end-to-end — nominal ≠ reliable. The allowlist in
+ * TOOL_CAPABLE_OLLAMA_MODELS mirrors the one in the container's
+ * `ollama-runtime.ts` (single source of truth lives on the host; the
+ * container allowlist is a belt-and-suspenders guard against misconfig).
  */
 
 import type { AgentRuntimeConfig } from './runtime-types.js';
@@ -40,11 +41,26 @@ const ANTHROPIC_PROFILE: CapabilityProfile = {
   streaming: 'chunked',
 };
 
-// Ollama: adapter currently doesn't pass a tools array, so no MCP tools
-// reach any Ollama model. Streaming is per-token; the host buffers.
-const OLLAMA_PROFILE: CapabilityProfile = {
+// Ollama models for which the container adapter wires tools end-to-end.
+// Starts narrow: qwen3.5:4b is our baseline that we've verified calls
+// `mcp__nanoclaw__send_message` reliably. Models with `tools: true` in
+// Ollama's /api/show but too small to use them reliably (llama3.2:1b,
+// llama3.2:3b) stay off this list — they produce narration-of-tool-calls
+// instead of real invocations. Widen as models are validated.
+const TOOL_CAPABLE_OLLAMA_MODELS = new Set<string>(['qwen3.5:4b']);
+
+// Ollama streaming is always per-token on the wire (the host buffers in
+// the runtime adapter).
+const OLLAMA_TEXT_ONLY_PROFILE: CapabilityProfile = {
   receivesMcpTools: false,
   streaming: 'per-token',
+};
+
+const OLLAMA_TOOL_CAPABLE_PROFILE: CapabilityProfile = {
+  receivesMcpTools: true,
+  // Tool loop runs non-streaming turns (we need the full response to read
+  // tool_calls); the final assistant message is delivered whole.
+  streaming: 'whole',
 };
 
 // Safe default for providers we haven't wired yet. Assume text-only so
@@ -64,6 +80,12 @@ export function getCapabilityProfile(
 ): CapabilityProfile {
   const provider = runtime?.provider;
   if (!provider || provider === 'anthropic') return ANTHROPIC_PROFILE;
-  if (provider === 'ollama') return OLLAMA_PROFILE;
+  if (provider === 'ollama') {
+    const model = runtime?.model;
+    if (model && TOOL_CAPABLE_OLLAMA_MODELS.has(model)) {
+      return OLLAMA_TOOL_CAPABLE_PROFILE;
+    }
+    return OLLAMA_TEXT_ONLY_PROFILE;
+  }
   return UNSUPPORTED_PROFILE;
 }

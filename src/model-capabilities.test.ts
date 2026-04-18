@@ -16,10 +16,26 @@ describe('getCapabilityProfile', () => {
     expect(p.receivesMcpTools).toBe(true);
   });
 
-  it('reports ollama as tool-less — the adapter does not pass tools today', () => {
-    const p = getCapabilityProfile({ provider: 'ollama', model: 'qwen3.5:4b' });
+  it('reports small ollama models as tool-less (not on the allowlist)', () => {
+    const p = getCapabilityProfile({
+      provider: 'ollama',
+      model: 'llama3.2:1b',
+    });
     expect(p.receivesMcpTools).toBe(false);
     expect(p.streaming).toBe('per-token');
+  });
+
+  it('reports ollama qwen3.5:4b as tool-capable (on the allowlist)', () => {
+    const p = getCapabilityProfile({ provider: 'ollama', model: 'qwen3.5:4b' });
+    expect(p.receivesMcpTools).toBe(true);
+    // Tool loop runs non-streaming turns; the adapter delivers the final
+    // assistant message whole.
+    expect(p.streaming).toBe('whole');
+  });
+
+  it('treats ollama with no model as tool-less (safe default)', () => {
+    const p = getCapabilityProfile({ provider: 'ollama' });
+    expect(p.receivesMcpTools).toBe(false);
   });
 
   it('falls back to a tool-less profile for not-yet-wired providers', () => {
@@ -61,10 +77,10 @@ describe('buildMultiAgentContext', () => {
     expect(out).toContain('mcp__nanoclaw__set_subtitle');
   });
 
-  it('tool-less coordinator gets a text-only protocol with no MCP references', () => {
+  it('tool-less coordinator (small Ollama) gets a text-only protocol with no MCP references', () => {
     const ollamaCoord = agent({
       ...coord,
-      runtime: { provider: 'ollama', model: 'qwen3.5:4b' },
+      runtime: { provider: 'ollama', model: 'llama3.2:1b' },
     });
     const out = buildMultiAgentContext(ollamaCoord, [ollamaCoord, spec]);
     expect(out).not.toContain('mcp__nanoclaw__');
@@ -72,12 +88,21 @@ describe('buildMultiAgentContext', () => {
     expect(out).toContain('cannot delegate');
   });
 
+  it('tool-capable Ollama coordinator (qwen3.5:4b) gets the MCP protocol', () => {
+    const ollamaCoord = agent({
+      ...coord,
+      runtime: { provider: 'ollama', model: 'qwen3.5:4b' },
+    });
+    const out = buildMultiAgentContext(ollamaCoord, [ollamaCoord, spec]);
+    expect(out).toContain('mcp__nanoclaw__delegate_to_agent');
+  });
+
   it('tool-capable specialist gets MCP status + protocol references', () => {
     const out = buildMultiAgentContext(spec, [coord, spec]);
     expect(out).toContain('mcp__nanoclaw__set_agent_status');
   });
 
-  it('tool-less specialist description is plain-text-only', () => {
+  it('tool-less specialist (small Ollama) description is plain-text-only', () => {
     const ollamaSpec = agent({
       ...spec,
       runtime: { provider: 'ollama', model: 'llama3.2:1b' },
