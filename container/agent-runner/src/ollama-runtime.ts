@@ -2,45 +2,32 @@
  * Ollama runtime adapter — runs agents entirely on local Ollama models.
  *
  * Phase 1: Text-only, streaming, no tool use, no session resume.
- * Uses Ollama's /api/chat endpoint with message history.
+ * Built on the official `ollama` client (see ./ollama-client.ts for the
+ * host-fallback fetch wrapper).
  */
 
 import fs from 'fs';
-import { ollamaFetch } from './ollama-fetch.js';
+import type { Message } from 'ollama';
+
+import { getOllamaClient } from './ollama-client.js';
 import type {
   RuntimeEvent,
   RuntimeTurnInput,
   RuntimeUsageData,
 } from './runtime-interface.js';
 
-interface OllamaMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-interface OllamaStreamChunk {
-  message?: { role: string; content: string };
-  done: boolean;
-  total_duration?: number;
-  eval_count?: number;
-  prompt_eval_count?: number;
-  eval_duration?: number;
-  prompt_eval_duration?: number;
-}
-
 /**
  * Parse the XML-formatted conversation history produced by the host's
  * formatMessages() into individual Ollama chat messages. Bot messages
  * become assistant role, everything else becomes user role.
+ *
+ * Tracked for removal in #46 — host should pass structured messages so
+ * this reverse-engineering step goes away.
  */
-function parseXmlMessages(
-  text: string,
-  assistantName?: string,
-): OllamaMessage[] {
-  // Match <message sender="..." time="...">content</message>
+function parseXmlMessages(text: string, assistantName?: string): Message[] {
   const msgRegex =
     /<message\s+sender="([^"]*)"\s+time="[^"]*">([^<]*(?:<(?!\/message>)[^<]*)*)<\/message>/g;
-  const results: OllamaMessage[] = [];
+  const results: Message[] = [];
   let match;
   while ((match = msgRegex.exec(text)) !== null) {
     const sender = match[1];
@@ -51,8 +38,6 @@ function parseXmlMessages(
       .replace(/&quot;/g, '"')
       .trim();
     if (!content) continue;
-    // Messages from the agent's own display name are assistant messages;
-    // everything else is user messages.
     const isBot =
       (assistantName && sender === assistantName) ||
       /^(Andy|Assistant|Bot)$/i.test(sender);
@@ -85,7 +70,8 @@ export class OllamaRuntime {
         type: 'result',
         status: 'error',
         result: null,
-        error: 'Ollama runtime requires a model to be specified in agent.json (e.g. "llama3.2")',
+        error:
+          'Ollama runtime requires a model to be specified in agent.json (e.g. "llama3.2")',
       };
       return;
     }
@@ -93,8 +79,8 @@ export class OllamaRuntime {
     const log = this.options.log || (() => {});
     const startTime = Date.now();
 
-    // Build Ollama message array
-    const messages: OllamaMessage[] = [];
+    // Build Ollama message array.
+    const messages: Message[] = [];
 
     // System prompt for Ollama: only load agent-specific identity and
     // multi-agent context. Skip global and group CLAUDE.md — those contain
@@ -113,17 +99,12 @@ export class OllamaRuntime {
       messages.push({ role: 'system', content: systemParts.join('\n\n') });
     }
 
-    // Convert input messages — the host wraps conversation history in XML
-    // (<context/><messages><message sender="..." time="...">text</message>...</messages>)
-    // which confuses non-Claude models. Parse out individual messages and
-    // convert to proper Ollama chat format.
     for (const msg of input.messages) {
       const textParts = msg.content
         .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
         .map((p) => p.text);
       const fullText = textParts.join('\n');
 
-      // Try to parse XML-formatted conversation history
       const xmlMessages = parseXmlMessages(
         fullText,
         this.options.containerInput.assistantName,
@@ -140,26 +121,20 @@ export class OllamaRuntime {
     const temperature = input.runtime.temperature;
     const maxTokens = input.runtime.maxTokens;
 
-    const body: Record<string, unknown> = {
-      model,
-      messages,
-      stream: true,
-    };
-    if (temperature !== undefined || maxTokens !== undefined) {
-      body.options = {
-        ...(temperature !== undefined ? { temperature } : {}),
-        ...(maxTokens !== undefined ? { num_predict: maxTokens } : {}),
-      };
-    }
+    const options: Record<string, unknown> = {};
+    if (temperature !== undefined) options.temperature = temperature;
+    if (maxTokens !== undefined) options.num_predict = maxTokens;
 
     log(`Ollama: calling ${model} with ${messages.length} messages`);
 
-    let response: Response;
+    const client = getOllamaClient();
+    let stream;
     try {
-      response = await ollamaFetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      stream = await client.chat({
+        model,
+        messages,
+        stream: true,
+        options: Object.keys(options).length > 0 ? options : undefined,
       });
     } catch (err) {
       yield {
@@ -171,70 +146,39 @@ export class OllamaRuntime {
       return;
     }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      yield {
-        type: 'result',
-        status: 'error',
-        result: null,
-        error: `Ollama error (${response.status}): ${errorText}`,
-      };
-      return;
-    }
-
-    // Stream NDJSON response
-    const reader = response.body?.getReader();
-    if (!reader) {
-      yield {
-        type: 'result',
-        status: 'error',
-        result: null,
-        error: 'Ollama returned no response body',
-      };
-      return;
-    }
-
-    const decoder = new TextDecoder();
     let fullText = '';
-    let buffer = '';
-    let finalChunk: OllamaStreamChunk | undefined;
     let firstTokenTime: number | undefined;
+    let finalChunk:
+      | {
+          total_duration?: number;
+          eval_count?: number;
+          prompt_eval_count?: number;
+        }
+      | undefined;
 
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          let chunk: OllamaStreamChunk;
-          try {
-            chunk = JSON.parse(line);
-          } catch {
-            continue;
-          }
-
-          if (chunk.message?.content) {
-            if (!firstTokenTime) firstTokenTime = Date.now();
-            // Buffer tokens into fullText and let the final `result` yield
-            // deliver the whole message at once. Yielding per-token text
-            // events produces one chat message per token downstream — the
-            // intermediate-text pathway was designed for Claude's paragraph-
-            // sized chunks, not per-token streams.
-            fullText += chunk.message.content;
-          }
-
-          if (chunk.done) {
-            finalChunk = chunk;
-          }
+      for await (const chunk of stream) {
+        if (chunk.message?.content) {
+          if (!firstTokenTime) firstTokenTime = Date.now();
+          // Buffer tokens into fullText and let the final `result` yield
+          // deliver the whole message at once. Yielding per-token text
+          // events produces one chat message per token downstream — the
+          // intermediate-text pathway was designed for Claude's paragraph-
+          // sized chunks, not per-token streams.
+          fullText += chunk.message.content;
+        }
+        if (chunk.done) {
+          finalChunk = chunk;
         }
       }
-    } finally {
-      reader.releaseLock();
+    } catch (err) {
+      yield {
+        type: 'result',
+        status: 'error',
+        result: null,
+        error: `Ollama stream error: ${err instanceof Error ? err.message : String(err)}`,
+      };
+      return;
     }
 
     const durationMs = Date.now() - startTime;
