@@ -64,8 +64,16 @@ export class ContainerPool {
   /**
    * Try to acquire a warm container for the given agent.
    * Returns handle if idle, null otherwise. Atomically removes from pool.
+   *
+   * If expectedFingerprint is provided and differs from the container's
+   * stored fingerprint, the container is evicted (CLAUDE.md has changed
+   * on the host since it was spawned) and null is returned so the caller
+   * spawns a fresh one with the updated instructions.
    */
-  acquire(agentId: string): ContainerHandle | null {
+  acquire(
+    agentId: string,
+    expectedFingerprint?: string,
+  ): ContainerHandle | null {
     if (!this.enabled) return null;
     const entry = this.entries.get(agentId);
     if (!entry || entry.state !== 'idle' || entry.handle.exited) {
@@ -73,6 +81,22 @@ export class ContainerPool {
       if (entry?.handle.exited) {
         this.removeEntry(agentId);
       }
+      return null;
+    }
+
+    if (
+      expectedFingerprint !== undefined &&
+      entry.handle.claudeMdFingerprint !== undefined &&
+      entry.handle.claudeMdFingerprint !== expectedFingerprint
+    ) {
+      logger.info(
+        {
+          agentId,
+          containerName: entry.handle.containerName,
+        },
+        'Pool: CLAUDE.md changed on host, evicting stale warm container',
+      );
+      this.reclaimSync(agentId);
       return null;
     }
 

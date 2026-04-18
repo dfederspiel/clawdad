@@ -2,7 +2,8 @@ import { html } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
 import { TONES, TONE_NAMES, getGroupTone, setGroupTone, previewTone, isMuted, setMuted } from '../sounds.js';
 import * as api from '../api.js';
-import { groups, loadGroups, usage } from '../app.js';
+import { groups, loadGroups, usage, deleteGroup } from '../app.js';
+import { ConfirmDialog } from './ConfirmDialog.js';
 
 export function GroupSettings({ group, open, onClose }) {
   const [subtitle, setSubtitle] = useState(group?.subtitle || '');
@@ -23,6 +24,8 @@ export function GroupSettings({ group, open, onClose }) {
   const [agentModel, setAgentModel] = useState('');
   const [ollamaModels, setOllamaModels] = useState([]);
   const [agentRuntimeEdits, setAgentRuntimeEdits] = useState({}); // { [agentName]: { provider, model } }
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!group || !open) return;
@@ -187,11 +190,10 @@ export function GroupSettings({ group, open, onClose }) {
           : { provider: edit.provider, model: edit.model || undefined };
       await api.updateGroupAgent(folderName, name, { runtime });
       await loadGroups();
-      setAgentRuntimeEdits((prev) => {
-        const next = { ...prev };
-        delete next[name];
-        return next;
-      });
+      // Don't clear agentRuntimeEdits — the edit state keeps the UI
+      // showing the saved value until the group prop re-renders with
+      // the updated agent data. The Save button hides automatically
+      // when the edit matches the persisted value.
     } catch (err) {
       setAgentError(err.message || 'Failed to update agent runtime');
     } finally {
@@ -381,7 +383,10 @@ export function GroupSettings({ group, open, onClose }) {
                           }))}
                         />`;
                       })()}
-                      ${agentRuntimeEdits[agent.name] && html`<button
+                      ${agentRuntimeEdits[agent.name] && (
+                        agentRuntimeEdits[agent.name].provider !== (agent.runtime?.provider || 'anthropic') ||
+                        agentRuntimeEdits[agent.name].model !== (agent.runtime?.model || '')
+                      ) && html`<button
                         class="px-1.5 py-0.5 text-xs bg-bg-3 border border-border rounded text-txt-2 hover:border-accent disabled:opacity-50"
                         onClick=${() => handleSaveAgentRuntime(agent.name)}
                         disabled=${agentBusy}
@@ -485,8 +490,44 @@ export function GroupSettings({ group, open, onClose }) {
           ${agentError && html`
             <div class="text-xs text-red-300 border border-red-500/30 rounded-lg px-3 py-2 bg-red-500/5">${agentError}</div>
           `}
+
+          ${!group.isSystem && !group.isMain && html`
+            <div class="border-t border-red-500/20 pt-4 mt-2">
+              <label class="text-[10px] text-red-300 uppercase tracking-wider block mb-1.5">Danger zone</label>
+              <p class="text-xs text-txt-muted mb-2">
+                Deletes this group and all of its messages, tasks, and agent data. This cannot be undone.
+              </p>
+              <button
+                class="px-3 py-1.5 text-xs border border-red-500/40 text-red-300 rounded-lg hover:bg-red-500/10 disabled:opacity-50"
+                onClick=${() => setDeleteOpen(true)}
+                disabled=${deleting}
+              >Delete group</button>
+            </div>
+          `}
         </div>
       </div>
+      <${ConfirmDialog}
+        open=${deleteOpen}
+        title=${`Delete "${group.name}"?`}
+        message="This removes all messages, tasks, and agent data for this group. This cannot be undone."
+        confirmLabel="Delete"
+        confirmText=${group.name}
+        destructive=${true}
+        loading=${deleting}
+        onConfirm=${async () => {
+          setDeleting(true);
+          try {
+            await deleteGroup(folderName, group.jid);
+            setDeleteOpen(false);
+            onClose();
+          } catch (err) {
+            console.error('Delete failed:', err);
+          } finally {
+            setDeleting(false);
+          }
+        }}
+        onCancel=${() => setDeleteOpen(false)}
+      />
     </div>
   `;
 }

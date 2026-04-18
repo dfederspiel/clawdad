@@ -79,6 +79,7 @@ export interface SchedulerDependencies {
   setTyping?: (jid: string, isTyping: boolean) => Promise<void>;
   onProgress?: (jid: string, event: ProgressEvent) => void;
   getMainChatJid?: () => string | undefined;
+  onTasksChanged?: () => void;
 }
 
 async function runTask(
@@ -268,6 +269,9 @@ async function runTask(
       ? result.slice(0, 200)
       : 'Completed';
   updateTaskAfterRun(task.id, nextRun, resultSummary);
+  // next_run has advanced — refresh snapshots + broadcast so the web UI
+  // re-sorts the sidebar when sorted by upcoming schedule.
+  deps.onTasksChanged?.();
 }
 
 let schedulerRunning = false;

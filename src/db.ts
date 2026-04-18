@@ -366,6 +366,41 @@ export function getAllChats(): ChatInfo[] {
 }
 
 /**
+ * Map of chat_jid -> timestamp of the most recent message in that chat.
+ * Queries the messages table directly because chats.last_message_time
+ * isn't refreshed on every inbound web message. Used by the web UI to
+ * sort groups by recent activity.
+ */
+export function getAllGroupLastActivity(): Record<string, string> {
+  const rows = db
+    .prepare(
+      `SELECT chat_jid, MAX(timestamp) AS ts FROM messages GROUP BY chat_jid`,
+    )
+    .all() as Array<{ chat_jid: string; ts: string | null }>;
+  const out: Record<string, string> = {};
+  for (const r of rows) if (r.ts) out[r.chat_jid] = r.ts;
+  return out;
+}
+
+/**
+ * Map of group_folder -> earliest next_run across that group's active
+ * scheduled tasks. Used by the web UI to sort groups by upcoming schedule.
+ */
+export function getAllGroupNextTaskAt(): Record<string, string> {
+  const rows = db
+    .prepare(
+      `SELECT group_folder, MIN(next_run) AS next_run
+       FROM scheduled_tasks
+       WHERE status = 'active' AND next_run IS NOT NULL
+       GROUP BY group_folder`,
+    )
+    .all() as Array<{ group_folder: string; next_run: string }>;
+  const out: Record<string, string> = {};
+  for (const r of rows) out[r.group_folder] = r.next_run;
+  return out;
+}
+
+/**
  * Get timestamp of last group metadata sync.
  */
 export function getLastGroupSync(): string | null {
@@ -647,19 +682,34 @@ export function deleteThreadsForGroup(jid: string): void {
   );
 }
 
+// A sentence is treated as role/identity preamble if it starts with one of
+// these phrases. Such sentences describe *who* the agent is, not what the
+// task does — useless as a title.
+const ROLE_PREAMBLE_RE =
+  /^(you are|you're|your (role|job|task|goal|responsibility) is|as (the|a|an)\b|i am|i'm)\b/i;
+
 /** Generate a short display title from a task prompt. */
-function generateTaskTitle(prompt: string): string {
-  // Take first sentence or first line, whichever is shorter
+export function generateTaskTitle(prompt: string): string {
   const firstLine = prompt.split('\n')[0].trim();
-  const firstSentence = firstLine.split(/[.!?]/)[0].trim();
-  const raw =
-    firstSentence.length < firstLine.length ? firstSentence : firstLine;
-  // Strip common prefixes
+
+  // Split into sentences and find the first non-preamble one.
+  // Falls back to the first line if every sentence is preamble (e.g. an
+  // identity-only prompt with no action).
+  const sentences = firstLine
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const firstAction = sentences.find((s) => !ROLE_PREAMBLE_RE.test(s));
+  const raw = firstAction || firstLine;
+
+  // Drop any trailing punctuation left behind by the split, then strip
+  // common prefixes that add no signal.
   const cleaned = raw
+    .replace(/[.!?]+$/, '')
     .replace(/^\[.*?\]\s*/, '') // [SCHEDULED TASK]
     .replace(/^(please|can you|i want you to|every\s+\w+,?\s*)/i, '')
     .trim();
-  // Capitalize first letter, truncate
+
   const title = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   return title.length > 60 ? title.slice(0, 57) + '...' : title;
 }
@@ -714,6 +764,7 @@ export function updateTask(
   updates: Partial<
     Pick<
       ScheduledTask,
+      | 'title'
       | 'prompt'
       | 'script'
       | 'schedule_type'
@@ -729,7 +780,7 @@ export function updateTask(
 
   if (updates.title !== undefined) {
     fields.push('title = ?');
-    values.push(updates.title);
+    values.push(updates.title || null);
   }
   if (updates.prompt !== undefined) {
     fields.push('prompt = ?');

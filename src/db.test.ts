@@ -4,6 +4,7 @@ import {
   _initTestDatabase,
   createTask,
   deleteTask,
+  generateTaskTitle,
   getAllChats,
   getAllRegisteredGroups,
   getLastBotMessageTimestamp,
@@ -460,6 +461,98 @@ describe('task CRUD', () => {
     expect(getTaskById('task-2')!.status).toBe('paused');
   });
 
+  it('updates task title, prompt, and schedule', () => {
+    createTask({
+      id: 'task-patch',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      title: 'Old title',
+      prompt: 'old prompt',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: '2024-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateTask('task-patch', {
+      title: 'New title',
+      prompt: 'new prompt',
+      schedule_type: 'cron',
+      schedule_value: '0 9 * * 1-5',
+    });
+
+    const task = getTaskById('task-patch')!;
+    expect(task.title).toBe('New title');
+    expect(task.prompt).toBe('new prompt');
+    expect(task.schedule_type).toBe('cron');
+    expect(task.schedule_value).toBe('0 9 * * 1-5');
+  });
+});
+
+describe('generateTaskTitle', () => {
+  it('uses the prompt as-is when there is no role preamble', () => {
+    expect(generateTaskTitle('Post a weekend digest of this week PRs')).toBe(
+      'Post a weekend digest of this week PRs',
+    );
+  });
+
+  it('skips a leading "You are X" preamble sentence', () => {
+    const title = generateTaskTitle(
+      'You are the Bug Coordinator for the POLUIG bug squad. Run a triage poll every Monday at 9am',
+    );
+    expect(title).toBe('Run a triage poll every Monday at 9am');
+  });
+
+  it('skips a leading "Your job is to" preamble sentence', () => {
+    const title = generateTaskTitle(
+      'Your job is to triage incoming feedback. Reply to all open issues with the urgent label',
+    );
+    expect(title).toBe('Reply to all open issues with the urgent label');
+  });
+
+  it('skips multiple preamble sentences in a row', () => {
+    const title = generateTaskTitle(
+      'You are the Coordinator. Your role is to triage feedback. Send a daily summary to the team',
+    );
+    expect(title).toBe('Send a daily summary to the team');
+  });
+
+  it('falls back to first line when every sentence is preamble', () => {
+    expect(generateTaskTitle('You are an agent that helps users')).toBe(
+      'You are an agent that helps users',
+    );
+  });
+
+  it('strips [SCHEDULED TASK] prefix', () => {
+    expect(
+      generateTaskTitle('[SCHEDULED TASK] Check for new GitHub issues'),
+    ).toBe('Check for new GitHub issues');
+  });
+
+  it('strips "please" prefix and capitalizes', () => {
+    expect(generateTaskTitle('please send the morning report')).toBe(
+      'Send the morning report',
+    );
+  });
+
+  it('truncates titles longer than 60 characters', () => {
+    const long =
+      'Run a comprehensive analysis of every open pull request and post a detailed summary';
+    const title = generateTaskTitle(long);
+    expect(title.length).toBeLessThanOrEqual(60);
+    expect(title.endsWith('...')).toBe(true);
+  });
+
+  it('uses only the first line when prompt has multiple lines', () => {
+    expect(
+      generateTaskTitle('Send the daily digest\nWith full PR details'),
+    ).toBe('Send the daily digest');
+  });
+});
+
+describe('task CRUD (continued)', () => {
   it('deletes a task and its run logs', () => {
     createTask({
       id: 'task-3',

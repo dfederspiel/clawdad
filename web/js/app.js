@@ -46,6 +46,18 @@ export const currentWorkState = computed(() => workState.value[selectedJid.value
 export const contextPressure = signal({}); // { [jid]: PressureEvent }
 export const currentContextPressure = computed(() => contextPressure.value[selectedJid.value] || null);
 export const dismissedPressure = signal({}); // { [jid]: true } — user dismissed the banner
+// { [jid]: ISO timestamp } — per-jid last activity bumped by live SSE events,
+// overrides the server-side `lastActivity` so the sidebar re-sorts in real
+// time without refetching /api/groups on every message.
+export const lastActivityOverride = signal({});
+
+function bumpLastActivity(jid, timestamp) {
+  if (!jid) return;
+  const ts = timestamp || new Date().toISOString();
+  const cur = lastActivityOverride.value[jid];
+  if (cur && cur >= ts) return;
+  lastActivityOverride.value = { ...lastActivityOverride.value, [jid]: ts };
+}
 
 function clearTypingStateForJid(jid) {
   if (!jid) return;
@@ -102,6 +114,7 @@ api.onSSE('message', (data) => {
   // collapse, even if the warm container stays alive behind the scenes.
   clearTypingStateForJid(data.jid);
   clearAgentProgressForJid(data.jid);
+  bumpLastActivity(data.jid, data.timestamp);
 
   if (data.jid === selectedJid.value) {
     messages.value = [
@@ -272,6 +285,7 @@ api.onSSE('thread_created', async (data) => {
 api.onSSE('user_message', (data) => {
   // Skip thread reply echo — optimistic update already added it
   if (data.message?.thread_id) return;
+  bumpLastActivity(data.jid, data.message?.timestamp);
   // Add to message list if not already present.
   // Dedup: match by ID (API/external messages) or by content + role
   // (optimistic updates from this browser have no ID).

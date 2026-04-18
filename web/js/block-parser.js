@@ -64,19 +64,42 @@ export function parseBlocks(content) {
 function parseBlocksFence(body, blocks) {
   try {
     const parsed = JSON.parse(body);
-    const arr = Array.isArray(parsed) ? parsed : [parsed];
-    for (const block of arr) {
-      if (block && block.type) blocks.push(block);
+    if (Array.isArray(parsed)) {
+      for (const block of parsed) {
+        if (block && block.type) blocks.push(block);
+      }
+    } else {
+      warnRecovery(
+        'bare-object-in-blocks-fence',
+        'expected an array of blocks but got a single object — auto-wrapped. Use [{ ... }] inside :::blocks.',
+      );
+      if (parsed && parsed.type) blocks.push(parsed);
     }
     return;
   } catch {
     // fall through to recovery
   }
-  const recovered = tryRecoverBareObjects(body);
+  const { blocks: recovered, strategy } = tryRecoverBareObjects(body);
   if (recovered.length > 0) {
+    warnRecovery(
+      strategy,
+      strategy === 'wrap-in-array'
+        ? 'recovered comma-separated objects by wrapping in [ ... ]. Emit a JSON array directly.'
+        : 'recovered multiple bare objects by splitting on }{ boundaries. Emit a JSON array directly.',
+    );
     for (const block of recovered) blocks.push(block);
   } else {
+    warnRecovery(
+      'unparseable-blocks-fence',
+      'body is not valid JSON and could not be recovered — rendering as text.',
+    );
     blocks.push({ type: 'text', content: body });
+  }
+}
+
+function warnRecovery(strategy, message) {
+  if (typeof console !== 'undefined' && console.warn) {
+    console.warn(`[block-parser] :::blocks recovery (${strategy}): ${message}`);
   }
 }
 
@@ -104,6 +127,9 @@ function parseTypedFence(type, body, blocks) {
  * instead of a proper array.  Tries two strategies:
  * 1. Wrap the whole body in [ ... ] (handles comma-separated objects)
  * 2. Split on }{ boundaries and parse each object individually
+ *
+ * Returns { blocks, strategy } where strategy is 'wrap-in-array',
+ * 'split-on-boundary', or 'none' (no blocks recovered).
  */
 function tryRecoverBareObjects(body) {
   // Strategy 1: wrap in brackets
@@ -111,7 +137,10 @@ function tryRecoverBareObjects(body) {
   try {
     const parsed = JSON.parse(wrapped);
     if (Array.isArray(parsed)) {
-      return parsed.filter((b) => b && b.type);
+      const filtered = parsed.filter((b) => b && b.type);
+      if (filtered.length > 0) {
+        return { blocks: filtered, strategy: 'wrap-in-array' };
+      }
     }
   } catch {
     // fall through
@@ -129,5 +158,5 @@ function tryRecoverBareObjects(body) {
       // skip unparseable chunk
     }
   }
-  return results;
+  return { blocks: results, strategy: results.length > 0 ? 'split-on-boundary' : 'none' };
 }

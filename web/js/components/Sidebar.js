@@ -1,22 +1,48 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
-import { groups, selectedJid, selectGroup, deleteGroup, messages } from '../app.js';
+import { groups, selectedJid, selectGroup, messages, lastActivityOverride } from '../app.js';
 import { GroupItem } from './GroupItem.js';
 import { GroupSettings } from './GroupSettings.js';
 import { NewGroupDialog } from './NewGroupDialog.js';
 import { StatusPanel } from './StatusPanel.js';
 import { GameHud } from './GameHud.js';
 import { ThemeMenu } from './ThemeMenu.js';
-import { ConfirmDialog } from './ConfirmDialog.js';
+import { sortGroups } from '../sort-groups.js';
+
+const SORT_STORAGE_KEY = 'clawdad.sidebar.sortMode';
+const SORT_MODES = [
+  { id: 'name', label: 'Name' },
+  { id: 'recent', label: 'Recent activity' },
+  { id: 'upcoming', label: 'Upcoming schedule' },
+];
+
+function readSortMode() {
+  try {
+    const v = localStorage.getItem(SORT_STORAGE_KEY);
+    if (SORT_MODES.some((m) => m.id === v)) return v;
+  } catch {
+    // localStorage unavailable (private mode, SSR, etc.)
+  }
+  return 'name';
+}
 
 export function Sidebar({ open, onClose }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null);
-  const [deleting, setDeleting] = useState(false);
   const [settingsGroup, setSettingsGroup] = useState(null);
-  // Sort: template groups first, system groups at the bottom
-  const list = [...groups.value].sort((a, b) => (a.isSystem ? 1 : 0) - (b.isSystem ? 1 : 0));
+  const [sortMode, setSortMode] = useState(readSortMode);
+
+  function onSortChange(e) {
+    const next = e.target.value;
+    setSortMode(next);
+    try {
+      localStorage.setItem(SORT_STORAGE_KEY, next);
+    } catch {
+      // ignore
+    }
+  }
+
+  const list = sortGroups(groups.value, sortMode, lastActivityOverride.value);
   const selected = selectedJid.value;
 
   function onGroupSelect(jid) {
@@ -28,20 +54,6 @@ export function Sidebar({ open, onClose }) {
       selectGroup(jid);
     }
     onClose();
-  }
-
-  async function handleDeleteConfirm() {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    try {
-      const apiFolder = deleteTarget.folder.replace(/^web_/, '');
-      await deleteGroup(apiFolder, deleteTarget.jid);
-      setDeleteTarget(null);
-    } catch (err) {
-      console.error('Delete failed:', err);
-    } finally {
-      setDeleting(false);
-    }
   }
 
   return html`
@@ -99,6 +111,23 @@ export function Sidebar({ open, onClose }) {
         </div>
       </div>
       <${GameHud} />
+      ${list.length > 1 && html`
+        <div class="px-3 pt-2 pb-1 flex items-center gap-2">
+          <label class="text-[10px] uppercase tracking-wide text-txt-2" for="group-sort">
+            Sort
+          </label>
+          <select
+            id="group-sort"
+            class="flex-1 min-w-0 text-xs bg-bg-3 border border-border rounded-lg px-2 py-1.5 text-txt focus:outline-none focus:border-accent"
+            value=${sortMode}
+            onChange=${onSortChange}
+          >
+            ${SORT_MODES.map(
+              (m) => html`<option value=${m.id}>${m.label}</option>`,
+            )}
+          </select>
+        </div>
+      `}
       <div class="flex-1 overflow-y-auto py-1">
         ${list.length === 0
           ? html`
@@ -113,7 +142,6 @@ export function Sidebar({ open, onClose }) {
                   group=${g}
                   isActive=${g.jid === selected}
                   onSelect=${onGroupSelect}
-                  onDelete=${setDeleteTarget}
                   onSettings=${setSettingsGroup}
                 />
               `,
@@ -128,17 +156,6 @@ export function Sidebar({ open, onClose }) {
       group=${settingsGroup}
       open=${!!settingsGroup}
       onClose=${() => setSettingsGroup(null)}
-    />
-    <${ConfirmDialog}
-      open=${!!deleteTarget}
-      title=${`Delete "${deleteTarget?.name}"?`}
-      message="This removes all messages, tasks, and agent data for this group. This cannot be undone."
-      confirmLabel="Delete"
-      confirmText=${deleteTarget?.name}
-      destructive=${true}
-      loading=${deleting}
-      onConfirm=${handleDeleteConfirm}
-      onCancel=${() => setDeleteTarget(null)}
     />
   `;
 }

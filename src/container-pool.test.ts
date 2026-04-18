@@ -126,6 +126,49 @@ describe('ContainerPool', () => {
     expect(pool.idleCount).toBe(0);
   });
 
+  it('acquire evicts stale container when CLAUDE.md fingerprint changed', () => {
+    const handle = createMockHandle({ claudeMdFingerprint: 'hash-old' });
+    activeHandles.push(handle);
+    pool.release('web_test/default', handle, 'web:test', 'default');
+    expect(pool.idleCount).toBe(1);
+
+    // Simulate host-side CLAUDE.md edit → fingerprint changes
+    expect(pool.acquire('web_test/default', 'hash-new')).toBeNull();
+    expect(pool.idleCount).toBe(0);
+    // Stale container was signaled to close
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('_close'),
+      '',
+    );
+  });
+
+  it('acquire returns handle when fingerprint matches', () => {
+    const handle = createMockHandle({ claudeMdFingerprint: 'hash-a' });
+    activeHandles.push(handle);
+    pool.release('web_test/default', handle, 'web:test', 'default');
+
+    expect(pool.acquire('web_test/default', 'hash-a')).toBe(handle);
+  });
+
+  it('acquire without expectedFingerprint skips the check (back-compat)', () => {
+    const handle = createMockHandle({ claudeMdFingerprint: 'hash-a' });
+    activeHandles.push(handle);
+    pool.release('web_test/default', handle, 'web:test', 'default');
+
+    // Caller passes no expectation → always returns the handle
+    expect(pool.acquire('web_test/default')).toBe(handle);
+  });
+
+  it('acquire without stored fingerprint skips the check', () => {
+    // Handles spawned before the fingerprint feature don't have one.
+    // Rather than mass-evict, the pool should keep serving them.
+    const handle = createMockHandle(); // no claudeMdFingerprint
+    activeHandles.push(handle);
+    pool.release('web_test/default', handle, 'web:test', 'default');
+
+    expect(pool.acquire('web_test/default', 'hash-new')).toBe(handle);
+  });
+
   it('release with pool disabled writes _close immediately', () => {
     const disabledPool = new ContainerPool(5000, false);
     const handle = createMockHandle();
