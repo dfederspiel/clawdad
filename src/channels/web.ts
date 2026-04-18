@@ -1576,6 +1576,51 @@ export class WebChannel implements Channel {
       return this.json(res, 200, { ok: true });
     }
 
+    // PATCH /api/tasks/:id — update task metadata
+    const taskPatchMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    if (method === 'PATCH' && taskPatchMatch) {
+      const taskId = decodeURIComponent(taskPatchMatch[1]);
+      const task = getTaskById(taskId);
+      if (!task) return this.json(res, 404, { error: 'Task not found' });
+
+      const body = await this.readBody(req);
+      const updates: Parameters<typeof updateTask>[1] = {};
+
+      if (body.title !== undefined) updates.title = body.title;
+      if (body.prompt !== undefined) updates.prompt = body.prompt;
+      if (body.script !== undefined) updates.script = body.script || null;
+      if (body.schedule_type !== undefined) {
+        if (!['cron', 'interval', 'once'].includes(body.schedule_type)) {
+          return this.json(res, 400, {
+            error: 'schedule_type must be cron, interval, or once',
+          });
+        }
+        updates.schedule_type =
+          body.schedule_type as ScheduledTask['schedule_type'];
+      }
+      if (body.schedule_value !== undefined) {
+        updates.schedule_value = body.schedule_value;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return this.json(res, 400, { error: 'no updatable fields provided' });
+      }
+
+      if (updates.schedule_type || updates.schedule_value) {
+        const merged = { ...task, ...updates } as ScheduledTask;
+        try {
+          updates.next_run = computeNextRun(merged);
+        } catch {
+          return this.json(res, 400, {
+            error: 'invalid schedule_value for schedule_type',
+          });
+        }
+      }
+
+      updateTask(taskId, updates);
+      return this.json(res, 200, { task: getTaskById(taskId) });
+    }
+
     // DELETE /api/tasks/:id — cancel/delete a task
     const taskDeleteMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
     if (method === 'DELETE' && taskDeleteMatch) {
