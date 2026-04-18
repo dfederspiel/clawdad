@@ -12,7 +12,9 @@ import {
   compareRuntimeProfiles,
   resolveRuntimeProfile,
 } from '../runtime-profile.js';
+import { getCapabilityProfile } from '../model-capabilities.js';
 import { resolveEffectiveRuntime } from '../runtime-resolution.js';
+import type { AgentRuntimeConfig } from '../runtime-types.js';
 import {
   getAchievementResponse,
   checkTelemetryAchievements,
@@ -1275,7 +1277,27 @@ export class WebChannel implements Channel {
         ? exampleSpec.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-')
         : 'specialist';
 
-      const defaultCoordinatorMd = (displayName: string) => `# ${displayName}
+      // Default CLAUDE.md content branches on whether the agent's runtime
+      // actually receives MCP tools today. Ollama (and any non-Claude
+      // runtime) gets a text-only variant — telling a tool-less agent to
+      // "call the tool" produces narration-of-tool-calls, not real work.
+      const defaultCoordinatorMd = (
+        displayName: string,
+        receivesMcpTools: boolean,
+      ) => {
+        if (!receivesMcpTools) {
+          return `# ${displayName}
+
+You are the coordinator for the ${name} team.
+
+Your runtime does not have tool-calling access, so you cannot delegate work programmatically. Answer user requests directly from your own knowledge.
+
+If a question is clearly within another agent's specialty, say so and point the user at the specialist's trigger (e.g. \`@${exampleAgent}\`) — they can re-route the request themselves.
+
+Your plain-text reply is delivered as the user-visible message.
+`;
+        }
+        return `# ${displayName}
 
 You are the coordinator for the ${name} team.
 
@@ -1301,11 +1323,28 @@ For general questions that don't fit a specialist, answer yourself.
 
 When all delegated specialists finish, synthesize their outputs into one response. Don't relay raw specialist output unless it's already final-quality.
 `;
+      };
 
       const defaultSpecialistMd = (
         displayName: string,
         trigger: string,
-      ) => `# ${displayName}
+        receivesMcpTools: boolean,
+      ) => {
+        if (!receivesMcpTools) {
+          return `# ${displayName}
+
+You are a specialist on the ${name} team. Your trigger is \`${trigger}\`.
+
+## Your role
+
+When the coordinator delegates work to you, respond in plain text. Your entire reply is delivered to the user as your message, so keep it self-contained.
+
+## Boundaries
+
+You do not have tools, sidebar controls, or the ability to delegate. If a request falls outside your role, say so plainly — the coordinator will route it.
+`;
+        }
+        return `# ${displayName}
 
 You are a specialist on the ${name} team. Your trigger is \`${trigger}\`.
 
@@ -1317,6 +1356,7 @@ Focus on the work the coordinator delegates to you. Respond directly with the an
 
 You do not delegate. If something falls outside your role, say so plainly in your response and the coordinator will route it.
 `;
+      };
 
       // Group-level CLAUDE.md
       fs.mkdirSync(groupDir, { recursive: true });
@@ -1329,9 +1369,13 @@ You do not delegate. If something falls outside your role, say so plainly in you
       const coordDir = path.join(groupDir, 'agents', coordName);
       fs.mkdirSync(coordDir, { recursive: true });
       const coordDisplayName = coordinator.displayName || 'Coordinator';
+      const coordProfile = getCapabilityProfile(
+        coordinator.runtime as AgentRuntimeConfig | undefined,
+      );
       fs.writeFileSync(
         path.join(coordDir, 'CLAUDE.md'),
-        coordinator.instructions || defaultCoordinatorMd(coordDisplayName),
+        coordinator.instructions ||
+          defaultCoordinatorMd(coordDisplayName, coordProfile.receivesMcpTools),
       );
       const coordAgentJson: Record<string, unknown> = {
         displayName: coordDisplayName,
@@ -1350,10 +1394,17 @@ You do not delegate. If something falls outside your role, say so plainly in you
         const specDir = path.join(groupDir, 'agents', specName);
         fs.mkdirSync(specDir, { recursive: true });
         const specDisplayName = spec.displayName || spec.name;
+        const specProfile = getCapabilityProfile(
+          spec.runtime as AgentRuntimeConfig | undefined,
+        );
         fs.writeFileSync(
           path.join(specDir, 'CLAUDE.md'),
           spec.instructions ||
-            defaultSpecialistMd(specDisplayName, spec.trigger),
+            defaultSpecialistMd(
+              specDisplayName,
+              spec.trigger,
+              specProfile.receivesMcpTools,
+            ),
         );
         const specAgentJson: Record<string, unknown> = {
           displayName: specDisplayName,
