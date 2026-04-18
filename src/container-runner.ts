@@ -326,18 +326,27 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const srcStat = fs.existsSync(srcIndex) ? fs.statSync(srcIndex) : null;
-    const cachedStat = fs.existsSync(cachedIndex)
-      ? fs.statSync(cachedIndex)
-      : null;
+    // Compare the newest mtime across every file in src, not just index.ts.
+    // Sibling-file edits (e.g. ollama-runtime.ts) were otherwise ignored by
+    // warm groups, serving stale agent-runner code until something touched
+    // index.ts.
+    const latestMtime = (dir: string): number => {
+      let newest = 0;
+      if (!fs.existsSync(dir)) return newest;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          newest = Math.max(newest, latestMtime(full));
+        } else if (entry.isFile()) {
+          newest = Math.max(newest, fs.statSync(full).mtimeMs);
+        }
+      }
+      return newest;
+    };
+    const srcMtime = latestMtime(agentRunnerSrc);
+    const cachedMtime = latestMtime(groupAgentRunnerDir);
     const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !cachedStat ||
-      !srcStat ||
-      srcStat.mtimeMs > cachedStat.mtimeMs ||
-      srcStat.size !== cachedStat.size;
+      !fs.existsSync(groupAgentRunnerDir) || srcMtime > cachedMtime;
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
