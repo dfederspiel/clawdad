@@ -1,13 +1,12 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
-import { groups, selectedJid, selectGroup, deleteGroup, messages, lastActivityOverride } from '../app.js';
+import { groups, selectedJid, selectGroup, messages, lastActivityOverride } from '../app.js';
 import { GroupItem } from './GroupItem.js';
 import { GroupSettings } from './GroupSettings.js';
 import { NewGroupDialog } from './NewGroupDialog.js';
 import { StatusPanel } from './StatusPanel.js';
 import { GameHud } from './GameHud.js';
 import { ThemeMenu } from './ThemeMenu.js';
-import { ConfirmDialog } from './ConfirmDialog.js';
 import { sortGroups } from '../sort-groups.js';
 
 const SORT_STORAGE_KEY = 'clawdad.sidebar.sortMode';
@@ -30,8 +29,6 @@ function readSortMode() {
 export function Sidebar({ open, onClose }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null);
-  const [deleting, setDeleting] = useState(false);
   const [settingsGroup, setSettingsGroup] = useState(null);
   const [sortMode, setSortMode] = useState(readSortMode);
 
@@ -57,20 +54,6 @@ export function Sidebar({ open, onClose }) {
       selectGroup(jid);
     }
     onClose();
-  }
-
-  async function handleDeleteConfirm() {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    try {
-      const apiFolder = deleteTarget.folder.replace(/^web_/, '');
-      await deleteGroup(apiFolder, deleteTarget.jid);
-      setDeleteTarget(null);
-    } catch (err) {
-      console.error('Delete failed:', err);
-    } finally {
-      setDeleting(false);
-    }
   }
 
   return html`
@@ -159,7 +142,6 @@ export function Sidebar({ open, onClose }) {
                   group=${g}
                   isActive=${g.jid === selected}
                   onSelect=${onGroupSelect}
-                  onDelete=${setDeleteTarget}
                   onSettings=${setSettingsGroup}
                 />
               `,
@@ -174,17 +156,6 @@ export function Sidebar({ open, onClose }) {
       group=${settingsGroup}
       open=${!!settingsGroup}
       onClose=${() => setSettingsGroup(null)}
-    />
-    <${ConfirmDialog}
-      open=${!!deleteTarget}
-      title=${`Delete "${deleteTarget?.name}"?`}
-      message="This removes all messages, tasks, and agent data for this group. This cannot be undone."
-      confirmLabel="Delete"
-      confirmText=${deleteTarget?.name}
-      destructive=${true}
-      loading=${deleting}
-      onConfirm=${handleDeleteConfirm}
-      onCancel=${() => setDeleteTarget(null)}
     />
   `;
 }
