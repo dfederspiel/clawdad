@@ -366,6 +366,41 @@ export function getAllChats(): ChatInfo[] {
 }
 
 /**
+ * Map of chat_jid -> timestamp of the most recent message in that chat.
+ * Queries the messages table directly because chats.last_message_time
+ * isn't refreshed on every inbound web message. Used by the web UI to
+ * sort groups by recent activity.
+ */
+export function getAllGroupLastActivity(): Record<string, string> {
+  const rows = db
+    .prepare(
+      `SELECT chat_jid, MAX(timestamp) AS ts FROM messages GROUP BY chat_jid`,
+    )
+    .all() as Array<{ chat_jid: string; ts: string | null }>;
+  const out: Record<string, string> = {};
+  for (const r of rows) if (r.ts) out[r.chat_jid] = r.ts;
+  return out;
+}
+
+/**
+ * Map of group_folder -> earliest next_run across that group's active
+ * scheduled tasks. Used by the web UI to sort groups by upcoming schedule.
+ */
+export function getAllGroupNextTaskAt(): Record<string, string> {
+  const rows = db
+    .prepare(
+      `SELECT group_folder, MIN(next_run) AS next_run
+       FROM scheduled_tasks
+       WHERE status = 'active' AND next_run IS NOT NULL
+       GROUP BY group_folder`,
+    )
+    .all() as Array<{ group_folder: string; next_run: string }>;
+  const out: Record<string, string> = {};
+  for (const r of rows) out[r.group_folder] = r.next_run;
+  return out;
+}
+
+/**
  * Get timestamp of last group metadata sync.
  */
 export function getLastGroupSync(): string | null {

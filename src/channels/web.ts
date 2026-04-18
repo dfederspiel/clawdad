@@ -32,6 +32,8 @@ import {
   recheckProviderAuth,
 } from '../provider-auth.js';
 import {
+  getAllGroupLastActivity,
+  getAllGroupNextTaskAt,
   getMessagesSince,
   getMediaArtifact,
   storeMediaArtifact,
@@ -450,6 +452,8 @@ export class WebChannel implements Channel {
     // GET /api/groups — list web groups
     if (method === 'GET' && url.pathname === '/api/groups') {
       const allGroups = this.opts.registeredGroups();
+      const lastActivity = getAllGroupLastActivity();
+      const nextTaskAt = getAllGroupNextTaskAt();
       const webGroups = Object.entries(allGroups)
         .filter(([jid]) => jid.startsWith('web:'))
         // Exclude trigger-only agents (requiresTrigger + web-all) from sidebar.
@@ -465,6 +469,8 @@ export class WebChannel implements Channel {
           isMain: g.isMain,
           isSystem: g.isSystem || false,
           subtitle: g.subtitle || '',
+          lastActivity: lastActivity[jid] || null,
+          nextTaskAt: nextTaskAt[g.folder] || null,
           agents: this.opts.getGroupAgents?.(jid) || [],
         }));
       return this.json(res, 200, { groups: webGroups });
@@ -1541,6 +1547,7 @@ export class WebChannel implements Channel {
       } as ScheduledTask;
       task.next_run = computeNextRun(fullTask);
       createTask(task);
+      this.broadcastGroupsChanged();
       return this.json(res, 201, {
         task: { ...task, last_run: null, last_result: null },
       });
@@ -1561,6 +1568,7 @@ export class WebChannel implements Channel {
       const task = getTaskById(taskId);
       if (!task) return this.json(res, 404, { error: 'Task not found' });
       updateTask(taskId, { status: 'paused' });
+      this.broadcastGroupsChanged();
       return this.json(res, 200, { ok: true });
     }
 
@@ -1573,6 +1581,7 @@ export class WebChannel implements Channel {
       const task = getTaskById(taskId);
       if (!task) return this.json(res, 404, { error: 'Task not found' });
       updateTask(taskId, { status: 'active' });
+      this.broadcastGroupsChanged();
       return this.json(res, 200, { ok: true });
     }
 
@@ -1618,6 +1627,7 @@ export class WebChannel implements Channel {
       }
 
       updateTask(taskId, updates);
+      this.broadcastGroupsChanged();
       return this.json(res, 200, { task: getTaskById(taskId) });
     }
 
@@ -1628,6 +1638,7 @@ export class WebChannel implements Channel {
       const task = getTaskById(taskId);
       if (!task) return this.json(res, 404, { error: 'Task not found' });
       deleteTask(taskId);
+      this.broadcastGroupsChanged();
       return this.json(res, 200, { ok: true });
     }
 
