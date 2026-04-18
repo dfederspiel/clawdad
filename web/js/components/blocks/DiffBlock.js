@@ -4,8 +4,8 @@ function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export function DiffBlock({ content, filename }) {
-  const lines = (content || '').split('\n');
+export function DiffBlock({ content, body, filename }) {
+  const lines = (content || body || '').split('\n');
 
   return html`
     <div class="diff-block">

@@ -1,10 +1,11 @@
 import { html } from 'htm/preact';
 
-export function StatBlock({ items }) {
-  if (!items || !items.length) return null;
+export function StatBlock({ stats, items }) {
+  const data = stats || items;
+  if (!data || !data.length) return null;
   return html`
     <div class="stat-block">
-      ${items.map(item => html`
+      ${data.map(item => html`
         <div class="stat-item pixel-border">
           ${item.icon && html`<span class="stat-icon">${item.icon}</span>`}
           <div class="stat-data">

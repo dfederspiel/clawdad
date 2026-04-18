@@ -43,9 +43,9 @@ For full documentation with JSON examples and field tables: `Read references/blo
 |------|-----------|---------|
 | `text` | `content` | Markdown prose (rarely needed — text outside fences is already markdown) |
 | `code` | `content`, `language?`, `filename?` | Code snippets with syntax highlighting and copy button |
-| `card` | `title`, `body`, `icon?`, `footer?` | Status reports, summaries, self-contained info panels |
+| `card` | `title`, `body`, `icon?`, `footer?`, `rows?`, `status?` | Status reports, summaries, self-contained info panels |
 | `table` | `columns`, `rows` | Structured data grids (cleaner than markdown tables) |
-| `stat` | `items: [{ icon?, label, value }]` | Metric badges, counters, quick readouts |
+| `stats` | `stats: [{ icon?, label, value }]` | Metric badges, counters, quick readouts |
 | `progress` | `label`, `value`, `max`, `color?` | Task completion, build progress |
 | `alert` | `level` (success/warn/error/info), `body`, `title?` | Important status changes, errors, warnings |
 | `diff` | `content`, `filename?` | Unified diffs with colored add/remove lines |
@@ -65,7 +65,7 @@ I've analyzed your deployment:
 [
   { "type": "alert", "level": "success", "body": "Deployment completed." },
   { "type": "table", "columns": ["Service", "Version", "Status"], "rows": [["api", "2.4.1", "✅"], ["web", "1.8.0", "✅"]] },
-  { "type": "stat", "items": [{ "icon": "⏱️", "label": "Duration", "value": "3m 42s" }, { "icon": "📦", "label": "Images", "value": 2 }] }
+  { "type": "stats", "stats": [{ "icon": "⏱️", "label": "Duration", "value": "3m 42s" }, { "icon": "📦", "label": "Images", "value": 2 }] }
 ]
 :::
 
@@ -86,6 +86,11 @@ Want me to run the smoke tests?
 4. **Forgetting the closing `:::`** — Every `:::blocks` must have a matching `:::` on its own line
 5. **Broken markdown links inside blocks** — Use `[Title](url)` not `*[Title (url)*`
 6. **Invalid JSON** — Missing commas, trailing commas, unquoted keys, unescaped newlines in strings
+
+## Field Naming
+
+- **`body` and `content` are interchangeable** on all block types. Use whichever feels natural.
+- **Array fields are named after what they contain:** `stats`, `buttons`, `fields`, `rows`, `columns`.
 
 ## Guidelines
 
