@@ -18,6 +18,7 @@ const RENDERERS = {
   alert: AlertBlock,
   card: CardBlock,
   table: TableBlock,
+  stats: StatBlock,
   stat: StatBlock,
   progress: ProgressBlock,
   action: ActionBlock,

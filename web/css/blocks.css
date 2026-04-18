@@ -137,6 +137,39 @@
   line-height: 1.5;
 }
 
+.card-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.card-rows {
+  padding: 4px 14px 8px;
+  font-size: 13px;
+}
+
+.card-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.card-row:last-child { border-bottom: none; }
+
+.card-row-label {
+  color: #8b8fa3;
+  flex-shrink: 0;
+}
+
+.card-row-value {
+  text-align: right;
+  font-weight: 500;
+}
+
 .card-footer {
   padding: 6px 14px;
   font-size: 11px;
