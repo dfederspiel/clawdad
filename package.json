@@ -18,7 +18,8 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "validate:skills": "node scripts/validate-skills.mjs"
   },
   "dependencies": {
     "better-sqlite3": "11.10.0",
@@ -44,7 +45,8 @@
     "vitest": "^4.0.18"
   },
   "lint-staged": {
-    "src/**/*.ts": "prettier --write"
+    "src/**/*.ts": "prettier --write",
+    "{.claude,container}/skills/**/SKILL.md": "node scripts/validate-skills.mjs"
   },
   "engines": {
     "node": ">=20"
