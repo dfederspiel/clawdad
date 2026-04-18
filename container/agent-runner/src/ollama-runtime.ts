@@ -220,13 +220,12 @@ export class OllamaRuntime {
 
           if (chunk.message?.content) {
             if (!firstTokenTime) firstTokenTime = Date.now();
-            const token = chunk.message.content;
-            fullText += token;
-            yield {
-              type: 'text',
-              text: token,
-              timestamp: new Date().toISOString(),
-            };
+            // Buffer tokens into fullText and let the final `result` yield
+            // deliver the whole message at once. Yielding per-token text
+            // events produces one chat message per token downstream — the
+            // intermediate-text pathway was designed for Claude's paragraph-
+            // sized chunks, not per-token streams.
+            fullText += chunk.message.content;
           }
 
           if (chunk.done) {
