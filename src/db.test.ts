@@ -460,6 +460,35 @@ describe('task CRUD', () => {
     expect(getTaskById('task-2')!.status).toBe('paused');
   });
 
+  it('updates task title, prompt, and schedule', () => {
+    createTask({
+      id: 'task-patch',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      title: 'Old title',
+      prompt: 'old prompt',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: '2024-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateTask('task-patch', {
+      title: 'New title',
+      prompt: 'new prompt',
+      schedule_type: 'cron',
+      schedule_value: '0 9 * * 1-5',
+    });
+
+    const task = getTaskById('task-patch')!;
+    expect(task.title).toBe('New title');
+    expect(task.prompt).toBe('new prompt');
+    expect(task.schedule_type).toBe('cron');
+    expect(task.schedule_value).toBe('0 9 * * 1-5');
+  });
+
   it('deletes a task and its run logs', () => {
     createTask({
       id: 'task-3',

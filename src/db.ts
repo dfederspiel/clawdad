@@ -714,6 +714,7 @@ export function updateTask(
   updates: Partial<
     Pick<
       ScheduledTask,
+      | 'title'
       | 'prompt'
       | 'script'
       | 'schedule_type'
@@ -726,6 +727,10 @@ export function updateTask(
   const fields: string[] = [];
   const values: unknown[] = [];
 
+  if (updates.title !== undefined) {
+    fields.push('title = ?');
+    values.push(updates.title || null);
+  }
   if (updates.prompt !== undefined) {
     fields.push('prompt = ?');
     values.push(updates.prompt);
