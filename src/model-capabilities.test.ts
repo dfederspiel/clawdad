@@ -1,8 +1,29 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getCapabilityProfile } from './model-capabilities.js';
 import { buildMultiAgentContext } from './agent-discovery.js';
+import {
+  _resetOllamaCapabilitiesForTests,
+  _setOllamaCapabilitiesForTests,
+} from './ollama-capabilities.js';
 import type { Agent } from './types.js';
+
+beforeEach(() => {
+  _resetOllamaCapabilitiesForTests();
+  // Populate the capability cache as if Ollama's /api/show had reported
+  // `tools` for qwen3.5:4b and omitted it for llama3.2:1b. Matches the
+  // empirical probe output in scripts/probe-ollama-tools.ts.
+  _setOllamaCapabilitiesForTests('qwen3.5:4b', {
+    tools: true,
+    vision: true,
+    thinking: true,
+  });
+  _setOllamaCapabilitiesForTests('llama3.2:1b', {
+    tools: false,
+    vision: false,
+    thinking: false,
+  });
+});
 
 describe('getCapabilityProfile', () => {
   it('returns the anthropic profile when runtime is undefined (platform default)', () => {

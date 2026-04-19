@@ -14,6 +14,7 @@ import {
 } from '../runtime-profile.js';
 import { getCapabilityProfile } from '../model-capabilities.js';
 import { resolveEffectiveRuntime } from '../runtime-resolution.js';
+import { listAvailableTools } from '../tool-registry.js';
 import type { AgentRuntimeConfig } from '../runtime-types.js';
 import {
   getAchievementResponse,
@@ -762,7 +763,7 @@ export class WebChannel implements Channel {
         agentName,
       );
       const body = await this.readBody(req);
-      const { displayName, trigger, runtime } = body as {
+      const { displayName, trigger, runtime, tools } = body as {
         displayName?: string;
         trigger?: string;
         runtime?: {
@@ -772,6 +773,7 @@ export class WebChannel implements Channel {
           temperature?: number;
           maxTokens?: number;
         } | null;
+        tools?: string[] | null;
       };
 
       if (!fs.existsSync(agentDir)) {
@@ -798,6 +800,33 @@ export class WebChannel implements Channel {
           config.trigger = trimmed;
         } else {
           delete config.trigger;
+        }
+      }
+
+      if (tools !== undefined) {
+        if (tools === null) {
+          delete config.tools;
+        } else if (Array.isArray(tools)) {
+          // Reject explicit tool lists for runtimes that can't consume
+          // them — the Ollama text-only path ignores `allowedTools`, so
+          // saving would silently dead-letter. Callers can still clear
+          // (tools: null) to reset any stale value.
+          const effectiveRuntime = (config.runtime || undefined) as
+            | AgentRuntimeConfig
+            | undefined;
+          if (!getCapabilityProfile(effectiveRuntime).receivesMcpTools) {
+            return this.json(res, 400, {
+              error:
+                "This agent's runtime does not support tool calling — tool selection has no effect. Clear the field (tools: null) or switch to a tool-capable model.",
+            });
+          }
+          config.tools = tools.filter(
+            (t: unknown): t is string => typeof t === 'string' && t.length > 0,
+          );
+        } else {
+          return this.json(res, 400, {
+            error: 'tools must be an array of strings or null',
+          });
         }
       }
 
@@ -930,6 +959,14 @@ export class WebChannel implements Channel {
 
       fs.rmSync(agentDir, { recursive: true, force: true });
       return this.refreshAgentsAndRespond(res, jid);
+    }
+
+    // GET /api/tools — list tools available for per-agent allowlists (#74 Phase 2b).
+    // Static catalogue: Claude SDK built-ins + nanoclaw MCP tools. Kept
+    // in sync with container/agent-runner/src/claude-runtime.ts and
+    // container/agent-runner/src/ipc-mcp-stdio.ts.
+    if (method === 'GET' && url.pathname === '/api/tools') {
+      return this.json(res, 200, { tools: listAvailableTools() });
     }
 
     // GET /api/ollama/models — list locally available Ollama models
