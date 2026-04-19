@@ -133,6 +133,7 @@ export const updateGroupAgent = (folder, agentName, data) =>
 export const deleteGroupAgent = (folder, agentName) =>
   fetchJson(`/api/groups/${encodeURIComponent(folder)}/agents/${encodeURIComponent(agentName)}`, { method: 'DELETE' });
 export const getOllamaModels = () => fetchJson('/api/ollama/models');
+export const getTools = () => fetchJson('/api/tools');
 export const getTranscript = (groupFolder) => fetchJson(`/api/transcript?group=${encodeURIComponent(groupFolder)}`);
 export const getAchievements = () => fetchJson('/api/achievements');
 export const getSessionPressure = () => fetchJson('/api/session/pressure');

@@ -24,6 +24,11 @@ export interface ChannelOpts {
       temperature?: number;
       maxTokens?: number;
     };
+    tools?: string[];
+    // Effective capability — UI gates the per-agent tool picker on this
+    // (a text-only runtime cannot consume tools, so offering a checklist
+    // would silently discard the user's selection at runtime).
+    receivesMcpTools?: boolean;
   }>;
   refreshGroupAgents?: (jid: string) => Array<{
     id: string;
@@ -38,6 +43,11 @@ export interface ChannelOpts {
       temperature?: number;
       maxTokens?: number;
     };
+    tools?: string[];
+    // Effective capability — UI gates the per-agent tool picker on this
+    // (a text-only runtime cannot consume tools, so offering a checklist
+    // would silently discard the user's selection at runtime).
+    receivesMcpTools?: boolean;
   }>;
   onAgentRuntimeChanged?: (groupFolder: string, agentName: string) => void;
   onRegisterGroup?: (jid: string, group: RegisteredGroup) => void;

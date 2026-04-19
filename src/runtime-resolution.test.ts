@@ -1,11 +1,29 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   envRuntimeFallback,
   mergeRuntimeConfigs,
   resolveTurnConstraints,
 } from './runtime-resolution.js';
+import {
+  _resetOllamaCapabilitiesForTests,
+  _setOllamaCapabilitiesForTests,
+} from './ollama-capabilities.js';
 import type { Agent, RegisteredGroup } from './types.js';
+
+beforeEach(() => {
+  _resetOllamaCapabilitiesForTests();
+  _setOllamaCapabilitiesForTests('qwen3.5:4b', {
+    tools: true,
+    vision: true,
+    thinking: true,
+  });
+  _setOllamaCapabilitiesForTests('llama3.2:1b', {
+    tools: false,
+    vision: false,
+    thinking: false,
+  });
+});
 
 function makeGroup(
   containerConfig?: RegisteredGroup['containerConfig'],

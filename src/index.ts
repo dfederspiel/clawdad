@@ -138,6 +138,7 @@ import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import type { MediaArtifact } from './types.js';
 import { logger } from './logger.js';
 import { getCapabilityProfile } from './model-capabilities.js';
+import { scheduleOllamaCapabilityRefresh } from './ollama-capabilities.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -2452,6 +2453,12 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
+  // Warm the Ollama capability cache so getCapabilityProfile() can return
+  // API-derived answers synchronously on the hot path. Best-effort — if
+  // Ollama isn't running or isn't installed, callers fall back to the
+  // safe default (text-only) and a later on-demand refresh will fill in.
+  scheduleOllamaCapabilityRefresh();
+
   // Load pack-defined achievements (merged with built-ins)
   const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
   let activePack = 'starter';
@@ -2667,6 +2674,8 @@ async function main(): Promise<void> {
         trigger: a.trigger,
         status: a.status,
         runtime: a.runtime,
+        tools: a.tools,
+        receivesMcpTools: getCapabilityProfile(a.runtime).receivesMcpTools,
       })),
     refreshGroupAgents: (jid: string) =>
       refreshGroupAgents(jid).map((a) => ({
@@ -2676,6 +2685,8 @@ async function main(): Promise<void> {
         trigger: a.trigger,
         status: a.status,
         runtime: a.runtime,
+        tools: a.tools,
+        receivesMcpTools: getCapabilityProfile(a.runtime).receivesMcpTools,
       })),
     getStatus: () => ({
       containers: queue.getSnapshot(),

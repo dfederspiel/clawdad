@@ -31,18 +31,37 @@ import {
   type ProviderToolSpec,
 } from './tool-bridge.js';
 
-// Allowlist of Ollama models for which we pass MCP tools. Starts narrow:
-// qwen3.5:4b is our baseline that we've verified in development. Wider
-// support comes as we confirm each model's reliability. Too-small models
-// (llama3.2:1b, llama3.2:3b) stay off this list even though Ollama's
-// /api/show reports tools: true — they produce narration of tool calls
-// rather than real invocations.
-const TOOL_CAPABLE_OLLAMA_MODELS = new Set<string>([
-  'qwen3.5:4b',
-]);
+// Per-model capability cache derived from Ollama's /api/show. Empirical
+// probe (scripts/probe-ollama-tools.ts on host) showed the previous
+// hardcoded allowlist was wrong — both llama3.2:1b and qwen3.5:4b emit
+// structured tool_calls; the small model just has weaker argument
+// adherence, which is a reliability concern not a capability gap. We
+// now trust the self-report and rely on observability to surface bad
+// outcomes per model.
+const toolCapabilityCache = new Map<string, boolean>();
 
-export function ollamaModelSupportsTools(model: string): boolean {
-  return TOOL_CAPABLE_OLLAMA_MODELS.has(model);
+async function fetchSupportsTools(model: string): Promise<boolean> {
+  const host = process.env.OLLAMA_HOST || 'http://localhost:11434';
+  try {
+    const res = await fetch(`${host}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { capabilities?: string[] };
+    return (body.capabilities ?? []).includes('tools');
+  } catch {
+    return false;
+  }
+}
+
+export async function ollamaModelSupportsTools(model: string): Promise<boolean> {
+  const cached = toolCapabilityCache.get(model);
+  if (cached !== undefined) return cached;
+  const supports = await fetchSupportsTools(model);
+  toolCapabilityCache.set(model, supports);
+  return supports;
 }
 
 const MAX_TOOL_TURNS = 10;
@@ -168,7 +187,8 @@ export class OllamaRuntime {
     const chatOptions = Object.keys(options).length > 0 ? options : undefined;
 
     const toolsEnabled =
-      ollamaModelSupportsTools(model) && Boolean(this.options.mcpServerPath);
+      Boolean(this.options.mcpServerPath) &&
+      (await ollamaModelSupportsTools(model));
     if (toolsEnabled) {
       yield* this.runToolLoop(
         model,
