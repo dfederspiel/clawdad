@@ -24,7 +24,7 @@ function mockFetch(
   ) => { status: number; body: unknown },
 ): void {
   globalThis.fetch = vi.fn(
-    async (url: RequestInfo | URL, init?: RequestInit) => {
+    async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const { status, body } = handler(String(url), init);
       return new Response(JSON.stringify(body), { status });
     },

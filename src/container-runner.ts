@@ -37,6 +37,7 @@ import { validateAdditionalMounts } from './mount-security.js';
 import { readEnvFile } from './env.js';
 import { RegisteredGroup } from './types.js';
 import { AgentRuntimeConfig, RuntimeTurnConstraints } from './runtime-types.js';
+import type { StructuredMessage } from './router.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -54,6 +55,11 @@ export interface ProgressEvent {
 
 export interface ContainerInput {
   prompt: string;
+  // Structured conversation history in (role, content) form. Runtimes
+  // that need real message boundaries (Ollama) read this directly;
+  // Claude continues using the XML-formatted `prompt` for backward
+  // compatibility with the SDK. See #46.
+  messages?: StructuredMessage[];
   sessionId?: string;
   groupFolder: string;
   chatJid: string;

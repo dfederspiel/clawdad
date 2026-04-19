@@ -23,8 +23,19 @@ import { AgentRuntimeConfig, RuntimeTurnConstraints } from './runtime-interface.
 import { ClaudeCodeRuntime } from './claude-runtime.js';
 import { OllamaRuntime } from './ollama-runtime.js';
 
+interface StructuredMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  sender?: string;
+  timestamp?: string;
+}
+
 interface ContainerInput {
   prompt: string;
+  // Structured conversation history (#46). Runtimes that can consume real
+  // message boundaries (Ollama) read this directly; Claude keeps using the
+  // XML-formatted `prompt` for SDK compatibility.
+  messages?: StructuredMessage[];
   sessionId?: string;
   groupFolder: string;
   chatJid: string;
@@ -460,8 +471,23 @@ async function runQuery(
           ipcPollMs: IPC_POLL_MS,
         });
 
+  // Claude keeps the legacy XML-in-a-single-user-message shape — the SDK
+  // owns its own conversation state via session-resume, and the XML gives
+  // the model sender/timestamp framing it already expects. Any other
+  // runtime gets the structured messages when the host populated them
+  // (#46), since reconstructing roles from XML was fragile and lossy.
+  const providerIsClaude =
+    (containerInput.runtime?.provider || 'anthropic') === 'anthropic';
+  const runtimeMessages =
+    !providerIsClaude && containerInput.messages && containerInput.messages.length > 0
+      ? containerInput.messages.map((m) => ({
+          role: m.role,
+          content: [{ type: 'text' as const, text: m.content }],
+        }))
+      : [{ role: 'user' as const, content: [{ type: 'text' as const, text: prompt }] }];
+
   for await (const event of runtime.runTurn({
-    messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+    messages: runtimeMessages,
     attachments: [],
     threadId: undefined,
     agentId: containerInput.agentId || containerInput.agentName || 'default',

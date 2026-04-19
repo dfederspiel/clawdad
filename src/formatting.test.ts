@@ -10,6 +10,7 @@ import {
   formatMessages,
   formatOutbound,
   stripInternalTags,
+  toStructuredMessages,
 } from './router.js';
 import { parseTextStyles, parseSignalStyles } from './text-styles.js';
 import { NewMessage } from './types.js';
@@ -547,5 +548,84 @@ describe('formatOutbound — channel-aware', () => {
 
   it('signal channel is passthrough — raw markdown preserved for parseSignalStyles', () => {
     expect(formatOutbound('**bold**', 'signal')).toBe('**bold**');
+  });
+});
+
+// --- toStructuredMessages (#46) ---
+
+describe('toStructuredMessages', () => {
+  it('returns an empty array for no messages', () => {
+    expect(toStructuredMessages([])).toEqual([]);
+  });
+
+  it('maps is_bot_message: true to role="assistant"', () => {
+    const out = toStructuredMessages([
+      makeMsg({ is_bot_message: true, sender_name: 'Andy', content: 'hi' }),
+    ]);
+    expect(out).toEqual([
+      {
+        role: 'assistant',
+        content: 'hi',
+        sender: 'Andy',
+        timestamp: '2024-01-01T00:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('maps is_bot_message: false (and missing) to role="user"', () => {
+    const out = toStructuredMessages([
+      makeMsg({
+        sender_name: 'Alice',
+        content: 'hello',
+        is_bot_message: false,
+      }),
+      makeMsg({ sender_name: 'Bob', content: 'hey' }), // is_bot_message omitted
+    ]);
+    expect(out.map((m) => m.role)).toEqual(['user', 'user']);
+  });
+
+  it('preserves role authority via is_bot_message regardless of sender_name', () => {
+    // A human user named "Assistant" should still be role: user —
+    // this proves we no longer rely on the fragile name-match heuristic
+    // that the old parseXmlMessages used.
+    const out = toStructuredMessages([
+      makeMsg({
+        sender_name: 'Assistant',
+        content: 'typed by a real user',
+        is_bot_message: false,
+      }),
+    ]);
+    expect(out[0].role).toBe('user');
+  });
+
+  it('carries content, sender, and timestamp through unchanged', () => {
+    const out = toStructuredMessages([
+      makeMsg({
+        sender_name: 'Alice',
+        content: 'Look at <this> & "that"',
+        timestamp: '2026-04-19T03:00:00.000Z',
+      }),
+    ]);
+    expect(out[0]).toEqual({
+      role: 'user',
+      content: 'Look at <this> & "that"',
+      sender: 'Alice',
+      timestamp: '2026-04-19T03:00:00.000Z',
+    });
+  });
+
+  it('preserves order', () => {
+    const out = toStructuredMessages([
+      makeMsg({ id: '1', sender_name: 'A', content: 'first' }),
+      makeMsg({
+        id: '2',
+        sender_name: 'Andy',
+        content: 'second',
+        is_bot_message: true,
+      }),
+      makeMsg({ id: '3', sender_name: 'A', content: 'third' }),
+    ]);
+    expect(out.map((m) => m.content)).toEqual(['first', 'second', 'third']);
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
   });
 });

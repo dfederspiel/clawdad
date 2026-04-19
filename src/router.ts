@@ -11,6 +11,33 @@ export function escapeXml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Structured form of a conversation message — passed to runtime adapters
+ * alongside the legacy XML prompt (#46). Gives non-Claude runtimes a
+ * direct (role, content) feed instead of reverse-engineering XML.
+ *
+ * Role is authoritative from `NewMessage.is_bot_message`, not heuristic
+ * name matching. Sender and timestamp are carried for display/debug use
+ * but aren't required by any current runtime.
+ */
+export interface StructuredMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  sender: string;
+  timestamp: string;
+}
+
+export function toStructuredMessages(
+  messages: NewMessage[],
+): StructuredMessage[] {
+  return messages.map((m) => ({
+    role: m.is_bot_message ? 'assistant' : 'user',
+    content: m.content,
+    sender: m.sender_name,
+    timestamp: m.timestamp,
+  }));
+}
+
 export function formatMessages(
   messages: NewMessage[],
   timezone: string,

@@ -66,39 +66,6 @@ export async function ollamaModelSupportsTools(model: string): Promise<boolean> 
 
 const MAX_TOOL_TURNS = 10;
 
-/**
- * Parse the XML-formatted conversation history produced by the host's
- * formatMessages() into individual Ollama chat messages. Bot messages
- * become assistant role, everything else becomes user role.
- *
- * Tracked for removal in #46 — host should pass structured messages so
- * this reverse-engineering step goes away.
- */
-function parseXmlMessages(text: string, assistantName?: string): Message[] {
-  const msgRegex =
-    /<message\s+sender="([^"]*)"\s+time="[^"]*">([^<]*(?:<(?!\/message>)[^<]*)*)<\/message>/g;
-  const results: Message[] = [];
-  let match;
-  while ((match = msgRegex.exec(text)) !== null) {
-    const sender = match[1];
-    const content = match[2]
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .trim();
-    if (!content) continue;
-    const isBot =
-      (assistantName && sender === assistantName) ||
-      /^(Andy|Assistant|Bot)$/i.test(sender);
-    results.push({
-      role: isBot ? 'assistant' : 'user',
-      content,
-    });
-  }
-  return results;
-}
-
 interface ContainerInputLike {
   chatJid: string;
   groupFolder: string;
@@ -210,8 +177,9 @@ export class OllamaRuntime {
   }
 
   /**
-   * Build the system prompt + user/assistant history, parsing XML as
-   * needed. Shared between text-only and tool-capable paths.
+   * Build the system prompt + user/assistant history from the structured
+   * messages the host passes in ContainerInput (see #46). Shared between
+   * text-only and tool-capable paths.
    */
   private async buildBaseMessages(
     input: RuntimeTurnInput,
@@ -233,19 +201,18 @@ export class OllamaRuntime {
       messages.push({ role: 'system', content: systemParts.join('\n\n') });
     }
 
+    // Structured path (#46): the host now populates containerInput.messages
+    // and the container-runner hands them to us as pre-structured
+    // RuntimeMessages. Pass role + joined text through verbatim — no more
+    // reverse-engineering XML to guess who said what.
     for (const msg of input.messages) {
-      const textParts = msg.content
+      const text = msg.content
         .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-        .map((p) => p.text);
-      const fullText = textParts.join('\n');
-      const xmlMessages = parseXmlMessages(
-        fullText,
-        this.options.containerInput.assistantName,
-      );
-      if (xmlMessages.length > 0) {
-        for (const xm of xmlMessages) messages.push(xm);
-      } else if (fullText.trim()) {
-        messages.push({ role: msg.role, content: fullText });
+        .map((p) => p.text)
+        .join('\n')
+        .trim();
+      if (text) {
+        messages.push({ role: msg.role, content: text });
       }
     }
 
