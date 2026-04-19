@@ -34,11 +34,22 @@ export interface CapabilityProfile {
    * only a final full message, no streaming.
    */
   streaming: 'per-token' | 'chunked' | 'whole';
+
+  /**
+   * Max time the host waits for a delegated turn to complete before
+   * cancelling and surfacing a "specialist was unable to complete" error.
+   * Picked off the **specialist's** profile at delegation time: fast
+   * cloud APIs (Claude) fail fast so a wedged container doesn't stall
+   * the group; slow local models (CPU-only Ollama) get headroom for
+   * real tool-loop work (observed 83s–467s on qwen3.5:4b, macOS CPU).
+   */
+  delegationTimeoutMs: number;
 }
 
 const ANTHROPIC_PROFILE: CapabilityProfile = {
   receivesMcpTools: true,
   streaming: 'chunked',
+  delegationTimeoutMs: 120_000, // 2 min — fast cloud API, fail fast on hangs
 };
 
 // Ollama models for which the container adapter wires tools end-to-end.
@@ -54,6 +65,7 @@ const TOOL_CAPABLE_OLLAMA_MODELS = new Set<string>(['qwen3.5:4b']);
 const OLLAMA_TEXT_ONLY_PROFILE: CapabilityProfile = {
   receivesMcpTools: false,
   streaming: 'per-token',
+  delegationTimeoutMs: 300_000, // 5 min — CPU-only text generation, no tool loop
 };
 
 const OLLAMA_TOOL_CAPABLE_PROFILE: CapabilityProfile = {
@@ -61,6 +73,7 @@ const OLLAMA_TOOL_CAPABLE_PROFILE: CapabilityProfile = {
   // Tool loop runs non-streaming turns (we need the full response to read
   // tool_calls); the final assistant message is delivered whole.
   streaming: 'whole',
+  delegationTimeoutMs: 600_000, // 10 min — headroom for CPU-only tool loops
 };
 
 // Safe default for providers we haven't wired yet. Assume text-only so
@@ -68,6 +81,7 @@ const OLLAMA_TOOL_CAPABLE_PROFILE: CapabilityProfile = {
 const UNSUPPORTED_PROFILE: CapabilityProfile = {
   receivesMcpTools: false,
   streaming: 'whole',
+  delegationTimeoutMs: 120_000, // 2 min — conservative default until wired
 };
 
 /**

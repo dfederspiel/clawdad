@@ -9,11 +9,13 @@ describe('getCapabilityProfile', () => {
     const p = getCapabilityProfile(undefined);
     expect(p.receivesMcpTools).toBe(true);
     expect(p.streaming).toBe('chunked');
+    expect(p.delegationTimeoutMs).toBe(120_000);
   });
 
   it('returns the anthropic profile for explicit anthropic', () => {
     const p = getCapabilityProfile({ provider: 'anthropic' });
     expect(p.receivesMcpTools).toBe(true);
+    expect(p.delegationTimeoutMs).toBe(120_000);
   });
 
   it('reports small ollama models as tool-less (not on the allowlist)', () => {
@@ -23,6 +25,7 @@ describe('getCapabilityProfile', () => {
     });
     expect(p.receivesMcpTools).toBe(false);
     expect(p.streaming).toBe('per-token');
+    expect(p.delegationTimeoutMs).toBe(300_000);
   });
 
   it('reports ollama qwen3.5:4b as tool-capable (on the allowlist)', () => {
@@ -31,16 +34,33 @@ describe('getCapabilityProfile', () => {
     // Tool loop runs non-streaming turns; the adapter delivers the final
     // assistant message whole.
     expect(p.streaming).toBe('whole');
+    expect(p.delegationTimeoutMs).toBe(600_000);
   });
 
   it('treats ollama with no model as tool-less (safe default)', () => {
     const p = getCapabilityProfile({ provider: 'ollama' });
     expect(p.receivesMcpTools).toBe(false);
+    expect(p.delegationTimeoutMs).toBe(300_000);
   });
 
   it('falls back to a tool-less profile for not-yet-wired providers', () => {
     const p = getCapabilityProfile({ provider: 'openai' });
     expect(p.receivesMcpTools).toBe(false);
+    expect(p.delegationTimeoutMs).toBe(120_000);
+  });
+
+  it('gives tool-capable Ollama more delegation headroom than text-only Ollama', () => {
+    const toolCapable = getCapabilityProfile({
+      provider: 'ollama',
+      model: 'qwen3.5:4b',
+    });
+    const textOnly = getCapabilityProfile({
+      provider: 'ollama',
+      model: 'llama3.2:1b',
+    });
+    expect(toolCapable.delegationTimeoutMs).toBeGreaterThan(
+      textOnly.delegationTimeoutMs,
+    );
   });
 });
 
