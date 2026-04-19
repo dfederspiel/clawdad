@@ -12,6 +12,7 @@ import {
   currentWorkState,
   agentProgress,
   selectedJid,
+  flashMessageId,
 } from '../app.js';
 import { Message } from './Message.js';
 import { ThreadView } from './ThreadView.js';
@@ -101,8 +102,14 @@ export function MessageList() {
         : msgs.filter((m) => m.senderName !== 'System').map(
             (m, i) => {
               const thread = m.id ? threads[m.id] : null;
+              const flashing = m.id && flashMessageId.value === m.id;
               return html`
-                <div key=${i} data-role=${m.role}>
+                <div
+                  key=${i}
+                  data-role=${m.role}
+                  id=${m.id ? `msg-${m.id}` : undefined}
+                  class=${flashing ? 'notif-flash' : ''}
+                >
                   <${Message}
                     role=${m.role}
                     content=${m.content}
