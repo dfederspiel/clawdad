@@ -163,15 +163,22 @@ export function resolveTurnConstraints(
     disallowed.add(SPECIALIST_AUTO_BLOCKED_TOOL);
   }
 
-  // Role-scoped tool narrowing for non-SDK runtimes (Ollama today).
-  // Small tool-capable models get confused when handed 18 MCP tools at
-  // once — seen live with qwen3.5:4b hallucinating a tool name in #73.
-  // Narrowing specialists to just send_message + set_agent_status gives
-  // an unambiguous signal. Claude specialists are unchanged because the
-  // SDK handles wide tool sets reliably and existing workflows depend
-  // on them.
+  // Allowlist precedence: explicit `agent.tools` (Phase 2 of #74) > role
+  // default (Phase 1) > runtime's built-in default (no constraint).
+  //
+  // Role-scoped narrowing for non-SDK runtimes (Ollama today): small
+  // tool-capable models get confused when handed 18 MCP tools at once —
+  // seen live with qwen3.5:4b hallucinating a tool name in #73. Narrowing
+  // specialists to just send_message + set_agent_status gives an
+  // unambiguous signal. Claude specialists are unchanged at the role
+  // layer because the SDK handles wide tool sets reliably and existing
+  // workflows depend on them — but they can still be narrowed explicitly
+  // via `agent.tools`.
   let allowedTools: string[] | undefined;
-  if (isSpecialist && agent) {
+  if (agent?.tools !== undefined) {
+    // Explicit override — honour exactly, including empty array ("no tools").
+    allowedTools = [...agent.tools];
+  } else if (isSpecialist && agent) {
     const profile = getCapabilityProfile(agent.runtime);
     const isNonSdkRuntime = agent.runtime?.provider === 'ollama';
     if (isNonSdkRuntime && profile.receivesMcpTools) {

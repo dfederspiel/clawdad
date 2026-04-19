@@ -110,6 +110,11 @@ function loadAgentFromDir(
       if (config.containerConfig)
         agent.containerConfig = config.containerConfig as ContainerConfig;
       if (config.runtime) agent.runtime = config.runtime as AgentRuntimeConfig;
+      if (Array.isArray(config.tools)) {
+        agent.tools = config.tools.filter(
+          (t: unknown): t is string => typeof t === 'string',
+        );
+      }
     } catch (err) {
       logger.warn(
         { group: groupFolder, agent: agentName, err },

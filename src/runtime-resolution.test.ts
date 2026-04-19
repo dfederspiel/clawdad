@@ -23,6 +23,7 @@ function makeAgent(
   trigger: string | undefined,
   containerConfig?: Agent['containerConfig'],
   runtime?: Agent['runtime'],
+  tools?: Agent['tools'],
 ): Agent {
   return {
     id: 'test/agent',
@@ -32,6 +33,7 @@ function makeAgent(
     trigger,
     containerConfig,
     runtime,
+    tools,
   };
 }
 
@@ -190,5 +192,55 @@ describe('resolveTurnConstraints', () => {
       makeGroup(),
     );
     expect(result?.allowedTools).toBeUndefined();
+  });
+
+  // --- Per-agent tools override (#74 Phase 2) ---
+
+  it('honours an explicit agent.tools override on a Claude specialist', () => {
+    const result = resolveTurnConstraints(
+      makeAgent('@researcher', undefined, { provider: 'anthropic' }, [
+        'WebSearch',
+        'WebFetch',
+        'mcp__nanoclaw__send_message',
+      ]),
+      makeGroup(),
+    );
+    expect(result?.allowedTools).toEqual([
+      'WebSearch',
+      'WebFetch',
+      'mcp__nanoclaw__send_message',
+    ]);
+  });
+
+  it('honours an explicit agent.tools override on a coordinator', () => {
+    const result = resolveTurnConstraints(
+      makeAgent(undefined, undefined, { provider: 'anthropic' }, ['WebSearch']),
+      makeGroup(),
+    );
+    expect(result?.allowedTools).toEqual(['WebSearch']);
+  });
+
+  it('explicit agent.tools overrides the Ollama role default (widens it)', () => {
+    const result = resolveTurnConstraints(
+      makeAgent(
+        '@scout',
+        undefined,
+        { provider: 'ollama', model: 'qwen3.5:4b' },
+        ['mcp__nanoclaw__send_message', 'WebSearch'],
+      ),
+      makeGroup(),
+    );
+    expect(result?.allowedTools).toEqual([
+      'mcp__nanoclaw__send_message',
+      'WebSearch',
+    ]);
+  });
+
+  it('honours an empty agent.tools array as an explicit "no tools" opt-out', () => {
+    const result = resolveTurnConstraints(
+      makeAgent('@quiet', undefined, { provider: 'anthropic' }, []),
+      makeGroup(),
+    );
+    expect(result?.allowedTools).toEqual([]);
   });
 });
