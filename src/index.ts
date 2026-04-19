@@ -103,7 +103,9 @@ import {
   formatMessages,
   formatOutbound,
   stripInternalTags,
+  toStructuredMessages,
 } from './router.js';
+import type { StructuredMessage } from './router.js';
 import { ChannelType } from './text-styles.js';
 import {
   restoreRemoteControl,
@@ -746,6 +748,17 @@ async function executeAutomationActions(
                 ? `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n${action.messageTemplate}\n`
                 : `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n`;
               const delegationPrompt = conversationCtx + routingNote;
+              const routedMessages: StructuredMessage[] = [
+                ...toStructuredMessages(recentMessages),
+                {
+                  role: 'user',
+                  content: action.messageTemplate
+                    ? `Auto-routed by rule "${trace.ruleId}": ${action.messageTemplate}`
+                    : `Auto-routed by rule "${trace.ruleId}"`,
+                  sender: 'system',
+                  timestamp: new Date().toISOString(),
+                },
+              ];
 
               setActiveAgentName(chatJid, agent.displayName);
               await channel.setTyping?.(chatJid, true);
@@ -824,6 +837,7 @@ async function executeAutomationActions(
                 },
                 batchId,
                 multiAgentCtx || undefined,
+                routedMessages,
               );
 
               group.containerConfig = savedConfig;
@@ -1100,6 +1114,7 @@ async function processGroupMessages(
   // For triggered agents, prepend conversation context from the origin chat
   // so the agent understands what's being discussed.
   let prompt: string;
+  let structuredMessages: StructuredMessage[];
   if (originJid && group.triggerScope === 'web-all') {
     const originContext = getMessagesSince(
       originJid,
@@ -1119,8 +1134,13 @@ async function processGroupMessages(
         formatMessages(contextOnly, TIMEZONE) +
         '\n--- Your trigger message ---\n' +
         formatMessages(missedMessages, TIMEZONE);
+      structuredMessages = [
+        ...toStructuredMessages(contextOnly),
+        ...toStructuredMessages(missedMessages),
+      ];
     } else {
       prompt = formatMessages(missedMessages, TIMEZONE);
+      structuredMessages = toStructuredMessages(missedMessages);
     }
     logger.info(
       {
@@ -1133,6 +1153,7 @@ async function processGroupMessages(
     );
   } else {
     prompt = formatMessages(missedMessages, TIMEZONE);
+    structuredMessages = toStructuredMessages(missedMessages);
   }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
@@ -1300,6 +1321,7 @@ async function processGroupMessages(
               },
               batchId,
               multiAgentCtx || undefined,
+              structuredMessages,
             );
 
             group.containerConfig = savedConfig;
@@ -1577,6 +1599,7 @@ async function processGroupMessages(
       },
       batchId,
       multiAgentCtx || undefined,
+      structuredMessages,
     );
 
     await responseChannel.setTyping?.(
@@ -1645,6 +1668,7 @@ async function runAgent(
   sendMessage?: (text: string) => Promise<void>,
   runBatchId?: string,
   systemContext?: string,
+  messages?: StructuredMessage[],
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
@@ -2013,6 +2037,7 @@ async function runAgent(
 
       const containerInput = {
         prompt,
+        messages,
         sessionId,
         groupFolder: group.folder,
         chatJid,
@@ -2089,6 +2114,7 @@ async function runAgent(
     // ── Non-pool path: delegations, tasks, or pool disabled ─────
     const containerInput = {
       prompt,
+      messages,
       sessionId,
       groupFolder: group.folder,
       chatJid,
@@ -3047,6 +3073,19 @@ async function main(): Promise<void> {
           const delegationPrompt =
             conversationCtx +
             `\n\n--- Delegation from ${sourceAgent} ---\n${message}\n--- End delegation ---\n`;
+          // For non-Claude runtimes the delegation instruction was silently
+          // dropped by the XML parser (it lives outside <messages>). Inject
+          // it as a synthetic final user message so it actually reaches the
+          // model via the structured path.
+          const delegationMessages: StructuredMessage[] = [
+            ...toStructuredMessages(recentMessages),
+            {
+              role: 'user',
+              content: `Delegation from ${sourceAgent}: ${message}`,
+              sender: sourceAgent,
+              timestamp: new Date().toISOString(),
+            },
+          ];
 
           setActiveAgentName(chatJid, agent.displayName);
           await channel.setTyping?.(chatJid, true);
@@ -3123,6 +3162,7 @@ async function main(): Promise<void> {
             },
             batchId,
             multiAgentCtx || undefined,
+            delegationMessages,
           );
 
           group.containerConfig = savedConfig; // restore original config
