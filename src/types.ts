@@ -100,6 +100,11 @@ export interface Agent {
   status?: string; // Agent-settable status line shown under the agent row
   containerConfig?: ContainerConfig; // Agent-specific overrides
   runtime?: AgentRuntimeConfig; // Provider/model execution boundary
+  // Positive tool allowlist that overrides both the role-based default
+  // (Phase 1 of #74) and the runtime's built-in default. Supports SDK
+  // wildcards on Claude (e.g. `mcp__nanoclaw__*`); Ollama matches exact
+  // names only. An empty array means "no tools" — an explicit opt-out.
+  tools?: string[];
 }
 
 export type WorkPhase =
