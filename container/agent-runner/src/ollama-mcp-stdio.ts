@@ -10,7 +10,8 @@ import { z } from 'zod';
 
 import fs from 'fs';
 import path from 'path';
-import { ollamaFetch, DEFAULT_OLLAMA_HOST } from './ollama-fetch.js';
+
+import { DEFAULT_OLLAMA_HOST, getOllamaClient } from './ollama-client.js';
 
 const OLLAMA_ADMIN_TOOLS = process.env.OLLAMA_ADMIN_TOOLS === 'true';
 const OLLAMA_STATUS_FILE = '/workspace/ipc/ollama_status.json';
@@ -26,7 +27,17 @@ function writeStatus(status: string, detail?: string): void {
     fs.mkdirSync(path.dirname(OLLAMA_STATUS_FILE), { recursive: true });
     fs.writeFileSync(tmpPath, JSON.stringify(data));
     fs.renameSync(tmpPath, OLLAMA_STATUS_FILE);
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function ollamaHostForError(): string {
+  return process.env.OLLAMA_HOST || DEFAULT_OLLAMA_HOST;
 }
 
 const server = new McpServer({
@@ -42,30 +53,34 @@ server.tool(
     log('Listing models...');
     writeStatus('listing', 'Listing available models');
     try {
-      const res = await ollamaFetch('/api/tags');
-      if (!res.ok) {
+      const { models } = await getOllamaClient().list();
+      if (!models || models.length === 0) {
         return {
-          content: [{ type: 'text' as const, text: `Ollama API error: ${res.status} ${res.statusText}` }],
-          isError: true,
+          content: [
+            {
+              type: 'text' as const,
+              text: 'No models installed. Run `ollama pull <model>` on the host to install one.',
+            },
+          ],
         };
       }
-
-      const data = await res.json() as { models?: Array<{ name: string; size: number; modified_at: string }> };
-      const models = data.models || [];
-
-      if (models.length === 0) {
-        return { content: [{ type: 'text' as const, text: 'No models installed. Run `ollama pull <model>` on the host to install one.' }] };
-      }
-
       const list = models
-        .map(m => `- ${m.name} (${(m.size / 1e9).toFixed(1)}GB)`)
+        .map((m) => `- ${m.name} (${(m.size / 1e9).toFixed(1)}GB)`)
         .join('\n');
-
       log(`Found ${models.length} models`);
-      return { content: [{ type: 'text' as const, text: `Installed models:\n${list}` }] };
+      return {
+        content: [
+          { type: 'text' as const, text: `Installed models:\n${list}` },
+        ],
+      };
     } catch (err) {
       return {
-        content: [{ type: 'text' as const, text: `Failed to connect to Ollama at ${process.env.OLLAMA_HOST || DEFAULT_OLLAMA_HOST}: ${err instanceof Error ? err.message : String(err)}` }],
+        content: [
+          {
+            type: 'text' as const,
+            text: `Failed to connect to Ollama at ${ollamaHostForError()}: ${errorText(err)}`,
+          },
+        ],
         isError: true,
       };
     }
@@ -84,36 +99,20 @@ server.tool(
     log(`>>> Generating with ${args.model} (${args.prompt.length} chars)...`);
     writeStatus('generating', `Generating with ${args.model}`);
     try {
-      const body: Record<string, unknown> = {
+      const data = await getOllamaClient().generate({
         model: args.model,
         prompt: args.prompt,
+        system: args.system,
         stream: false,
-      };
-      if (args.system) {
-        body.system = args.system;
-      }
-
-      const res = await ollamaFetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
       });
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        return {
-          content: [{ type: 'text' as const, text: `Ollama error (${res.status}): ${errorText}` }],
-          isError: true,
-        };
-      }
-
-      const data = await res.json() as { response: string; total_duration?: number; eval_count?: number };
 
       let meta = '';
       if (data.total_duration) {
         const secs = (data.total_duration / 1e9).toFixed(1);
         meta = `\n\n[${args.model} | ${secs}s${data.eval_count ? ` | ${data.eval_count} tokens` : ''}]`;
-        log(`<<< Done: ${args.model} | ${secs}s | ${data.eval_count || '?'} tokens | ${data.response.length} chars`);
+        log(
+          `<<< Done: ${args.model} | ${secs}s | ${data.eval_count || '?'} tokens | ${data.response.length} chars`,
+        );
         writeStatus('done', `${args.model} | ${secs}s | ${data.eval_count || '?'} tokens`);
       } else {
         log(`<<< Done: ${args.model} | ${data.response.length} chars`);
@@ -123,7 +122,9 @@ server.tool(
       return { content: [{ type: 'text' as const, text: data.response + meta }] };
     } catch (err) {
       return {
-        content: [{ type: 'text' as const, text: `Failed to call Ollama: ${err instanceof Error ? err.message : String(err)}` }],
+        content: [
+          { type: 'text' as const, text: `Failed to call Ollama: ${errorText(err)}` },
+        ],
         isError: true,
       };
     }
@@ -142,25 +143,22 @@ if (OLLAMA_ADMIN_TOOLS) {
       log(`Pulling model: ${args.model}...`);
       writeStatus('pulling', `Pulling ${args.model}`);
       try {
-        const res = await ollamaFetch('/api/pull', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: args.model, stream: false }),
-        });
-        if (!res.ok) {
-          const errorText = await res.text();
-          return {
-            content: [{ type: 'text' as const, text: `Ollama error (${res.status}): ${errorText}` }],
-            isError: true,
-          };
-        }
-        const data = await res.json() as { status: string };
+        const data = await getOllamaClient().pull({ model: args.model, stream: false });
         log(`Pull complete: ${args.model} — ${data.status}`);
         writeStatus('done', `Pulled ${args.model}`);
-        return { content: [{ type: 'text' as const, text: `Pull complete: ${args.model} — ${data.status}` }] };
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Pull complete: ${args.model} — ${data.status}`,
+            },
+          ],
+        };
       } catch (err) {
         return {
-          content: [{ type: 'text' as const, text: `Failed to pull model: ${err instanceof Error ? err.message : String(err)}` }],
+          content: [
+            { type: 'text' as const, text: `Failed to pull model: ${errorText(err)}` },
+          ],
           isError: true,
         };
       }
@@ -177,24 +175,15 @@ if (OLLAMA_ADMIN_TOOLS) {
       log(`Deleting model: ${args.model}...`);
       writeStatus('deleting', `Deleting ${args.model}`);
       try {
-        const res = await ollamaFetch('/api/delete', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: args.model }),
-        });
-        if (!res.ok) {
-          const errorText = await res.text();
-          return {
-            content: [{ type: 'text' as const, text: `Ollama error (${res.status}): ${errorText}` }],
-            isError: true,
-          };
-        }
+        await getOllamaClient().delete({ model: args.model });
         log(`Deleted: ${args.model}`);
         writeStatus('done', `Deleted ${args.model}`);
         return { content: [{ type: 'text' as const, text: `Deleted model: ${args.model}` }] };
       } catch (err) {
         return {
-          content: [{ type: 'text' as const, text: `Failed to delete model: ${err instanceof Error ? err.message : String(err)}` }],
+          content: [
+            { type: 'text' as const, text: `Failed to delete model: ${errorText(err)}` },
+          ],
           isError: true,
         };
       }
@@ -210,23 +199,15 @@ if (OLLAMA_ADMIN_TOOLS) {
     async (args) => {
       log(`Showing model info: ${args.model}...`);
       try {
-        const res = await ollamaFetch('/api/show', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: args.model }),
-        });
-        if (!res.ok) {
-          const errorText = await res.text();
-          return {
-            content: [{ type: 'text' as const, text: `Ollama error (${res.status}): ${errorText}` }],
-            isError: true,
-          };
-        }
-        const data = await res.json();
-        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+        const data = await getOllamaClient().show({ model: args.model });
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+        };
       } catch (err) {
         return {
-          content: [{ type: 'text' as const, text: `Failed to show model info: ${err instanceof Error ? err.message : String(err)}` }],
+          content: [
+            { type: 'text' as const, text: `Failed to show model info: ${errorText(err)}` },
+          ],
           isError: true,
         };
       }
@@ -240,29 +221,31 @@ if (OLLAMA_ADMIN_TOOLS) {
     async () => {
       log('Listing running models...');
       try {
-        const res = await ollamaFetch('/api/ps');
-        if (!res.ok) {
+        const { models } = await getOllamaClient().ps();
+        if (!models || models.length === 0) {
           return {
-            content: [{ type: 'text' as const, text: `Ollama API error: ${res.status} ${res.statusText}` }],
-            isError: true,
+            content: [
+              { type: 'text' as const, text: 'No models currently loaded in memory.' },
+            ],
           };
         }
-        const data = await res.json() as { models?: Array<{ name: string; size: number; size_vram: number; processor: string; expires_at: string }> };
-        const models = data.models || [];
-        if (models.length === 0) {
-          return { content: [{ type: 'text' as const, text: 'No models currently loaded in memory.' }] };
-        }
         const list = models
-          .map(m => {
+          .map((m) => {
             const size = m.size_vram > 0 ? m.size_vram : m.size;
-            return `- ${m.name} (${(size / 1e9).toFixed(1)}GB ${m.processor}, unloads at ${m.expires_at})`;
+            return `- ${m.name} (${(size / 1e9).toFixed(1)}GB ${(m as { processor?: string }).processor ?? ''}, unloads at ${m.expires_at})`;
           })
           .join('\n');
         log(`${models.length} model(s) running`);
-        return { content: [{ type: 'text' as const, text: `Models loaded in memory:\n${list}` }] };
+        return {
+          content: [
+            { type: 'text' as const, text: `Models loaded in memory:\n${list}` },
+          ],
+        };
       } catch (err) {
         return {
-          content: [{ type: 'text' as const, text: `Failed to list running models: ${err instanceof Error ? err.message : String(err)}` }],
+          content: [
+            { type: 'text' as const, text: `Failed to list running models: ${errorText(err)}` },
+          ],
           isError: true,
         };
       }

@@ -22,6 +22,7 @@ function makeGroup(
 function makeAgent(
   trigger: string | undefined,
   containerConfig?: Agent['containerConfig'],
+  runtime?: Agent['runtime'],
 ): Agent {
   return {
     id: 'test/agent',
@@ -30,6 +31,7 @@ function makeAgent(
     displayName: 'Agent',
     trigger,
     containerConfig,
+    runtime,
   };
 }
 
@@ -142,5 +144,51 @@ describe('resolveTurnConstraints', () => {
       'WebSearch',
       'mcp__nanoclaw__delegate_to_agent',
     ]);
+  });
+
+  // --- Role-scoped allowedTools (#74 Phase 1) ---
+
+  it('narrows Ollama tool-capable specialists to a minimal tool set', () => {
+    const result = resolveTurnConstraints(
+      makeAgent('@scout', undefined, {
+        provider: 'ollama',
+        model: 'qwen3.5:4b',
+      }),
+      makeGroup(),
+    );
+    expect(result?.allowedTools?.sort()).toEqual([
+      'mcp__nanoclaw__send_message',
+      'mcp__nanoclaw__set_agent_status',
+    ]);
+  });
+
+  it('does not narrow Ollama tool-less specialists (no tools anyway)', () => {
+    const result = resolveTurnConstraints(
+      makeAgent('@scout', undefined, {
+        provider: 'ollama',
+        model: 'llama3.2:1b',
+      }),
+      makeGroup(),
+    );
+    expect(result?.allowedTools).toBeUndefined();
+  });
+
+  it('does not narrow Claude specialists (SDK handles wide tool sets)', () => {
+    const result = resolveTurnConstraints(
+      makeAgent('@scout', undefined, { provider: 'anthropic' }),
+      makeGroup(),
+    );
+    expect(result?.allowedTools).toBeUndefined();
+  });
+
+  it('does not narrow Ollama coordinators — they need delegation tools', () => {
+    const result = resolveTurnConstraints(
+      makeAgent(undefined, undefined, {
+        provider: 'ollama',
+        model: 'qwen3.5:4b',
+      }),
+      makeGroup(),
+    );
+    expect(result?.allowedTools).toBeUndefined();
   });
 });

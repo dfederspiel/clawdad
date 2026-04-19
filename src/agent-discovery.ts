@@ -9,6 +9,7 @@ import path from 'path';
 
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { getCapabilityProfile } from './model-capabilities.js';
 import { AgentRuntimeConfig } from './runtime-types.js';
 import { Agent, ContainerConfig, RegisteredGroup } from './types.js';
 
@@ -146,6 +147,13 @@ export function resolveAgentClaudeMdPath(agent: Agent): string {
 /**
  * Build a multi-agent context block that gets injected into prompts.
  * Tells the agent who it is, who else is in the group, and how handoffs work.
+ *
+ * Branches on the agent's capability profile: tool-capable runtimes
+ * (Claude) get the full MCP-based protocol; tool-less runtimes (Ollama
+ * today) get a text-only variant that describes the implicit protocol
+ * the host actually uses (final text → delivered as user message).
+ * Telling a tool-less agent about MCP tools is misinformation — it wastes
+ * tokens and produces narration-of-tool-calls instead of real responses.
  */
 export function buildMultiAgentContext(
   currentAgent: Agent,
@@ -159,6 +167,7 @@ export function buildMultiAgentContext(
     .join('\n');
 
   const isCoordinator = !currentAgent.trigger;
+  const profile = getCapabilityProfile(currentAgent.runtime);
 
   const lines = [
     `--- Multi-agent group context ---`,
@@ -169,36 +178,58 @@ export function buildMultiAgentContext(
   ];
 
   if (isCoordinator) {
-    lines.push(
-      `You are the coordinator. You handle general questions directly and delegate specialist work.`,
-      `For meaningful ongoing work, keep sidebar presence current: use mcp__nanoclaw__set_subtitle for the team-level summary, and use mcp__nanoclaw__set_agent_status for your own row if you have one.`,
-      `Set concise, high-signal statuses when work starts ("Reviewing PRs", "Waiting on Scout") and clear them when the work is done.`,
-      `To delegate, use the mcp__nanoclaw__delegate_to_agent tool:`,
-      `  delegate_to_agent({ agent: "${others[0]?.name || 'agent'}", message: "Specific instructions...", completion_policy: "final_response" })`,
-      `Use completion_policy: "final_response" by default. Only use "retrigger_coordinator" when you specifically need a follow-up turn to combine or interpret specialist results.`,
-      `The target agent runs after your turn. Their user-visible output may be suppressed if newer context arrives before it is delivered.`,
-      `Even when a specialist's user-visible output is suppressed, the system records that completion for you in the conversation so you can decide whether to reuse it, summarize it, or move on.`,
-      `Avoid over-narrating future delegation steps to the user. If the conversation changes direction, treat older delegated work as possibly superseded and respond to the newest context.`,
-      `Be specific in your delegation message — tell the agent exactly what to do and what context it needs.`,
-      `Artifacts should be written under a dedicated subdirectory of /workspace/group/ (for example /workspace/group/artifacts/ or /workspace/group/uploads/) so all agents can access them without cluttering the group root.`,
-      `If browser automation or visual review matters, prefer surfacing a screenshot with mcp__nanoclaw__publish_browser_snapshot or mcp__nanoclaw__publish_media instead of only describing the page in text.`,
-      `If the user explicitly asks to see the page or asks "what do you see?", treat that as a strong cue to publish a browser snapshot.`,
-      `If delegated browser work hits a blocker like a login wall, captcha, modal trap, missing control, or broken layout, publish one screenshot with a short caption before asking for guidance.`,
-      ``,
-      `Silent chaining: when a specialist just finished and you are simply passing the baton to the next one in a sequence, delegate without a visible message. Only respond visibly when synthesizing results, making a decision, or all specialists in the current batch have reported back. Do not narrate each handoff.`,
-    );
+    if (profile.receivesMcpTools) {
+      lines.push(
+        `You are the coordinator. You handle general questions directly and delegate specialist work.`,
+        `For meaningful ongoing work, keep sidebar presence current: use mcp__nanoclaw__set_subtitle for the team-level summary, and use mcp__nanoclaw__set_agent_status for your own row if you have one.`,
+        `Set concise, high-signal statuses when work starts ("Reviewing PRs", "Waiting on Scout") and clear them when the work is done.`,
+        `To delegate, use the mcp__nanoclaw__delegate_to_agent tool:`,
+        `  delegate_to_agent({ agent: "${others[0]?.name || 'agent'}", message: "Specific instructions...", completion_policy: "final_response" })`,
+        `Use completion_policy: "final_response" by default. Only use "retrigger_coordinator" when you specifically need a follow-up turn to combine or interpret specialist results.`,
+        `The target agent runs after your turn. Their user-visible output may be suppressed if newer context arrives before it is delivered.`,
+        `Even when a specialist's user-visible output is suppressed, the system records that completion for you in the conversation so you can decide whether to reuse it, summarize it, or move on.`,
+        `Avoid over-narrating future delegation steps to the user. If the conversation changes direction, treat older delegated work as possibly superseded and respond to the newest context.`,
+        `Be specific in your delegation message — tell the agent exactly what to do and what context it needs.`,
+        `Artifacts should be written under a dedicated subdirectory of /workspace/group/ (for example /workspace/group/artifacts/ or /workspace/group/uploads/) so all agents can access them without cluttering the group root.`,
+        `If browser automation or visual review matters, prefer surfacing a screenshot with mcp__nanoclaw__publish_browser_snapshot or mcp__nanoclaw__publish_media instead of only describing the page in text.`,
+        `If the user explicitly asks to see the page or asks "what do you see?", treat that as a strong cue to publish a browser snapshot.`,
+        `If delegated browser work hits a blocker like a login wall, captcha, modal trap, missing control, or broken layout, publish one screenshot with a short caption before asking for guidance.`,
+        ``,
+        `Silent chaining: when a specialist just finished and you are simply passing the baton to the next one in a sequence, delegate without a visible message. Only respond visibly when synthesizing results, making a decision, or all specialists in the current batch have reported back. Do not narrate each handoff.`,
+      );
+    } else {
+      // Tool-less coordinator: can't actually delegate. Be honest about the
+      // limitation so the model doesn't produce narration-of-delegation.
+      lines.push(
+        `You are the coordinator. Your runtime does not have tool-calling access, so you cannot delegate work programmatically — answer directly from your own knowledge.`,
+        `If a question is clearly within another agent's specialty, say so in your response; the user can re-route by @-mentioning that agent explicitly.`,
+        `Respond in plain text. Whatever you write will be delivered to the user as your message.`,
+      );
+    }
   } else {
-    lines.push(
-      `You are a specialist. Focus on your role and respond directly.`,
-      `For meaningful ongoing work, set your own sidebar status with mcp__nanoclaw__set_agent_status using a short phrase like "Reviewing flags" or "Drafting summary", then clear it when you are done.`,
-      `If work falls outside your expertise, say so in your response — the coordinator will handle routing.`,
-      `Your response may be superseded for user delivery if newer context arrives first. Complete the assigned work cleanly anyway; the coordinator will still see that you finished.`,
-      `Do NOT try to act as other agents or delegate work yourself.`,
-      `Write any artifacts under a dedicated subdirectory of /workspace/group/ (for example /workspace/group/artifacts/ or /workspace/group/uploads/) so other agents can access them without cluttering the group root.`,
-      `If visual context would help the user, publish a screenshot or image rather than only describing it in text.`,
-      `If the user explicitly asks to see the page or asks "what do you see?", prefer publishing a browser snapshot.`,
-      `If browser work hits a blocker like a login wall, captcha, modal trap, missing control, or broken layout, publish one screenshot with a short caption before asking for help.`,
-    );
+    // Specialist.
+    if (profile.receivesMcpTools) {
+      lines.push(
+        `You are a specialist. Focus on your role and respond directly.`,
+        `For meaningful ongoing work, set your own sidebar status with mcp__nanoclaw__set_agent_status using a short phrase like "Reviewing flags" or "Drafting summary", then clear it when you are done.`,
+        `If work falls outside your expertise, say so in your response — the coordinator will handle routing.`,
+        `Your response may be superseded for user delivery if newer context arrives first. Complete the assigned work cleanly anyway; the coordinator will still see that you finished.`,
+        `Do NOT try to act as other agents or delegate work yourself.`,
+        `Write any artifacts under a dedicated subdirectory of /workspace/group/ (for example /workspace/group/artifacts/ or /workspace/group/uploads/) so other agents can access them without cluttering the group root.`,
+        `If visual context would help the user, publish a screenshot or image rather than only describing it in text.`,
+        `If the user explicitly asks to see the page or asks "what do you see?", prefer publishing a browser snapshot.`,
+        `If browser work hits a blocker like a login wall, captcha, modal trap, missing control, or broken layout, publish one screenshot with a short caption before asking for help.`,
+      );
+    } else {
+      // Tool-less specialist: the whole reply text becomes the user-visible
+      // message via the host's text-path fallback. No MCP tools, no status.
+      lines.push(
+        `You are a specialist. Focus on your role and respond directly.`,
+        `Respond in plain text — your entire reply will be delivered to the user as your message. You do not have tools or status controls, so keep the response self-contained.`,
+        `If a request falls outside your expertise, say so briefly; the coordinator will handle routing.`,
+        `Do not try to act as other agents or delegate work yourself.`,
+      );
+    }
   }
 
   lines.push(`--- End multi-agent context ---`, ``);

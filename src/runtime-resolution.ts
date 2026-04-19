@@ -3,10 +3,25 @@ import path from 'path';
 
 import { GROUPS_DIR } from './config.js';
 import { resolveGroupFolderPath } from './group-folder.js';
+import { getCapabilityProfile } from './model-capabilities.js';
 import { AgentRuntimeConfig, RuntimeTurnConstraints } from './runtime-types.js';
 import { Agent, ContainerConfig, RegisteredGroup } from './types.js';
 
 const SPECIALIST_AUTO_BLOCKED_TOOL = 'mcp__nanoclaw__delegate_to_agent';
+
+/**
+ * Minimal tool set for specialists on non-SDK runtimes (Ollama today).
+ * Small models hallucinate when given many simultaneous tools; narrowing
+ * to these two gives an unambiguous signal about what they can do.
+ *
+ * Keep in sync with #74's Phase 1 rationale. Claude specialists are not
+ * narrowed today — their SDK handles 18+ tools reliably and existing
+ * workflows depend on the wider set.
+ */
+const NON_SDK_SPECIALIST_ALLOWED_TOOLS = [
+  'mcp__nanoclaw__send_message',
+  'mcp__nanoclaw__set_agent_status',
+];
 
 export type PartialRuntimeConfig = Partial<AgentRuntimeConfig>;
 
@@ -143,14 +158,38 @@ export function resolveTurnConstraints(
   for (const tool of agentConfig?.disallowedTools ?? []) disallowed.add(tool);
 
   // Specialist = agent with a trigger (non-coordinator). Auto-block delegation.
-  if (agent?.trigger) {
+  const isSpecialist = Boolean(agent?.trigger);
+  if (isSpecialist) {
     disallowed.add(SPECIALIST_AUTO_BLOCKED_TOOL);
   }
 
-  if (maxTurns === undefined && disallowed.size === 0) return undefined;
+  // Role-scoped tool narrowing for non-SDK runtimes (Ollama today).
+  // Small tool-capable models get confused when handed 18 MCP tools at
+  // once — seen live with qwen3.5:4b hallucinating a tool name in #73.
+  // Narrowing specialists to just send_message + set_agent_status gives
+  // an unambiguous signal. Claude specialists are unchanged because the
+  // SDK handles wide tool sets reliably and existing workflows depend
+  // on them.
+  let allowedTools: string[] | undefined;
+  if (isSpecialist && agent) {
+    const profile = getCapabilityProfile(agent.runtime);
+    const isNonSdkRuntime = agent.runtime?.provider === 'ollama';
+    if (isNonSdkRuntime && profile.receivesMcpTools) {
+      allowedTools = [...NON_SDK_SPECIALIST_ALLOWED_TOOLS];
+    }
+  }
+
+  if (
+    maxTurns === undefined &&
+    disallowed.size === 0 &&
+    allowedTools === undefined
+  ) {
+    return undefined;
+  }
 
   return {
     ...(maxTurns !== undefined ? { maxTurns } : {}),
     ...(disallowed.size > 0 ? { disallowedTools: [...disallowed] } : {}),
+    ...(allowedTools !== undefined ? { allowedTools } : {}),
   };
 }

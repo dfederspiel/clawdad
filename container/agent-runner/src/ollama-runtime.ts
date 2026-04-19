@@ -1,46 +1,64 @@
 /**
  * Ollama runtime adapter — runs agents entirely on local Ollama models.
  *
- * Phase 1: Text-only, streaming, no tool use, no session resume.
- * Uses Ollama's /api/chat endpoint with message history.
+ * Two execution paths:
+ *
+ *   1. Text-only (default): single non-streaming-friendly request, whole
+ *      reply is delivered as the user-visible message via the host's
+ *      text fallback. Used for small models (llama3.2:1b, etc.) that
+ *      can't reliably call tools.
+ *
+ *   2. Tool-capable: spawns the nanoclaw MCP server through ToolBridge,
+ *      lists tools, passes them to Ollama's /api/chat, and runs an
+ *      agentic loop — detect tool_calls → execute via bridge → feed
+ *      back as role:tool messages → loop until the model produces
+ *      plain content or a maxTurns cap is hit. Used for qwen3.5:4b
+ *      today (see ollamaModelSupportsTools for the allowlist).
  */
 
 import fs from 'fs';
-import { ollamaFetch } from './ollama-fetch.js';
+import type { Message, Tool, ToolCall } from 'ollama';
+
+import { getOllamaClient } from './ollama-client.js';
 import type {
   RuntimeEvent,
   RuntimeTurnInput,
   RuntimeUsageData,
 } from './runtime-interface.js';
+import {
+  ToolBridge,
+  type McpToolDescriptor,
+  type ProviderToolSpec,
+} from './tool-bridge.js';
 
-interface OllamaMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+// Allowlist of Ollama models for which we pass MCP tools. Starts narrow:
+// qwen3.5:4b is our baseline that we've verified in development. Wider
+// support comes as we confirm each model's reliability. Too-small models
+// (llama3.2:1b, llama3.2:3b) stay off this list even though Ollama's
+// /api/show reports tools: true — they produce narration of tool calls
+// rather than real invocations.
+const TOOL_CAPABLE_OLLAMA_MODELS = new Set<string>([
+  'qwen3.5:4b',
+]);
+
+export function ollamaModelSupportsTools(model: string): boolean {
+  return TOOL_CAPABLE_OLLAMA_MODELS.has(model);
 }
 
-interface OllamaStreamChunk {
-  message?: { role: string; content: string };
-  done: boolean;
-  total_duration?: number;
-  eval_count?: number;
-  prompt_eval_count?: number;
-  eval_duration?: number;
-  prompt_eval_duration?: number;
-}
+const MAX_TOOL_TURNS = 10;
 
 /**
  * Parse the XML-formatted conversation history produced by the host's
  * formatMessages() into individual Ollama chat messages. Bot messages
  * become assistant role, everything else becomes user role.
+ *
+ * Tracked for removal in #46 — host should pass structured messages so
+ * this reverse-engineering step goes away.
  */
-function parseXmlMessages(
-  text: string,
-  assistantName?: string,
-): OllamaMessage[] {
-  // Match <message sender="..." time="...">content</message>
+function parseXmlMessages(text: string, assistantName?: string): Message[] {
   const msgRegex =
     /<message\s+sender="([^"]*)"\s+time="[^"]*">([^<]*(?:<(?!\/message>)[^<]*)*)<\/message>/g;
-  const results: OllamaMessage[] = [];
+  const results: Message[] = [];
   let match;
   while ((match = msgRegex.exec(text)) !== null) {
     const sender = match[1];
@@ -51,8 +69,6 @@ function parseXmlMessages(
       .replace(/&quot;/g, '"')
       .trim();
     if (!content) continue;
-    // Messages from the agent's own display name are assistant messages;
-    // everything else is user messages.
     const isBot =
       (assistantName && sender === assistantName) ||
       /^(Andy|Assistant|Bot)$/i.test(sender);
@@ -65,15 +81,64 @@ function parseXmlMessages(
 }
 
 interface ContainerInputLike {
+  chatJid: string;
+  groupFolder: string;
   isMain: boolean;
+  agentName?: string;
+  agentId?: string;
+  runBatchId?: string;
+  canDelegate?: boolean;
+  mainChatJid?: string;
   systemContext?: string;
   assistantName?: string;
+  achievements?: unknown[];
+}
+
+/**
+ * Env vars the nanoclaw MCP server expects — mirrors what claude-runtime
+ * passes so the same MCP server works for either adapter.
+ */
+function mcpServerEnv(
+  containerInput: ContainerInputLike,
+  sessionId: string | undefined,
+): Record<string, string> {
+  return {
+    NANOCLAW_CHAT_JID: containerInput.chatJid,
+    NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+    NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+    NANOCLAW_AGENT_NAME: containerInput.agentName || 'default',
+    NANOCLAW_AGENT_ID: containerInput.agentId || '',
+    NANOCLAW_RUN_BATCH_ID: containerInput.runBatchId || '',
+    NANOCLAW_SESSION_ID: sessionId || '',
+    NANOCLAW_CAN_DELEGATE: containerInput.canDelegate ? '1' : '0',
+    NANOCLAW_MAIN_JID: containerInput.mainChatJid || '',
+    NANOCLAW_ACHIEVEMENTS: JSON.stringify(containerInput.achievements || []),
+  };
+}
+
+function specToOllamaTool(spec: ProviderToolSpec): Tool {
+  return {
+    type: 'function',
+    function: {
+      name: spec.name,
+      description: spec.description,
+      parameters: spec.parameters as Tool['function']['parameters'],
+    },
+  };
 }
 
 export class OllamaRuntime {
   constructor(
     private readonly options: {
       containerInput: ContainerInputLike;
+      /**
+       * Path to the nanoclaw MCP stdio server. Required for tool-capable
+       * Ollama models; if absent or the model isn't in the allowlist we
+       * fall back to the text-only path.
+       */
+      mcpServerPath?: string;
+      /** Session id propagated to the MCP server env. */
+      sessionId?: string;
       log?: (message: string) => void;
     },
   ) {}
@@ -85,7 +150,8 @@ export class OllamaRuntime {
         type: 'result',
         status: 'error',
         result: null,
-        error: 'Ollama runtime requires a model to be specified in agent.json (e.g. "llama3.2")',
+        error:
+          'Ollama runtime requires a model to be specified in agent.json (e.g. "llama3.2")',
       };
       return;
     }
@@ -93,13 +159,48 @@ export class OllamaRuntime {
     const log = this.options.log || (() => {});
     const startTime = Date.now();
 
-    // Build Ollama message array
-    const messages: OllamaMessage[] = [];
+    const baseMessages = await this.buildBaseMessages(input);
+    const temperature = input.runtime.temperature;
+    const maxTokens = input.runtime.maxTokens;
+    const options: Record<string, unknown> = {};
+    if (temperature !== undefined) options.temperature = temperature;
+    if (maxTokens !== undefined) options.num_predict = maxTokens;
+    const chatOptions = Object.keys(options).length > 0 ? options : undefined;
 
-    // System prompt for Ollama: only load agent-specific identity and
-    // multi-agent context. Skip global and group CLAUDE.md — those contain
-    // Claude-specific infrastructure (MCP tools, credential proxy, api.sh)
-    // that confuses non-Claude models.
+    const toolsEnabled =
+      ollamaModelSupportsTools(model) && Boolean(this.options.mcpServerPath);
+    if (toolsEnabled) {
+      yield* this.runToolLoop(
+        model,
+        baseMessages,
+        chatOptions,
+        input,
+        startTime,
+        log,
+      );
+    } else {
+      yield* this.runTextOnly(
+        model,
+        baseMessages,
+        chatOptions,
+        startTime,
+        log,
+      );
+    }
+  }
+
+  /**
+   * Build the system prompt + user/assistant history, parsing XML as
+   * needed. Shared between text-only and tool-capable paths.
+   */
+  private async buildBaseMessages(
+    input: RuntimeTurnInput,
+  ): Promise<Message[]> {
+    const messages: Message[] = [];
+
+    // System prompt: agent identity + platform-injected multi-agent
+    // context. Skip global and group CLAUDE.md — those carry Claude-
+    // specific infrastructure references that confuse non-Claude models.
     const systemParts: string[] = [];
     const agentClaudeMdPath = '/workspace/agent/CLAUDE.md';
     if (fs.existsSync(agentClaudeMdPath)) {
@@ -108,59 +209,42 @@ export class OllamaRuntime {
     if (this.options.containerInput.systemContext) {
       systemParts.push(this.options.containerInput.systemContext);
     }
-
     if (systemParts.length > 0) {
       messages.push({ role: 'system', content: systemParts.join('\n\n') });
     }
 
-    // Convert input messages — the host wraps conversation history in XML
-    // (<context/><messages><message sender="..." time="...">text</message>...</messages>)
-    // which confuses non-Claude models. Parse out individual messages and
-    // convert to proper Ollama chat format.
     for (const msg of input.messages) {
       const textParts = msg.content
         .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
         .map((p) => p.text);
       const fullText = textParts.join('\n');
-
-      // Try to parse XML-formatted conversation history
       const xmlMessages = parseXmlMessages(
         fullText,
         this.options.containerInput.assistantName,
       );
       if (xmlMessages.length > 0) {
-        for (const xm of xmlMessages) {
-          messages.push(xm);
-        }
+        for (const xm of xmlMessages) messages.push(xm);
       } else if (fullText.trim()) {
         messages.push({ role: msg.role, content: fullText });
       }
     }
 
-    const temperature = input.runtime.temperature;
-    const maxTokens = input.runtime.maxTokens;
+    return messages;
+  }
 
-    const body: Record<string, unknown> = {
-      model,
-      messages,
-      stream: true,
-    };
-    if (temperature !== undefined || maxTokens !== undefined) {
-      body.options = {
-        ...(temperature !== undefined ? { temperature } : {}),
-        ...(maxTokens !== undefined ? { num_predict: maxTokens } : {}),
-      };
-    }
+  // -- Text-only path ---------------------------------------------------
 
-    log(`Ollama: calling ${model} with ${messages.length} messages`);
-
-    let response: Response;
+  private async *runTextOnly(
+    model: string,
+    messages: Message[],
+    options: Record<string, unknown> | undefined,
+    startTime: number,
+    log: (m: string) => void,
+  ): AsyncIterable<RuntimeEvent> {
+    const client = getOllamaClient();
+    let stream;
     try {
-      response = await ollamaFetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      stream = await client.chat({ model, messages, stream: true, options });
     } catch (err) {
       yield {
         type: 'result',
@@ -171,100 +255,226 @@ export class OllamaRuntime {
       return;
     }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      yield {
-        type: 'result',
-        status: 'error',
-        result: null,
-        error: `Ollama error (${response.status}): ${errorText}`,
-      };
-      return;
-    }
+    log(`Ollama: calling ${model} with ${messages.length} messages (text-only)`);
 
-    // Stream NDJSON response
-    const reader = response.body?.getReader();
-    if (!reader) {
-      yield {
-        type: 'result',
-        status: 'error',
-        result: null,
-        error: 'Ollama returned no response body',
-      };
-      return;
-    }
-
-    const decoder = new TextDecoder();
     let fullText = '';
-    let buffer = '';
-    let finalChunk: OllamaStreamChunk | undefined;
-    let firstTokenTime: number | undefined;
+    let finalChunk:
+      | {
+          total_duration?: number;
+          eval_count?: number;
+          prompt_eval_count?: number;
+        }
+      | undefined;
 
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          let chunk: OllamaStreamChunk;
-          try {
-            chunk = JSON.parse(line);
-          } catch {
-            continue;
-          }
-
-          if (chunk.message?.content) {
-            if (!firstTokenTime) firstTokenTime = Date.now();
-            const token = chunk.message.content;
-            fullText += token;
-            yield {
-              type: 'text',
-              text: token,
-              timestamp: new Date().toISOString(),
-            };
-          }
-
-          if (chunk.done) {
-            finalChunk = chunk;
-          }
-        }
+      for await (const chunk of stream) {
+        if (chunk.message?.content) fullText += chunk.message.content;
+        if (chunk.done) finalChunk = chunk;
       }
-    } finally {
-      reader.releaseLock();
+    } catch (err) {
+      yield {
+        type: 'result',
+        status: 'error',
+        result: null,
+        error: `Ollama stream error: ${err instanceof Error ? err.message : String(err)}`,
+      };
+      return;
     }
 
-    const durationMs = Date.now() - startTime;
-    const usage: RuntimeUsageData = {
-      inputTokens: finalChunk?.prompt_eval_count || 0,
-      outputTokens: finalChunk?.eval_count || 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      costUsd: 0, // local models are free
-      durationMs,
-      durationApiMs: finalChunk?.total_duration
-        ? finalChunk.total_duration / 1e6
-        : durationMs,
+    yield buildResultEvent({
+      model,
+      startTime,
+      log,
+      fullText,
+      finalChunk,
       numTurns: 1,
-    };
+      deliveredViaTools: false,
+    });
+  }
+
+  // -- Tool-capable path -----------------------------------------------
+
+  private async *runToolLoop(
+    model: string,
+    seedMessages: Message[],
+    options: Record<string, unknown> | undefined,
+    input: RuntimeTurnInput,
+    startTime: number,
+    log: (m: string) => void,
+  ): AsyncIterable<RuntimeEvent> {
+    const mcpServerPath = this.options.mcpServerPath!;
+    const client = getOllamaClient();
+    const bridge = new ToolBridge({
+      servers: [
+        {
+          name: 'nanoclaw',
+          command: 'node',
+          args: [mcpServerPath],
+          env: mcpServerEnv(this.options.containerInput, this.options.sessionId),
+        },
+      ],
+    });
+
+    let toolsForOllama: Tool[];
+    let toolDescriptors: McpToolDescriptor[];
+    try {
+      await bridge.connect();
+      toolDescriptors = await bridge.listTools(input.constraints?.disallowedTools);
+      // When the host passed an allowedTools list (role-scoped narrowing —
+      // see runtime-resolution.resolveTurnConstraints), filter to only
+      // those. Small tool-capable models hallucinate when given many
+      // simultaneous tools; narrow scopes stop that.
+      const allowSet = input.constraints?.allowedTools
+        ? new Set(input.constraints.allowedTools)
+        : null;
+      const narrowed = allowSet
+        ? toolDescriptors.filter((d) => allowSet.has(d.qualifiedName))
+        : toolDescriptors;
+      toolsForOllama = bridge.toProviderSpecs(narrowed).map(specToOllamaTool);
+    } catch (err) {
+      await bridge.close();
+      yield {
+        type: 'result',
+        status: 'error',
+        result: null,
+        error: `Failed to initialise ToolBridge for ${model}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+      return;
+    }
 
     log(
-      `Ollama: ${model} done — ${usage.outputTokens} tokens, ${(durationMs / 1000).toFixed(1)}s`,
+      `Ollama: calling ${model} with ${seedMessages.length} messages, ${toolsForOllama.length} tools (tool-capable${
+        input.constraints?.allowedTools ? ', narrowed' : ''
+      })`,
     );
 
-    yield {
-      type: 'result',
-      status: 'success',
-      result: fullText || null,
-      usage,
-      textsAlreadyStreamed: fullText ? 1 : 0,
-      // Ollama is stateless — no session resume
-      newSessionId: undefined,
-      resumeAt: undefined,
-    };
+    const messages: Message[] = [...seedMessages];
+    let fullText = '';
+    let deliveredViaTools = false;
+    let finalChunk:
+      | {
+          total_duration?: number;
+          eval_count?: number;
+          prompt_eval_count?: number;
+        }
+      | undefined;
+    let turns = 0;
+
+    try {
+      for (turns = 0; turns < MAX_TOOL_TURNS; turns++) {
+        // Tool loop doesn't stream — the response object exposes
+        // tool_calls directly and we need the full message before we can
+        // decide whether to keep looping.
+        const response = await client.chat({
+          model,
+          messages,
+          stream: false,
+          options,
+          tools: toolsForOllama,
+        });
+        finalChunk = response;
+
+        const toolCalls = response.message?.tool_calls as
+          | ToolCall[]
+          | undefined;
+        if (toolCalls && toolCalls.length > 0) {
+          // Append the assistant's tool-call message verbatim so the model
+          // can reason about its own prior call on the next turn.
+          messages.push({
+            role: 'assistant',
+            content: response.message.content ?? '',
+            tool_calls: toolCalls,
+          });
+          for (const call of toolCalls) {
+            const name = call.function.name;
+            const args = call.function.arguments ?? {};
+            log(`Ollama tool_call: ${name}`);
+            const result = await bridge.executeToolCall(name, args);
+            messages.push({
+              role: 'tool',
+              content: result.content,
+              tool_name: name,
+            });
+            if (!result.isError) deliveredViaTools = true;
+          }
+          continue;
+        }
+
+        // No tool calls → the model produced a final response.
+        if (response.message?.content) fullText = response.message.content;
+        break;
+      }
+
+      if (turns >= MAX_TOOL_TURNS) {
+        log(
+          `Ollama: ${model} hit max tool turns (${MAX_TOOL_TURNS}); returning last content`,
+        );
+      }
+    } catch (err) {
+      await bridge.close();
+      yield {
+        type: 'result',
+        status: 'error',
+        result: null,
+        error: `Ollama tool loop error: ${err instanceof Error ? err.message : String(err)}`,
+      };
+      return;
+    }
+
+    await bridge.close();
+
+    yield buildResultEvent({
+      model,
+      startTime,
+      log,
+      fullText,
+      finalChunk,
+      numTurns: Math.max(1, turns + 1),
+      deliveredViaTools,
+    });
   }
+}
+
+function buildResultEvent(params: {
+  model: string;
+  startTime: number;
+  log: (m: string) => void;
+  fullText: string;
+  finalChunk?: {
+    total_duration?: number;
+    eval_count?: number;
+    prompt_eval_count?: number;
+  };
+  numTurns: number;
+  deliveredViaTools: boolean;
+}): RuntimeEvent {
+  const { model, startTime, log, fullText, finalChunk, numTurns } = params;
+  const durationMs = Date.now() - startTime;
+  const usage: RuntimeUsageData = {
+    inputTokens: finalChunk?.prompt_eval_count || 0,
+    outputTokens: finalChunk?.eval_count || 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    costUsd: 0,
+    durationMs,
+    durationApiMs: finalChunk?.total_duration
+      ? finalChunk.total_duration / 1e6
+      : durationMs,
+    numTurns,
+  };
+  log(
+    `Ollama: ${model} done — ${usage.outputTokens} tokens, ${(durationMs / 1000).toFixed(1)}s, ${numTurns} turn(s)`,
+  );
+  return {
+    type: 'result',
+    status: 'success',
+    // If the agent only produced tool output, leave result null so the host
+    // doesn't try to redeliver it as a separate chat message — the tool
+    // (send_message) already did that.
+    result: fullText || null,
+    usage,
+    textsAlreadyStreamed: params.deliveredViaTools && !fullText ? 1 : 0,
+    newSessionId: undefined,
+    resumeAt: undefined,
+  };
 }
