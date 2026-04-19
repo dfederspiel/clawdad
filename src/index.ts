@@ -137,6 +137,7 @@ import { startSchedulerLoop } from './task-scheduler.js';
 import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import type { MediaArtifact } from './types.js';
 import { logger } from './logger.js';
+import { getCapabilityProfile } from './model-capabilities.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -3000,7 +3001,12 @@ async function main(): Promise<void> {
       // delegations. The queue re-triggers the coordinator automatically
       // when all delegations for a group complete.
       const savedConfig = group.containerConfig;
-      const DELEGATION_TIMEOUT = 120_000; // 2 minutes
+      // Specialist's capability profile dictates how long the host will
+      // wait — fast cloud APIs (Claude) fail fast, slow local runtimes
+      // (CPU-only Ollama) get headroom. See src/model-capabilities.ts.
+      const delegationTimeout = getCapabilityProfile(
+        agent.runtime,
+      ).delegationTimeoutMs;
       const taskId = `delegation-${agent.name}-${Date.now()}`;
       queue.enqueueDelegation(
         chatJid,
@@ -3013,7 +3019,7 @@ async function main(): Promise<void> {
             ...savedConfig,
             timeout: Math.min(
               savedConfig?.timeout || Infinity,
-              DELEGATION_TIMEOUT,
+              delegationTimeout,
             ),
           };
           // Build prompt at execution time (not enqueue time) so conversation
