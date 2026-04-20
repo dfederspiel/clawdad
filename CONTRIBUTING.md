@@ -108,6 +108,9 @@ Instructions here...
 
 **Rules:**
 - Keep SKILL.md **under 500 lines** — move detail to separate reference files
+- Prefer **under 150 lines** — Claude Code compacts each skill past ~5K tokens (~150 lines) during long conversations. Content past that point may be silently truncated. `scripts/validate-skills.mjs` emits non-blocking warnings over this threshold; run `/context-audit` to inspect what's at risk for a given group.
+- **Critical rules belong in a CLAUDE.md layer**, not only in a skill. CLAUDE.md files are always loaded in full — rules an agent MUST follow (output formats, safety invariants, protocol requirements) should live there so compaction can't drop them. Use skills for reference material, workflows, and optional guidance.
+- Put the non-negotiable rules **at the top** of the SKILL.md, detail and examples lower down. If compaction hits, the high-value content survives.
 - `name`: lowercase, alphanumeric + hyphens, max 64 chars
 - `description`: required — Claude uses this to decide when to invoke the skill
 - Put code in separate files, not inline in the markdown
