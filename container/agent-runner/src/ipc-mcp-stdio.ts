@@ -16,6 +16,10 @@ const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
+// Keep in sync with MIN_DELEGATION_MESSAGE_LENGTH in src/delegation-validation.ts.
+// Container is a separate TS project so we can't import from the host code.
+const MIN_DELEGATION_MESSAGE_LENGTH = 40;
+
 // Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
@@ -866,6 +870,21 @@ Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the thre
       completion_policy: z.enum(['final_response', 'retrigger_coordinator']).default('final_response').describe('What happens after the specialist responds. "final_response" (default): the specialist\'s output is the final answer, you do NOT get a follow-up turn. "retrigger_coordinator": you get a follow-up turn to review and synthesize. Use retrigger_coordinator only when delegating to multiple agents and you need to combine their outputs.'),
     },
     async (args) => {
+      // Platform-level validation (#48): specialists see only this message,
+      // not the coordinator's conversation. Reject obviously insufficient
+      // payloads so the coordinator can self-correct instead of wasting a
+      // ~30-60s specialist container startup on an empty prompt.
+      const trimmedMessage = (args.message ?? '').trim();
+      if (trimmedMessage.length < MIN_DELEGATION_MESSAGE_LENGTH) {
+        return {
+          isError: true,
+          content: [{
+            type: 'text' as const,
+            text: `Delegation rejected: message is too short (${trimmedMessage.length} chars, minimum ${MIN_DELEGATION_MESSAGE_LENGTH}). The target agent runs in its own container and sees ONLY this message — they do not have your conversation history. Retry the tool call with: what you specifically need, any context (ticket IDs, paths, prior findings), and the expected output format.`,
+          }],
+        };
+      }
+
       const DELEGATIONS_DIR = path.join(IPC_DIR, 'delegations');
       writeIpcFile(DELEGATIONS_DIR, {
         type: 'delegate',
