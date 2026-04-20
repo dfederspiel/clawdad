@@ -184,12 +184,26 @@ export function buildMultiAgentContext(
 
   if (isCoordinator) {
     if (profile.receivesMcpTools) {
+      // Only specialists (agents with a trigger) are valid delegation targets.
+      // Enumerate every specialist with a concrete example so the model pattern-
+      // matches against the full topology rather than extrapolating from one.
+      const specialists = others.filter((a) => !!a.trigger);
+      const delegationExamples =
+        specialists.length > 0
+          ? specialists
+              .map(
+                (a) =>
+                  `  delegate_to_agent({ agent: "${a.name}", message: "Specific instructions for ${a.displayName}...", completion_policy: "final_response" })`,
+              )
+              .join('\n')
+          : `  delegate_to_agent({ agent: "agent-name", message: "Specific instructions...", completion_policy: "final_response" })`;
+
       lines.push(
         `You are the coordinator. You handle general questions directly and delegate specialist work.`,
         `For meaningful ongoing work, keep sidebar presence current: use mcp__nanoclaw__set_subtitle for the team-level summary, and use mcp__nanoclaw__set_agent_status for your own row if you have one.`,
         `Set concise, high-signal statuses when work starts ("Reviewing PRs", "Waiting on Scout") and clear them when the work is done.`,
-        `To delegate, use the mcp__nanoclaw__delegate_to_agent tool:`,
-        `  delegate_to_agent({ agent: "${others[0]?.name || 'agent'}", message: "Specific instructions...", completion_policy: "final_response" })`,
+        `To delegate, use the mcp__nanoclaw__delegate_to_agent tool. Valid targets and example invocations:`,
+        delegationExamples,
         `Use completion_policy: "final_response" by default. Only use "retrigger_coordinator" when you specifically need a follow-up turn to combine or interpret specialist results.`,
         `The target agent runs after your turn. Their user-visible output may be suppressed if newer context arrives before it is delivered.`,
         `Even when a specialist's user-visible output is suppressed, the system records that completion for you in the conversation so you can decide whether to reuse it, summarize it, or move on.`,
@@ -201,6 +215,11 @@ export function buildMultiAgentContext(
         `If delegated browser work hits a blocker like a login wall, captcha, modal trap, missing control, or broken layout, publish one screenshot with a short caption before asking for guidance.`,
         ``,
         `Silent chaining: when a specialist just finished and you are simply passing the baton to the next one in a sequence, delegate without a visible message. Only respond visibly when synthesizing results, making a decision, or all specialists in the current batch have reported back. Do not narrate each handoff.`,
+        ``,
+        // Self-check sits at the bottom of the context block so it lands closest
+        // to the user turn boundary — the highest-attention position in a
+        // system-prompt-appended context. See #65.
+        `Before you finalize your response: if any part of your reply describes handing work off ("I'll ask X to look at this", "Let me delegate to X"), confirm you actually invoked mcp__nanoclaw__delegate_to_agent for that handoff. Describing a delegation in prose is narration — it does not run the tool. If you meant to delegate, invoke the tool now.`,
       );
     } else {
       // Tool-less coordinator: can't actually delegate. Be honest about the

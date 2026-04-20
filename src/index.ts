@@ -1828,6 +1828,17 @@ async function runAgent(
             },
             'Agent run usage stored',
           );
+          if (agent && !agent.trigger) {
+            logger.info(
+              {
+                event: 'multi_agent.coordinator_turn_completed',
+                agent: agentId,
+                runBatchId,
+                numTurns: u.numTurns,
+              },
+              'Coordinator turn completed',
+            );
+          }
           checkContextPressure(group.folder, chatJid);
         }
       }
@@ -1920,6 +1931,17 @@ async function runAgent(
         },
         'Agent run usage stored',
       );
+      if (agent && !agent.trigger) {
+        logger.info(
+          {
+            event: 'multi_agent.coordinator_turn_completed',
+            agent: agentId,
+            runBatchId,
+            numTurns: u.numTurns,
+          },
+          'Coordinator turn completed',
+        );
+      }
       checkContextPressure(group.folder, chatJid);
     }
   };
@@ -3025,9 +3047,11 @@ async function main(): Promise<void> {
 
       logger.info(
         {
+          event: 'multi_agent.delegation_invoked',
           group: group.name,
           source: sourceAgent,
           target: targetAgent,
+          sourceBatchId,
           messageLen: message.length,
         },
         'Processing agent delegation',

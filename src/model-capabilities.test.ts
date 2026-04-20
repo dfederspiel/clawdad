@@ -162,4 +162,40 @@ describe('buildMultiAgentContext', () => {
     const out = buildMultiAgentContext(ollamaSpec, [coord, ollamaSpec]);
     expect(out).toContain('Coord');
   });
+
+  it('enumerates every specialist with its own delegation example', () => {
+    const analyst = agent({
+      id: 'web_team/analyst',
+      name: 'analyst',
+      displayName: 'Analyst',
+      trigger: '@analyst',
+    });
+    const reviewer = agent({
+      id: 'web_team/reviewer',
+      name: 'reviewer',
+      displayName: 'Reviewer',
+      trigger: '@reviewer',
+    });
+    const out = buildMultiAgentContext(coord, [coord, analyst, reviewer]);
+    expect(out).toContain('agent: "analyst"');
+    expect(out).toContain('agent: "reviewer"');
+  });
+
+  it('omits other coordinators from delegation examples (only triggered specialists)', () => {
+    const secondCoord = agent({
+      id: 'web_team/coord2',
+      name: 'coord2',
+      displayName: 'Coord2',
+    });
+    const out = buildMultiAgentContext(coord, [coord, secondCoord, spec]);
+    // Only `spec` has a trigger; `coord2` must not appear as a delegation target.
+    expect(out).toContain('agent: "spec"');
+    expect(out).not.toContain('agent: "coord2"');
+  });
+
+  it('tool-capable coordinator includes a pre-response self-check against narration', () => {
+    const out = buildMultiAgentContext(coord, [coord, spec]);
+    expect(out).toContain('narration');
+    expect(out).toMatch(/invoke.*tool/i);
+  });
 });
