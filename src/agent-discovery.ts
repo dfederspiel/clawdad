@@ -87,7 +87,7 @@ function makeImplicitAgent(group: RegisteredGroup): Agent {
   };
 }
 
-function loadAgentFromDir(
+export function loadAgentFromDir(
   groupFolder: string,
   agentName: string,
   agentDir: string,
@@ -113,6 +113,11 @@ function loadAgentFromDir(
       if (Array.isArray(config.tools)) {
         agent.tools = config.tools.filter(
           (t: unknown): t is string => typeof t === 'string',
+        );
+      }
+      if (Array.isArray(config.skills)) {
+        agent.skills = config.skills.filter(
+          (s: unknown): s is string => typeof s === 'string',
         );
       }
     } catch (err) {
