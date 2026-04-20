@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { _initTestDatabase, createTask, getTaskById } from './db.js';
+import { SCHEDULER_POLL_INTERVAL } from './config.js';
 import {
   _resetSchedulerLoopForTests,
   computeNextRun,
+  SLEEP_DRIFT_MULTIPLIER,
   startSchedulerLoop,
 } from './task-scheduler.js';
 
@@ -147,6 +149,57 @@ describe('task scheduler', () => {
     };
 
     expect(computeNextRun(task)).toBeNull();
+  });
+
+  it('skips scheduler tick after sleep/wake detected via time drift', async () => {
+    createTask({
+      id: 'task-sleep',
+      group_folder: 'worker-group',
+      chat_jid: 'test@g.us',
+      prompt: 'run',
+      schedule_type: 'interval',
+      schedule_value: '60000',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-02-22T00:00:00.000Z',
+    });
+
+    const enqueueTask = vi.fn();
+
+    startSchedulerLoop({
+      registeredGroups: () => ({
+        'test@g.us': {
+          name: 'Test',
+          folder: 'worker-group',
+          trigger: '@bot',
+          added_at: '',
+        },
+      }),
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+    });
+
+    // First tick runs immediately (elapsed ~0, no drift)
+    await vi.advanceTimersByTimeAsync(10);
+    expect(enqueueTask).toHaveBeenCalledTimes(1);
+    enqueueTask.mockClear();
+
+    // Simulate sleep: jump Date.now() forward without firing timers
+    const sleepMs = SCHEDULER_POLL_INTERVAL * (SLEEP_DRIFT_MULTIPLIER + 1);
+    vi.setSystemTime(new Date(Date.now() + sleepMs));
+
+    // Fire the overdue timer — loop sees a large elapsed gap
+    await vi.advanceTimersByTimeAsync(SCHEDULER_POLL_INTERVAL);
+
+    // The post-sleep tick should have been skipped
+    expect(enqueueTask).not.toHaveBeenCalled();
+
+    // Next normal tick should run tasks again
+    await vi.advanceTimersByTimeAsync(SCHEDULER_POLL_INTERVAL);
+    expect(enqueueTask).toHaveBeenCalled();
   });
 
   it('computeNextRun skips missed intervals without infinite loop', () => {

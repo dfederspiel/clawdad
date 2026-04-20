@@ -276,6 +276,8 @@ async function runTask(
 
 let schedulerRunning = false;
 
+export const SLEEP_DRIFT_MULTIPLIER = 3;
+
 export function startSchedulerLoop(deps: SchedulerDependencies): void {
   if (schedulerRunning) {
     logger.debug('Scheduler loop already running, skipping duplicate start');
@@ -284,7 +286,22 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
   schedulerRunning = true;
   logger.info('Scheduler loop started');
 
+  let lastTickTime = Date.now();
+
   const loop = async () => {
+    const now = Date.now();
+    const elapsed = now - lastTickTime;
+    lastTickTime = now;
+
+    if (elapsed > SCHEDULER_POLL_INTERVAL * SLEEP_DRIFT_MULTIPLIER) {
+      logger.warn(
+        { elapsedMs: elapsed, expectedMs: SCHEDULER_POLL_INTERVAL },
+        'Sleep/wake detected — skipping this scheduler tick to let network recover',
+      );
+      setTimeout(loop, SCHEDULER_POLL_INTERVAL);
+      return;
+    }
+
     try {
       const dueTasks = getDueTasks();
       if (dueTasks.length > 0) {
