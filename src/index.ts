@@ -7,6 +7,7 @@ import {
   buildMultiAgentContext,
   discoverAgents,
 } from './agent-discovery.js';
+import { validateDelegationMessage } from './delegation-validation.js';
 import { setActiveAgentName, clearActiveAgentName } from './agent-state.js';
 import { getTriggeredAgentsForMessages } from './agent-routing.js';
 import {
@@ -3015,6 +3016,27 @@ async function main(): Promise<void> {
         sourceBatchId,
         completionPolicy,
       } = request;
+
+      // Platform-level backstop (#48). Duplicates the check the MCP tool
+      // already applies in the coordinator container — this catches the
+      // case where the container image is stale (pre-validation) and would
+      // otherwise waste a ~30-60s specialist startup on hollow context.
+      const validation = validateDelegationMessage(message);
+      if (!validation.ok) {
+        logger.warn(
+          {
+            event: 'multi_agent.delegation_rejected',
+            sourceGroup,
+            sourceAgent,
+            targetAgent,
+            sourceBatchId,
+            messageLen: (message ?? '').trim().length,
+            reason: validation.reason,
+          },
+          'Delegation rejected: insufficient message context',
+        );
+        return;
+      }
 
       // Find the group JID from the source folder
       const groupJid = Object.keys(registeredGroups).find(
