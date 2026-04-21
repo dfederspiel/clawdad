@@ -394,7 +394,32 @@ export class ClaudeCodeRuntime implements RuntimeSession {
       process.env.CLAUDE_MODEL ||
       undefined;
 
-    const { maxTurns, disallowedTools } = input.constraints ?? {};
+    const { maxTurns, disallowedTools, allowedTools } = input.constraints ?? {};
+    // Explicit per-agent allowlist (Phase 2 of #74) overrides the built-in
+    // default — lets power users narrow Claude agents the same way Phase 1
+    // already narrows Ollama specialists.
+    const claudeAllowedTools = allowedTools ?? [
+      'Bash',
+      'Read',
+      'Write',
+      'Edit',
+      'Glob',
+      'Grep',
+      'WebSearch',
+      'WebFetch',
+      'Task',
+      'TaskOutput',
+      'TaskStop',
+      'TeamCreate',
+      'TeamDelete',
+      'SendMessage',
+      'TodoWrite',
+      'ToolSearch',
+      'Skill',
+      'NotebookEdit',
+      'mcp__nanoclaw__*',
+      'mcp__ollama__*',
+    ];
 
     for await (const message of query({
       prompt: stream,
@@ -420,28 +445,7 @@ export class ClaudeCodeRuntime implements RuntimeSession {
               }
             : undefined;
         })(),
-        allowedTools: [
-          'Bash',
-          'Read',
-          'Write',
-          'Edit',
-          'Glob',
-          'Grep',
-          'WebSearch',
-          'WebFetch',
-          'Task',
-          'TaskOutput',
-          'TaskStop',
-          'TeamCreate',
-          'TeamDelete',
-          'SendMessage',
-          'TodoWrite',
-          'ToolSearch',
-          'Skill',
-          'NotebookEdit',
-          'mcp__nanoclaw__*',
-          'mcp__ollama__*',
-        ],
+        allowedTools: claudeAllowedTools,
         env: this.options.sdkEnv,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,

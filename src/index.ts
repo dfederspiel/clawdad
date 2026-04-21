@@ -7,6 +7,7 @@ import {
   buildMultiAgentContext,
   discoverAgents,
 } from './agent-discovery.js';
+import { validateDelegationMessage } from './delegation-validation.js';
 import { setActiveAgentName, clearActiveAgentName } from './agent-state.js';
 import { getTriggeredAgentsForMessages } from './agent-routing.js';
 import {
@@ -104,7 +105,9 @@ import {
   formatMessages,
   formatOutbound,
   stripInternalTags,
+  toStructuredMessages,
 } from './router.js';
+import type { StructuredMessage } from './router.js';
 import { ChannelType } from './text-styles.js';
 import {
   restoreRemoteControl,
@@ -139,6 +142,8 @@ import { startPolarisSessionKeepalive } from './polaris-session-keepalive.js';
 import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import type { MediaArtifact } from './types.js';
 import { logger } from './logger.js';
+import { getCapabilityProfile } from './model-capabilities.js';
+import { scheduleOllamaCapabilityRefresh } from './ollama-capabilities.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -748,6 +753,17 @@ async function executeAutomationActions(
                 ? `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n${action.messageTemplate}\n`
                 : `\n\n--- Auto-routed by rule "${trace.ruleId}" ---\n`;
               const delegationPrompt = conversationCtx + routingNote;
+              const routedMessages: StructuredMessage[] = [
+                ...toStructuredMessages(recentMessages),
+                {
+                  role: 'user',
+                  content: action.messageTemplate
+                    ? `Auto-routed by rule "${trace.ruleId}": ${action.messageTemplate}`
+                    : `Auto-routed by rule "${trace.ruleId}"`,
+                  sender: 'system',
+                  timestamp: new Date().toISOString(),
+                },
+              ];
 
               setActiveAgentName(chatJid, agent.displayName);
               await channel.setTyping?.(chatJid, true);
@@ -827,6 +843,7 @@ async function executeAutomationActions(
                 runBatchId: batchId,
                 networkContainer: autoCoordinatorContainer || undefined,
                 systemContext: multiAgentCtx || undefined,
+                messages: routedMessages,
               });
 
               group.containerConfig = savedConfig;
@@ -1103,6 +1120,7 @@ async function processGroupMessages(
   // For triggered agents, prepend conversation context from the origin chat
   // so the agent understands what's being discussed.
   let prompt: string;
+  let structuredMessages: StructuredMessage[];
   if (originJid && group.triggerScope === 'web-all') {
     const originContext = getMessagesSince(
       originJid,
@@ -1122,8 +1140,13 @@ async function processGroupMessages(
         formatMessages(contextOnly, TIMEZONE) +
         '\n--- Your trigger message ---\n' +
         formatMessages(missedMessages, TIMEZONE);
+      structuredMessages = [
+        ...toStructuredMessages(contextOnly),
+        ...toStructuredMessages(missedMessages),
+      ];
     } else {
       prompt = formatMessages(missedMessages, TIMEZONE);
+      structuredMessages = toStructuredMessages(missedMessages);
     }
     logger.info(
       {
@@ -1136,6 +1159,7 @@ async function processGroupMessages(
     );
   } else {
     prompt = formatMessages(missedMessages, TIMEZONE);
+    structuredMessages = toStructuredMessages(missedMessages);
   }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
@@ -1325,6 +1349,7 @@ async function processGroupMessages(
               runBatchId: batchId,
               networkContainer: fanoutCoordinatorContainer || undefined,
               systemContext: multiAgentCtx || undefined,
+              messages: structuredMessages,
             });
 
             group.containerConfig = savedConfig;
@@ -1601,6 +1626,7 @@ async function processGroupMessages(
       },
       runBatchId: batchId,
       systemContext: multiAgentCtx || undefined,
+      messages: structuredMessages,
     });
 
     await responseChannel.setTyping?.(
@@ -1670,6 +1696,7 @@ interface RunAgentOptions {
   runBatchId?: string;
   networkContainer?: string;
   systemContext?: string;
+  messages?: StructuredMessage[];
 }
 
 async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
@@ -1686,6 +1713,7 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
     runBatchId,
     networkContainer,
     systemContext,
+    messages,
   } = opts;
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
@@ -1857,6 +1885,17 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
             },
             'Agent run usage stored',
           );
+          if (agent && !agent.trigger) {
+            logger.info(
+              {
+                event: 'multi_agent.coordinator_turn_completed',
+                agent: agentId,
+                runBatchId,
+                numTurns: u.numTurns,
+              },
+              'Coordinator turn completed',
+            );
+          }
           checkContextPressure(group.folder, chatJid);
         }
       }
@@ -1949,6 +1988,17 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
         },
         'Agent run usage stored',
       );
+      if (agent && !agent.trigger) {
+        logger.info(
+          {
+            event: 'multi_agent.coordinator_turn_completed',
+            agent: agentId,
+            runBatchId,
+            numTurns: u.numTurns,
+          },
+          'Coordinator turn completed',
+        );
+      }
       checkContextPressure(group.folder, chatJid);
     }
   };
@@ -2066,6 +2116,7 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
 
       const containerInput = {
         prompt,
+        messages,
         sessionId,
         groupFolder: group.folder,
         chatJid,
@@ -2143,6 +2194,7 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
     // ── Non-pool path: delegations, tasks, or pool disabled ─────
     const containerInput = {
       prompt,
+      messages,
       sessionId,
       groupFolder: group.folder,
       chatJid,
@@ -2510,6 +2562,12 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
+  // Warm the Ollama capability cache so getCapabilityProfile() can return
+  // API-derived answers synchronously on the hot path. Best-effort — if
+  // Ollama isn't running or isn't installed, callers fall back to the
+  // safe default (text-only) and a later on-demand refresh will fill in.
+  scheduleOllamaCapabilityRefresh();
+
   // Load pack-defined achievements (merged with built-ins)
   const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
   let activePack = 'starter';
@@ -2725,6 +2783,8 @@ async function main(): Promise<void> {
         trigger: a.trigger,
         status: a.status,
         runtime: a.runtime,
+        tools: a.tools,
+        receivesMcpTools: getCapabilityProfile(a.runtime).receivesMcpTools,
       })),
     refreshGroupAgents: (jid: string) =>
       refreshGroupAgents(jid).map((a) => ({
@@ -2734,6 +2794,8 @@ async function main(): Promise<void> {
         trigger: a.trigger,
         status: a.status,
         runtime: a.runtime,
+        tools: a.tools,
+        receivesMcpTools: getCapabilityProfile(a.runtime).receivesMcpTools,
       })),
     getStatus: () => ({
       containers: queue.getSnapshot(),
@@ -3016,6 +3078,27 @@ async function main(): Promise<void> {
         completionPolicy,
       } = request;
 
+      // Platform-level backstop (#48). Duplicates the check the MCP tool
+      // already applies in the coordinator container — this catches the
+      // case where the container image is stale (pre-validation) and would
+      // otherwise waste a ~30-60s specialist startup on hollow context.
+      const validation = validateDelegationMessage(message);
+      if (!validation.ok) {
+        logger.warn(
+          {
+            event: 'multi_agent.delegation_rejected',
+            sourceGroup,
+            sourceAgent,
+            targetAgent,
+            sourceBatchId,
+            messageLen: (message ?? '').trim().length,
+            reason: validation.reason,
+          },
+          'Delegation rejected: insufficient message context',
+        );
+        return;
+      }
+
       // Find the group JID from the source folder
       const groupJid = Object.keys(registeredGroups).find(
         (jid) => registeredGroups[jid].folder === sourceGroup,
@@ -3047,9 +3130,11 @@ async function main(): Promise<void> {
 
       logger.info(
         {
+          event: 'multi_agent.delegation_invoked',
           group: group.name,
           source: sourceAgent,
           target: targetAgent,
+          sourceBatchId,
           messageLen: message.length,
         },
         'Processing agent delegation',
@@ -3060,7 +3145,12 @@ async function main(): Promise<void> {
       // delegations. The queue re-triggers the coordinator automatically
       // when all delegations for a group complete.
       const savedConfig = group.containerConfig;
-      const DELEGATION_TIMEOUT = 120_000; // 2 minutes
+      // Specialist's capability profile dictates how long the host will
+      // wait — fast cloud APIs (Claude) fail fast, slow local runtimes
+      // (CPU-only Ollama) get headroom. See src/model-capabilities.ts.
+      const delegationTimeout = getCapabilityProfile(
+        agent.runtime,
+      ).delegationTimeoutMs;
       const taskId = `delegation-${agent.name}-${Date.now()}`;
       // Share coordinator's network namespace so delegation containers can
       // reach services (e.g. Storybook) running on the coordinator's localhost.
@@ -3076,7 +3166,7 @@ async function main(): Promise<void> {
             ...savedConfig,
             timeout: Math.min(
               savedConfig?.timeout || Infinity,
-              DELEGATION_TIMEOUT,
+              delegationTimeout,
             ),
           };
           // Build prompt at execution time (not enqueue time) so conversation
@@ -3093,6 +3183,19 @@ async function main(): Promise<void> {
           const delegationPrompt =
             conversationCtx +
             `\n\n--- Delegation from ${sourceAgent} ---\n${message}\n--- End delegation ---\n`;
+          // For non-Claude runtimes the delegation instruction was silently
+          // dropped by the XML parser (it lives outside <messages>). Inject
+          // it as a synthetic final user message so it actually reaches the
+          // model via the structured path.
+          const delegationMessages: StructuredMessage[] = [
+            ...toStructuredMessages(recentMessages),
+            {
+              role: 'user',
+              content: `Delegation from ${sourceAgent}: ${message}`,
+              sender: sourceAgent,
+              timestamp: new Date().toISOString(),
+            },
+          ];
 
           setActiveAgentName(chatJid, agent.displayName);
           await channel.setTyping?.(chatJid, true);
@@ -3170,6 +3273,7 @@ async function main(): Promise<void> {
             runBatchId: batchId,
             networkContainer: coordinatorContainer || undefined,
             systemContext: multiAgentCtx || undefined,
+            messages: delegationMessages,
           });
 
           group.containerConfig = savedConfig; // restore original config

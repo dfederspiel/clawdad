@@ -6,6 +6,7 @@ import { ChatInput } from './ChatInput.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 import { WorkStatusBanner } from './WorkStatusBanner.js';
 import { ContextPressureBanner } from './ContextPressureBanner.js';
+import { NotificationBell } from './NotificationBell.js';
 
 export function ChatView({ onOpenSidebar }) {
   const group = selectedGroup.value;
@@ -32,12 +33,15 @@ export function ChatView({ onOpenSidebar }) {
           </button>
           <h2 class="text-sm font-semibold">${group?.name || ''}</h2>
         </div>
-        ${hasMessages && html`
-          <button
-            class="text-xs text-txt-muted hover:text-err transition-colors"
-            onClick=${() => setClearOpen(true)}
-          >Clear chat</button>
-        `}
+        <div class="flex items-center gap-2">
+          ${hasMessages && html`
+            <button
+              class="text-xs text-txt-muted hover:text-err transition-colors"
+              onClick=${() => setClearOpen(true)}
+            >Clear chat</button>
+          `}
+          <${NotificationBell} />
+        </div>
       </div>
       <${WorkStatusBanner} />
       <${ContextPressureBanner} />

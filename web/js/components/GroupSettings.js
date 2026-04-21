@@ -24,6 +24,12 @@ export function GroupSettings({ group, open, onClose }) {
   const [agentModel, setAgentModel] = useState('');
   const [ollamaModels, setOllamaModels] = useState([]);
   const [agentRuntimeEdits, setAgentRuntimeEdits] = useState({}); // { [agentName]: { provider, model } }
+  const [toolRegistry, setToolRegistry] = useState([]);
+  // { [agentName]: { override: boolean, selected: string[] } }
+  //   override=false → use role default (no agent.tools persisted)
+  //   override=true + selected=[] → explicit "no tools" opt-out
+  const [agentToolEdits, setAgentToolEdits] = useState({});
+  const [toolsExpanded, setToolsExpanded] = useState({});
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -50,10 +56,16 @@ export function GroupSettings({ group, open, onClose }) {
     setAgentRuntimeEdits({});
     setAgentProvider('anthropic');
     setAgentModel('');
+    setAgentToolEdits({});
+    setToolsExpanded({});
     // Fetch Ollama models (best-effort)
     api.getOllamaModels().then((data) => {
       setOllamaModels(data.models || []);
     }).catch(() => {});
+    // Fetch available tools catalogue (best-effort)
+    api.getTools().then((data) => {
+      setToolRegistry(data.tools || []);
+    }).catch(() => setToolRegistry([]));
   }, [group?.jid, open]);
 
   if (!open || !group) return null;
@@ -172,6 +184,55 @@ export function GroupSettings({ group, open, onClose }) {
       await loadGroups();
     } catch (err) {
       setAgentError(err.message || 'Failed to update agent display name');
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  function getAgentToolsEdit(name) {
+    if (agentToolEdits[name]) return agentToolEdits[name];
+    const agent = (group.agents || []).find((a) => a.name === name);
+    const persisted = agent?.tools;
+    return {
+      override: Array.isArray(persisted),
+      selected: Array.isArray(persisted) ? [...persisted] : [],
+    };
+  }
+
+  function setAgentToolsEdit(name, next) {
+    setAgentToolEdits((prev) => ({ ...prev, [name]: next }));
+  }
+
+  function agentToolsDirty(name) {
+    const edit = agentToolEdits[name];
+    if (!edit) return false;
+    const agent = (group.agents || []).find((a) => a.name === name);
+    const persistedOverride = Array.isArray(agent?.tools);
+    if (edit.override !== persistedOverride) return true;
+    if (!edit.override) return false;
+    const persistedSelected = agent?.tools ?? [];
+    if (edit.selected.length !== persistedSelected.length) return true;
+    const persistedSet = new Set(persistedSelected);
+    return edit.selected.some((t) => !persistedSet.has(t));
+  }
+
+  async function handleSaveAgentTools(name) {
+    if (agentBusy) return;
+    const edit = getAgentToolsEdit(name);
+    setAgentBusy(true);
+    setAgentError('');
+    try {
+      await api.updateGroupAgent(folderName, name, {
+        tools: edit.override ? edit.selected : null,
+      });
+      await loadGroups();
+      setAgentToolEdits((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+    } catch (err) {
+      setAgentError(err.message || 'Failed to update agent tools');
     } finally {
       setAgentBusy(false);
     }
@@ -392,6 +453,83 @@ export function GroupSettings({ group, open, onClose }) {
                         disabled=${agentBusy}
                       >Save</button>`}
                     </div>
+                    ${(() => {
+                      if (agent.receivesMcpTools === false) {
+                        return html`
+                          <div class="mt-1.5 text-xs text-txt-muted">
+                            Tools: <span class="italic">unavailable — this runtime does not support tool calling</span>
+                          </div>
+                        `;
+                      }
+                      const edit = getAgentToolsEdit(agent.name);
+                      const expanded = !!toolsExpanded[agent.name];
+                      const dirty = agentToolsDirty(agent.name);
+                      const bySource = toolRegistry.reduce((acc, t) => {
+                        (acc[t.source] = acc[t.source] || []).push(t);
+                        return acc;
+                      }, {});
+                      const summary = !edit.override
+                        ? `Tools: role default`
+                        : edit.selected.length === 0
+                          ? `Tools: none (explicit)`
+                          : `Tools: ${edit.selected.length} selected`;
+                      return html`
+                        <div class="mt-1.5">
+                          <button
+                            class="text-xs text-txt-muted hover:text-txt flex items-center gap-1"
+                            onClick=${() => setToolsExpanded((prev) => ({ ...prev, [agent.name]: !prev[agent.name] }))}
+                          >
+                            <span>${expanded ? '\u25BC' : '\u25B6'}</span>
+                            <span>${summary}</span>
+                            ${dirty && html`<span class="text-accent">\u2022 unsaved</span>`}
+                          </button>
+                          ${expanded && html`
+                            <div class="mt-2 border border-border rounded-lg p-2 flex flex-col gap-2">
+                              <label class="flex items-center gap-2 text-xs text-txt-2">
+                                <input
+                                  type="checkbox"
+                                  checked=${edit.override}
+                                  onChange=${(e) => setAgentToolsEdit(agent.name, {
+                                    override: e.target.checked,
+                                    selected: e.target.checked
+                                      ? (edit.selected.length > 0 ? edit.selected : toolRegistry.filter((t) => t.defaultForRole === (agent.trigger ? 'specialist' : 'coordinator')).map((t) => t.name))
+                                      : [],
+                                  })}
+                                />
+                                <span>Override role default</span>
+                              </label>
+                              ${edit.override && Object.entries(bySource).map(([source, list]) => html`
+                                <div>
+                                  <div class="text-[10px] text-txt-muted uppercase tracking-wider mb-1">${source === 'claude-sdk' ? 'Claude SDK' : 'Nanoclaw MCP'}</div>
+                                  <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+                                    ${list.map((tool) => html`
+                                      <label class="flex items-center gap-1.5 text-xs text-txt-2" title=${tool.description}>
+                                        <input
+                                          type="checkbox"
+                                          checked=${edit.selected.includes(tool.name)}
+                                          onChange=${(e) => {
+                                            const selected = e.target.checked
+                                              ? [...edit.selected, tool.name]
+                                              : edit.selected.filter((n) => n !== tool.name);
+                                            setAgentToolsEdit(agent.name, { override: true, selected });
+                                          }}
+                                        />
+                                        <span class="truncate">${tool.label}</span>
+                                      </label>
+                                    `)}
+                                  </div>
+                                </div>
+                              `)}
+                              <button
+                                class="px-2 py-1 text-xs bg-bg-3 border border-border rounded text-txt-2 hover:border-accent disabled:opacity-50 self-start"
+                                onClick=${() => handleSaveAgentTools(agent.name)}
+                                disabled=${agentBusy || !dirty}
+                              >Save tools</button>
+                            </div>
+                          `}
+                        </div>
+                      `;
+                    })()}
                   </div>
                   <button
                     class="px-2 py-1 text-xs border border-border rounded-md text-txt-2 hover:border-red-400 hover:text-red-300 disabled:opacity-50"

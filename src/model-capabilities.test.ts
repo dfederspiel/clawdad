@@ -1,19 +1,42 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getCapabilityProfile } from './model-capabilities.js';
 import { buildMultiAgentContext } from './agent-discovery.js';
+import {
+  _resetOllamaCapabilitiesForTests,
+  _setOllamaCapabilitiesForTests,
+} from './ollama-capabilities.js';
 import type { Agent } from './types.js';
+
+beforeEach(() => {
+  _resetOllamaCapabilitiesForTests();
+  // Populate the capability cache as if Ollama's /api/show had reported
+  // `tools` for qwen3.5:4b and omitted it for llama3.2:1b. Matches the
+  // empirical probe output in scripts/probe-ollama-tools.ts.
+  _setOllamaCapabilitiesForTests('qwen3.5:4b', {
+    tools: true,
+    vision: true,
+    thinking: true,
+  });
+  _setOllamaCapabilitiesForTests('llama3.2:1b', {
+    tools: false,
+    vision: false,
+    thinking: false,
+  });
+});
 
 describe('getCapabilityProfile', () => {
   it('returns the anthropic profile when runtime is undefined (platform default)', () => {
     const p = getCapabilityProfile(undefined);
     expect(p.receivesMcpTools).toBe(true);
     expect(p.streaming).toBe('chunked');
+    expect(p.delegationTimeoutMs).toBe(120_000);
   });
 
   it('returns the anthropic profile for explicit anthropic', () => {
     const p = getCapabilityProfile({ provider: 'anthropic' });
     expect(p.receivesMcpTools).toBe(true);
+    expect(p.delegationTimeoutMs).toBe(120_000);
   });
 
   it('reports small ollama models as tool-less (not on the allowlist)', () => {
@@ -23,6 +46,7 @@ describe('getCapabilityProfile', () => {
     });
     expect(p.receivesMcpTools).toBe(false);
     expect(p.streaming).toBe('per-token');
+    expect(p.delegationTimeoutMs).toBe(300_000);
   });
 
   it('reports ollama qwen3.5:4b as tool-capable (on the allowlist)', () => {
@@ -31,16 +55,33 @@ describe('getCapabilityProfile', () => {
     // Tool loop runs non-streaming turns; the adapter delivers the final
     // assistant message whole.
     expect(p.streaming).toBe('whole');
+    expect(p.delegationTimeoutMs).toBe(600_000);
   });
 
   it('treats ollama with no model as tool-less (safe default)', () => {
     const p = getCapabilityProfile({ provider: 'ollama' });
     expect(p.receivesMcpTools).toBe(false);
+    expect(p.delegationTimeoutMs).toBe(300_000);
   });
 
   it('falls back to a tool-less profile for not-yet-wired providers', () => {
     const p = getCapabilityProfile({ provider: 'openai' });
     expect(p.receivesMcpTools).toBe(false);
+    expect(p.delegationTimeoutMs).toBe(120_000);
+  });
+
+  it('gives tool-capable Ollama more delegation headroom than text-only Ollama', () => {
+    const toolCapable = getCapabilityProfile({
+      provider: 'ollama',
+      model: 'qwen3.5:4b',
+    });
+    const textOnly = getCapabilityProfile({
+      provider: 'ollama',
+      model: 'llama3.2:1b',
+    });
+    expect(toolCapable.delegationTimeoutMs).toBeGreaterThan(
+      textOnly.delegationTimeoutMs,
+    );
   });
 });
 
@@ -120,5 +161,41 @@ describe('buildMultiAgentContext', () => {
     });
     const out = buildMultiAgentContext(ollamaSpec, [coord, ollamaSpec]);
     expect(out).toContain('Coord');
+  });
+
+  it('enumerates every specialist with its own delegation example', () => {
+    const analyst = agent({
+      id: 'web_team/analyst',
+      name: 'analyst',
+      displayName: 'Analyst',
+      trigger: '@analyst',
+    });
+    const reviewer = agent({
+      id: 'web_team/reviewer',
+      name: 'reviewer',
+      displayName: 'Reviewer',
+      trigger: '@reviewer',
+    });
+    const out = buildMultiAgentContext(coord, [coord, analyst, reviewer]);
+    expect(out).toContain('agent: "analyst"');
+    expect(out).toContain('agent: "reviewer"');
+  });
+
+  it('omits other coordinators from delegation examples (only triggered specialists)', () => {
+    const secondCoord = agent({
+      id: 'web_team/coord2',
+      name: 'coord2',
+      displayName: 'Coord2',
+    });
+    const out = buildMultiAgentContext(coord, [coord, secondCoord, spec]);
+    // Only `spec` has a trigger; `coord2` must not appear as a delegation target.
+    expect(out).toContain('agent: "spec"');
+    expect(out).not.toContain('agent: "coord2"');
+  });
+
+  it('tool-capable coordinator includes a pre-response self-check against narration', () => {
+    const out = buildMultiAgentContext(coord, [coord, spec]);
+    expect(out).toContain('narration');
+    expect(out).toMatch(/invoke.*tool/i);
   });
 });

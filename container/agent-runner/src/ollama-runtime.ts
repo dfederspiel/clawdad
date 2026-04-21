@@ -31,54 +31,40 @@ import {
   type ProviderToolSpec,
 } from './tool-bridge.js';
 
-// Allowlist of Ollama models for which we pass MCP tools. Starts narrow:
-// qwen3.5:4b is our baseline that we've verified in development. Wider
-// support comes as we confirm each model's reliability. Too-small models
-// (llama3.2:1b, llama3.2:3b) stay off this list even though Ollama's
-// /api/show reports tools: true — they produce narration of tool calls
-// rather than real invocations.
-const TOOL_CAPABLE_OLLAMA_MODELS = new Set<string>([
-  'qwen3.5:4b',
-]);
+// Per-model capability cache derived from Ollama's /api/show. Empirical
+// probe (scripts/probe-ollama-tools.ts on host) showed the previous
+// hardcoded allowlist was wrong — both llama3.2:1b and qwen3.5:4b emit
+// structured tool_calls; the small model just has weaker argument
+// adherence, which is a reliability concern not a capability gap. We
+// now trust the self-report and rely on observability to surface bad
+// outcomes per model.
+const toolCapabilityCache = new Map<string, boolean>();
 
-export function ollamaModelSupportsTools(model: string): boolean {
-  return TOOL_CAPABLE_OLLAMA_MODELS.has(model);
+async function fetchSupportsTools(model: string): Promise<boolean> {
+  const host = process.env.OLLAMA_HOST || 'http://localhost:11434';
+  try {
+    const res = await fetch(`${host}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { capabilities?: string[] };
+    return (body.capabilities ?? []).includes('tools');
+  } catch {
+    return false;
+  }
+}
+
+export async function ollamaModelSupportsTools(model: string): Promise<boolean> {
+  const cached = toolCapabilityCache.get(model);
+  if (cached !== undefined) return cached;
+  const supports = await fetchSupportsTools(model);
+  toolCapabilityCache.set(model, supports);
+  return supports;
 }
 
 const MAX_TOOL_TURNS = 10;
-
-/**
- * Parse the XML-formatted conversation history produced by the host's
- * formatMessages() into individual Ollama chat messages. Bot messages
- * become assistant role, everything else becomes user role.
- *
- * Tracked for removal in #46 — host should pass structured messages so
- * this reverse-engineering step goes away.
- */
-function parseXmlMessages(text: string, assistantName?: string): Message[] {
-  const msgRegex =
-    /<message\s+sender="([^"]*)"\s+time="[^"]*">([^<]*(?:<(?!\/message>)[^<]*)*)<\/message>/g;
-  const results: Message[] = [];
-  let match;
-  while ((match = msgRegex.exec(text)) !== null) {
-    const sender = match[1];
-    const content = match[2]
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .trim();
-    if (!content) continue;
-    const isBot =
-      (assistantName && sender === assistantName) ||
-      /^(Andy|Assistant|Bot)$/i.test(sender);
-    results.push({
-      role: isBot ? 'assistant' : 'user',
-      content,
-    });
-  }
-  return results;
-}
 
 interface ContainerInputLike {
   chatJid: string;
@@ -168,7 +154,8 @@ export class OllamaRuntime {
     const chatOptions = Object.keys(options).length > 0 ? options : undefined;
 
     const toolsEnabled =
-      ollamaModelSupportsTools(model) && Boolean(this.options.mcpServerPath);
+      Boolean(this.options.mcpServerPath) &&
+      (await ollamaModelSupportsTools(model));
     if (toolsEnabled) {
       yield* this.runToolLoop(
         model,
@@ -190,8 +177,9 @@ export class OllamaRuntime {
   }
 
   /**
-   * Build the system prompt + user/assistant history, parsing XML as
-   * needed. Shared between text-only and tool-capable paths.
+   * Build the system prompt + user/assistant history from the structured
+   * messages the host passes in ContainerInput (see #46). Shared between
+   * text-only and tool-capable paths.
    */
   private async buildBaseMessages(
     input: RuntimeTurnInput,
@@ -213,19 +201,18 @@ export class OllamaRuntime {
       messages.push({ role: 'system', content: systemParts.join('\n\n') });
     }
 
+    // Structured path (#46): the host now populates containerInput.messages
+    // and the container-runner hands them to us as pre-structured
+    // RuntimeMessages. Pass role + joined text through verbatim — no more
+    // reverse-engineering XML to guess who said what.
     for (const msg of input.messages) {
-      const textParts = msg.content
+      const text = msg.content
         .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-        .map((p) => p.text);
-      const fullText = textParts.join('\n');
-      const xmlMessages = parseXmlMessages(
-        fullText,
-        this.options.containerInput.assistantName,
-      );
-      if (xmlMessages.length > 0) {
-        for (const xm of xmlMessages) messages.push(xm);
-      } else if (fullText.trim()) {
-        messages.push({ role: msg.role, content: fullText });
+        .map((p) => p.text)
+        .join('\n')
+        .trim();
+      if (text) {
+        messages.push({ role: msg.role, content: text });
       }
     }
 

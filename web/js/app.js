@@ -51,6 +51,95 @@ export const dismissedPressure = signal({}); // { [jid]: true } — user dismiss
 // time without refetching /api/groups on every message.
 export const lastActivityOverride = signal({});
 
+// --- Notifications ---
+const NOTIF_HISTORY_KEY = 'clawdad-notifications-history';
+const NOTIF_LAST_READ_KEY = 'clawdad-notifications-last-read';
+const NOTIF_MAX = 50;
+const NOTIF_PREVIEW_LEN = 120;
+
+function loadNotifHistory() {
+  try {
+    const raw = localStorage.getItem(NOTIF_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.slice(0, NOTIF_MAX) : [];
+  } catch { return []; }
+}
+
+function loadNotifLastRead() {
+  try {
+    const raw = localStorage.getItem(NOTIF_LAST_READ_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+export const notifications = signal(loadNotifHistory());
+export const notifLastReadAt = signal(loadNotifLastRead());
+export const flashMessageId = signal(null);
+export const unreadNotifCount = computed(() => {
+  const lastRead = notifLastReadAt.value;
+  return notifications.value.filter(
+    (n) => !lastRead[n.jid] || n.timestamp > lastRead[n.jid],
+  ).length;
+});
+
+function persistNotifications() {
+  try {
+    localStorage.setItem(NOTIF_HISTORY_KEY, JSON.stringify(notifications.value));
+  } catch { /* quota / private mode */ }
+}
+
+function persistNotifLastRead() {
+  try {
+    localStorage.setItem(NOTIF_LAST_READ_KEY, JSON.stringify(notifLastReadAt.value));
+  } catch { /* ignore */ }
+}
+
+function truncatePreview(text) {
+  if (!text) return '';
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  return collapsed.length > NOTIF_PREVIEW_LEN
+    ? collapsed.slice(0, NOTIF_PREVIEW_LEN) + '…'
+    : collapsed;
+}
+
+function pushNotification(entry) {
+  if (!entry.id || !entry.jid) return;
+  const existing = notifications.value;
+  if (existing.some((n) => n.id === entry.id)) return;
+  const next = [entry, ...existing].slice(0, NOTIF_MAX);
+  notifications.value = next;
+  persistNotifications();
+}
+
+export function markGroupNotificationsRead(jid) {
+  if (!jid) return;
+  notifLastReadAt.value = { ...notifLastReadAt.value, [jid]: new Date().toISOString() };
+  persistNotifLastRead();
+}
+
+export function markAllNotificationsRead() {
+  const now = new Date().toISOString();
+  const next = { ...notifLastReadAt.value };
+  for (const n of notifications.value) next[n.jid] = now;
+  notifLastReadAt.value = next;
+  persistNotifLastRead();
+}
+
+export async function navigateToMessage(jid, messageId) {
+  if (!jid) return;
+  if (selectedJid.value !== jid) await selectGroup(jid);
+  if (!messageId) return;
+  flashMessageId.value = messageId;
+  requestAnimationFrame(() => {
+    const el = document.getElementById(`msg-${messageId}`);
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
+  setTimeout(() => {
+    if (flashMessageId.value === messageId) flashMessageId.value = null;
+  }, 1800);
+}
+
 function bumpLastActivity(jid, timestamp) {
   if (!jid) return;
   const ts = timestamp || new Date().toISOString();
@@ -115,6 +204,18 @@ api.onSSE('message', (data) => {
   clearTypingStateForJid(data.jid);
   clearAgentProgressForJid(data.jid);
   bumpLastActivity(data.jid, data.timestamp);
+
+  const notifGroup = groups.value.find((g) => g.jid === data.jid);
+  if (notifGroup && data.message_id) {
+    pushNotification({
+      id: data.message_id,
+      jid: data.jid,
+      groupName: notifGroup.name,
+      senderName: data.sender_name,
+      preview: truncatePreview(data.text),
+      timestamp: data.timestamp,
+    });
+  }
 
   if (data.jid === selectedJid.value) {
     messages.value = [
@@ -357,6 +458,50 @@ export async function loadGroups() {
   }
 }
 
+async function backfillNotifications() {
+  const allGroups = groups.value;
+  if (allGroups.length === 0) return;
+  const isFirstRun = notifications.value.length === 0
+    && Object.keys(notifLastReadAt.value).length === 0;
+  const seen = new Set(notifications.value.map((n) => n.id));
+  const results = await Promise.all(
+    allGroups.map((g) =>
+      api.getMessages(g.jid).then((d) => ({ g, msgs: d.messages })).catch(() => null),
+    ),
+  );
+  const collected = [];
+  for (const r of results) {
+    if (!r) continue;
+    for (const m of r.msgs) {
+      if (!m.is_bot_message || !m.id || seen.has(m.id)) continue;
+      collected.push({
+        id: m.id,
+        jid: r.g.jid,
+        groupName: r.g.name,
+        senderName: m.sender_name,
+        preview: truncatePreview(m.content),
+        timestamp: m.timestamp,
+      });
+    }
+  }
+  if (collected.length === 0) return;
+  const merged = [...notifications.value, ...collected]
+    .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
+    .slice(0, NOTIF_MAX);
+  notifications.value = merged;
+  persistNotifications();
+  if (isFirstRun) {
+    // Treat everything pre-existing as read so the bell doesn't light up on
+    // first install. New SSE messages from here on will count as unread.
+    const nextRead = { ...notifLastReadAt.value };
+    for (const n of merged) {
+      if (!nextRead[n.jid] || n.timestamp > nextRead[n.jid]) nextRead[n.jid] = n.timestamp;
+    }
+    notifLastReadAt.value = nextRead;
+    persistNotifLastRead();
+  }
+}
+
 async function loadSessionPressure() {
   try {
     const data = await api.getSessionPressure();
@@ -391,6 +536,7 @@ export async function selectGroup(jid) {
   const cur = { ...unread.value };
   delete cur[jid];
   unread.value = cur;
+  markGroupNotificationsRead(jid);
 
   // Clear messages before fetch so SSE messages arriving during the fetch
   // are appended to a clean slate (selectedJid is already set above).
@@ -738,6 +884,6 @@ loadTheme();
 
 // --- Render ---
 
-loadGroups().then(loadSessionPressure);
+loadGroups().then(() => Promise.all([loadSessionPressure(), backfillNotifications()]));
 loadTriggers();
 render(html`<${App} />`, document.getElementById('app'));
