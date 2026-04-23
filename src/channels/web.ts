@@ -54,6 +54,7 @@ import {
   getThreadMessages,
   getUsageStats,
   getLatestRunForChat,
+  getAgentRunById,
   getSession,
   getSessionPressure,
   getAllSessionPressure,
@@ -414,8 +415,13 @@ export class WebChannel implements Channel {
       durationApiMs: number;
       numTurns: number;
     },
+    runId?: number,
   ): void {
-    this.broadcast('usage_update', { jid: chatJid, ...usage });
+    this.broadcast('usage_update', {
+      jid: chatJid,
+      ...usage,
+      run_id: runId,
+    });
   }
 
   // --- HTTP Request Handler ---
@@ -1785,24 +1791,58 @@ You do not delegate. If something falls outside your role, say so plainly in you
       return this.json(res, 200, { ok: true });
     }
 
-    // GET /api/transcript?group=folder — parse the session transcript for a group
+    // GET /api/transcript?group=folder[&run_id=N] — parse the session transcript
+    // for a group, optionally scoped to a single agent_runs row's time window.
     if (method === 'GET' && url.pathname === '/api/transcript') {
       const folder = url.searchParams.get('group');
       if (!folder) return this.json(res, 400, { error: 'group required' });
 
-      const sessionId = getSession(folder);
+      const runIdParam = url.searchParams.get('run_id');
+      let runWindow: { start: number; end: number } | null = null;
+      let runSessionId: string | null = null;
+      let runMeta: {
+        id: number;
+        timestamp: string;
+        duration_ms: number;
+        cost_usd: number;
+        num_turns: number;
+        session_id?: string;
+      } | null = null;
+      if (runIdParam) {
+        const runId = parseInt(runIdParam, 10);
+        if (!Number.isFinite(runId)) {
+          return this.json(res, 400, { error: 'invalid run_id' });
+        }
+        const run = getAgentRunById(runId);
+        if (!run) {
+          return this.json(res, 404, { error: 'run not found' });
+        }
+        const end = new Date(run.timestamp).getTime();
+        const start = end - (run.duration_ms || 0);
+        // Pad by 2s on the leading edge — the SDK timestamps the `result`
+        // message when the run ends, and earlier tool_use entries may have
+        // slightly earlier clock readings than duration_ms alone captures.
+        runWindow = { start: start - 2000, end: end + 500 };
+        runSessionId = run.session_id || null;
+        runMeta = {
+          id: run.id,
+          timestamp: run.timestamp,
+          duration_ms: run.duration_ms,
+          cost_usd: run.cost_usd,
+          num_turns: run.num_turns,
+          session_id: run.session_id,
+        };
+      }
+
+      const sessionId = runSessionId || getSession(folder);
       if (!sessionId) {
         return this.json(res, 404, { error: 'No active session' });
       }
 
-      // Find transcript JSONL — try common project paths
-      const sessionsBase = path.join(
-        DATA_DIR,
-        'sessions',
-        folder,
-        '.claude',
-        'projects',
-      );
+      // Find transcript JSONL anywhere under the group's session dir. Older
+      // single-agent sessions live at `{folder}/.claude/projects/...` while
+      // multi-agent ones nest under `{folder}/{agent}/.claude/projects/...`.
+      const sessionsBase = path.join(DATA_DIR, 'sessions', folder);
       let transcriptPath: string | null = null;
       if (fs.existsSync(sessionsBase)) {
         const findJsonl = (dir: string): string | null => {
@@ -1848,7 +1888,15 @@ You do not delegate. If something falls outside your role, say so plainly in you
           timestamp?: string;
         }> = [];
 
+        const inWindow = (ts: string | undefined): boolean => {
+          if (!runWindow) return true;
+          if (!ts) return false;
+          const t = new Date(ts).getTime();
+          return t >= runWindow.start && t <= runWindow.end;
+        };
+
         for (const entry of entries) {
+          if (!inWindow(entry.timestamp)) continue;
           if (entry.type === 'assistant' && entry.message?.content) {
             for (const block of entry.message.content) {
               if (block.type === 'text' && block.text) {
@@ -1911,7 +1959,7 @@ You do not delegate. If something falls outside your role, say so plainly in you
           }
         }
 
-        return this.json(res, 200, { sessionId, timeline });
+        return this.json(res, 200, { sessionId, timeline, run: runMeta });
       } catch (err) {
         logger.error({ err, folder }, 'Failed to parse transcript');
         return this.json(res, 500, { error: 'Failed to parse transcript' });

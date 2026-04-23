@@ -76,6 +76,9 @@ function loadNotifLastRead() {
 export const notifications = signal(loadNotifHistory());
 export const notifLastReadAt = signal(loadNotifLastRead());
 export const flashMessageId = signal(null);
+// Side panel: { runId, groupFolder, usage? } when open, null when closed.
+// Phase 1 of side panels (issue #90) — retroactive agent session viewer.
+export const agentPanel = signal(null);
 export const unreadNotifCount = computed(() => {
   const lastRead = notifLastReadAt.value;
   return notifications.value.filter(
@@ -326,6 +329,7 @@ api.onSSE('usage_update', (data) => {
           ...msgs[i],
           usage: data,
           toolHistory: progressData?.history || [],
+          runId: data.run_id ?? msgs[i].runId ?? null,
         };
         messages.value = msgs;
         break;
@@ -562,6 +566,7 @@ export async function selectGroup(jid) {
       senderName: m.sender_name,
       usage: parsedUsage,
       toolHistory: parsedUsage?.toolHistory || [],
+      runId: m.run_id ?? null,
     };
   });
   const dbIds = new Set(dbMessages.map((m) => m.id));

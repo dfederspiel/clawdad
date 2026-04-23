@@ -8,6 +8,7 @@ import { NewGroupDialog } from './NewGroupDialog.js';
 import { AchievementToast } from './blocks/AchievementToast.js';
 import { AchievementPanel } from './AchievementPanel.js';
 import { CredentialModal } from './CredentialModal.js';
+import { AgentPanel } from './AgentPanel.js';
 
 export function App() {
   const group = selectedGroup.value;
@@ -40,6 +41,7 @@ export function App() {
       <${AchievementToast} />
       <${AchievementPanel} />
       <${CredentialModal} />
+      <${AgentPanel} />
     </div>
   `;
 }

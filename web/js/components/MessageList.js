@@ -118,6 +118,7 @@ export function MessageList() {
                     isError=${m.isError}
                     usage=${m.usage}
                     toolHistory=${m.toolHistory}
+                    runId=${m.runId}
                   />
                   ${thread && html`
                     <${ThreadView}

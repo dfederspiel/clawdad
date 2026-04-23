@@ -62,6 +62,7 @@ export interface NewMessage {
   is_bot_message?: boolean;
   thread_id?: string;
   usage?: string;
+  run_id?: number | null;
 }
 
 export interface MediaArtifact {
