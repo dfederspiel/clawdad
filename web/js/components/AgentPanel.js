@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useEffect, useState } from 'preact/hooks';
-import { agentPanel, selectedGroup } from '../app.js';
+import { agentPanel } from '../app.js';
 import * as api from '../api.js';
 
 function formatTime(ts) {
@@ -44,14 +44,14 @@ function Entry({ entry }) {
     return html`
       <div class="flex items-start gap-2 py-1.5 px-2 border-l-2 border-accent/50">
         <span class="font-mono text-[10px] text-accent shrink-0 mt-0.5">${entry.tool}</span>
-        <span class="text-xs text-txt-2 truncate">${entry.summary || ''}</span>
+        <span class="text-xs text-txt-2 font-mono break-words">${entry.summary || ''}</span>
       </div>
     `;
   }
   if (entry.type === 'tool_result') {
     if (!entry.content) return null;
     return html`
-      <div class="pl-4 text-[11px] text-txt-muted font-mono whitespace-pre-wrap break-words line-clamp-3">
+      <div class="pl-4 text-[11px] text-txt-muted font-mono whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
         ${entry.content}
       </div>
     `;
@@ -89,6 +89,15 @@ export function AgentPanel() {
       });
     return () => { cancelled = true; };
   }, [state?.runId, state?.groupFolder]);
+
+  useEffect(() => {
+    if (!state) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') agentPanel.value = null;
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [state]);
 
   if (!state) return null;
 

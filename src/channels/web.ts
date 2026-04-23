@@ -1895,10 +1895,58 @@ You do not delegate. If something falls outside your role, say so plainly in you
           return t >= runWindow.start && t <= runWindow.end;
         };
 
+        const extractToolSummary = (
+          input: Record<string, unknown> | undefined,
+        ): string => {
+          if (!input) return '';
+          const s = (v: unknown, n: number): string =>
+            String(v).split('\n')[0].slice(0, n);
+          if (input.command) return s(input.command, 120);
+          if (input.file_path)
+            return String(input.file_path).split(/[/\\]/).pop() ?? '';
+          if (input.pattern) return s(input.pattern, 80);
+          if (input.path) return s(input.path, 120);
+          if (input.url) return s(input.url, 120);
+          if (input.query) return s(input.query, 120);
+          return '';
+        };
+
+        const extractResultContent = (c: unknown): string => {
+          if (typeof c === 'string') return c.slice(0, 500);
+          if (Array.isArray(c)) {
+            return c
+              .filter(
+                (b: unknown): b is { type: string; text?: string } =>
+                  typeof b === 'object' &&
+                  b !== null &&
+                  (b as { type: string }).type === 'text',
+              )
+              .map((b) => b.text ?? '')
+              .join('')
+              .slice(0, 500);
+          }
+          return '';
+        };
+
+        // The orchestrator wraps inbound user text in a <messages> envelope
+        // with sender+time metadata. For display, extract the raw message
+        // body from the innermost <message> tag when present.
+        const unwrapUserText = (raw: string): string => {
+          // Require whitespace after `message` so we don't also match `<messages>`.
+          const match = raw.match(
+            /<message\s[^>]*>([\s\S]*?)<\/message>\s*<\/messages>/i,
+          );
+          return (match?.[1] ?? raw).trim();
+        };
+
         for (const entry of entries) {
           if (!inWindow(entry.timestamp)) continue;
-          if (entry.type === 'assistant' && entry.message?.content) {
-            for (const block of entry.message.content) {
+
+          const content = entry.message?.content;
+          if (!content) continue;
+
+          if (entry.type === 'assistant' && Array.isArray(content)) {
+            for (const block of content) {
               if (block.type === 'text' && block.text) {
                 timeline.push({
                   type: 'text',
@@ -1908,53 +1956,55 @@ You do not delegate. If something falls outside your role, say so plainly in you
                 });
               }
               if (block.type === 'tool_use') {
-                const summary = block.input?.command
-                  ? String(block.input.command).split('\n')[0].slice(0, 120)
-                  : block.input?.file_path
-                    ? String(block.input.file_path).split(/[/\\]/).pop()
-                    : block.input?.pattern
-                      ? String(block.input.pattern).slice(0, 80)
-                      : '';
                 timeline.push({
                   type: 'tool_use',
                   tool: block.name,
-                  summary,
-                  timestamp: entry.timestamp,
-                });
-              }
-              if (block.type === 'tool_result') {
-                timeline.push({
-                  type: 'tool_result',
-                  tool: block.name,
-                  content:
-                    typeof block.content === 'string'
-                      ? block.content.slice(0, 500)
-                      : '',
+                  summary: extractToolSummary(block.input),
                   timestamp: entry.timestamp,
                 });
               }
             }
           }
-          if (entry.type === 'user' && entry.message?.content) {
-            const text =
-              typeof entry.message.content === 'string'
-                ? entry.message.content
-                : Array.isArray(entry.message.content)
-                  ? entry.message.content
-                      .filter(
-                        (b: { type: string; text?: string }) =>
-                          b.type === 'text',
-                      )
-                      .map((b: { text: string }) => b.text)
-                      .join('')
-                  : '';
-            if (text) {
-              timeline.push({
-                type: 'text',
-                role: 'user',
-                content: text.slice(0, 2000),
-                timestamp: entry.timestamp,
-              });
+
+          if (entry.type === 'user') {
+            if (typeof content === 'string') {
+              const text = unwrapUserText(content);
+              if (text) {
+                timeline.push({
+                  type: 'text',
+                  role: 'user',
+                  content: text.slice(0, 2000),
+                  timestamp: entry.timestamp,
+                });
+              }
+            } else if (Array.isArray(content)) {
+              // User messages can carry either plain text (a real user turn)
+              // or tool_result blocks (the agent's tool chain). Surface both.
+              const textParts: string[] = [];
+              for (const block of content) {
+                if (block.type === 'text' && block.text) {
+                  textParts.push(block.text);
+                }
+                if (block.type === 'tool_result') {
+                  timeline.push({
+                    type: 'tool_result',
+                    tool: block.name,
+                    content: extractResultContent(block.content),
+                    timestamp: entry.timestamp,
+                  });
+                }
+              }
+              if (textParts.length) {
+                const text = unwrapUserText(textParts.join(''));
+                if (text) {
+                  timeline.push({
+                    type: 'text',
+                    role: 'user',
+                    content: text.slice(0, 2000),
+                    timestamp: entry.timestamp,
+                  });
+                }
+              }
             }
           }
         }
