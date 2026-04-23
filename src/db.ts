@@ -196,6 +196,48 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+
+  // Add run_id column to messages (Phase 1 side panel: correlates a rendered
+  // bot message back to the agent_runs row that produced it).
+  try {
+    database.exec(`ALTER TABLE messages ADD COLUMN run_id INTEGER`);
+    database.exec(
+      `CREATE INDEX IF NOT EXISTS idx_messages_run_id ON messages(run_id)`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
+  // One-shot backfill: link pre-existing bot messages to their agent_runs row
+  // by emulating what attachUsageToLastBotMessage does live — for each run in
+  // chronological order, claim the most recent orphan bot message in the same
+  // chat whose timestamp is ≤ the run's timestamp.
+  const backfillDone = database
+    .prepare(`SELECT value FROM router_state WHERE key = ?`)
+    .get('migrated_run_id_backfill') as { value: string } | undefined;
+  if (!backfillDone) {
+    const runs = database
+      .prepare(
+        `SELECT rowid AS id, chat_jid, timestamp FROM agent_runs ORDER BY timestamp ASC`,
+      )
+      .all() as Array<{ id: number; chat_jid: string; timestamp: string }>;
+    const claim = database.prepare(`
+      UPDATE messages SET run_id = ?
+      WHERE rowid = (
+        SELECT rowid FROM messages
+        WHERE chat_jid = ? AND is_bot_message = 1 AND run_id IS NULL
+          AND timestamp <= ?
+        ORDER BY timestamp DESC LIMIT 1
+      )
+    `);
+    const tx = database.transaction((rows: typeof runs) => {
+      for (const r of rows) claim.run(r.id, r.chat_jid, r.timestamp);
+    });
+    tx(runs);
+    database
+      .prepare(`INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)`)
+      .run('migrated_run_id_backfill', new Date().toISOString());
+  }
   database.exec(`
     CREATE TABLE IF NOT EXISTS threads (
       thread_id TEXT PRIMARY KEY,
@@ -537,7 +579,7 @@ export function getMessagesSince(
   const threadFilter = excludeThreaded ? 'AND thread_id IS NULL' : '';
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, usage
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, usage, run_id
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
         ${botFilter}
@@ -1289,43 +1331,58 @@ export interface AgentRunRecord {
 }
 
 /**
- * Attach usage JSON to the most recent bot message in a chat.
+ * Attach usage JSON (and optionally run_id) to the most recent bot message in a chat.
  * Called after storeAgentRun so the usage survives page refreshes.
  */
 export function attachUsageToLastBotMessage(
   chatJid: string,
   usageJson: string,
+  runId?: number,
 ): void {
-  db.prepare(
-    `UPDATE messages SET usage = ?
-     WHERE rowid = (
-       SELECT rowid FROM messages
-       WHERE chat_jid = ? AND is_bot_message = 1
-       ORDER BY timestamp DESC LIMIT 1
-     )`,
-  ).run(usageJson, chatJid);
+  if (runId !== undefined) {
+    db.prepare(
+      `UPDATE messages SET usage = ?, run_id = ?
+       WHERE rowid = (
+         SELECT rowid FROM messages
+         WHERE chat_jid = ? AND is_bot_message = 1
+         ORDER BY timestamp DESC LIMIT 1
+       )`,
+    ).run(usageJson, runId, chatJid);
+  } else {
+    db.prepare(
+      `UPDATE messages SET usage = ?
+       WHERE rowid = (
+         SELECT rowid FROM messages
+         WHERE chat_jid = ? AND is_bot_message = 1
+         ORDER BY timestamp DESC LIMIT 1
+       )`,
+    ).run(usageJson, chatJid);
+  }
 }
 
-export function storeAgentRun(run: AgentRunRecord): void {
-  db.prepare(
-    `INSERT INTO agent_runs (chat_jid, group_folder, session_id, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms, num_turns, is_error, tool_history, container_reuse)
+export function storeAgentRun(run: AgentRunRecord): number {
+  const result = db
+    .prepare(
+      `INSERT INTO agent_runs (chat_jid, group_folder, session_id, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms, num_turns, is_error, tool_history, container_reuse)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    run.chat_jid,
-    run.group_folder,
-    run.session_id || null,
-    run.timestamp,
-    run.input_tokens,
-    run.output_tokens,
-    run.cache_read_tokens,
-    run.cache_write_tokens,
-    run.cost_usd,
-    run.duration_ms,
-    run.num_turns,
-    run.is_error ? 1 : 0,
-    run.tool_history || null,
-    run.container_reuse || 'cold_start',
-  );
+    )
+    .run(
+      run.chat_jid,
+      run.group_folder,
+      run.session_id || null,
+      run.timestamp,
+      run.input_tokens,
+      run.output_tokens,
+      run.cache_read_tokens,
+      run.cache_write_tokens,
+      run.cost_usd,
+      run.duration_ms,
+      run.num_turns,
+      run.is_error ? 1 : 0,
+      run.tool_history || null,
+      run.container_reuse || 'cold_start',
+    );
+  return Number(result.lastInsertRowid);
 }
 
 export function getUsageStats(periodHours: number = 24): {
@@ -1522,6 +1579,24 @@ export function getLatestRunForChat(chatJid: string): AgentRunRecord | null {
     )
     .get(chatJid) as
     | (Omit<AgentRunRecord, 'is_error'> & { is_error: number })
+    | undefined;
+  if (!row) return null;
+  return { ...row, is_error: row.is_error === 1 };
+}
+
+export interface AgentRunRow extends AgentRunRecord {
+  id: number;
+}
+
+/**
+ * Get a single agent_runs row by rowid. Used by the side panel to slice the
+ * transcript JSONL to a specific run's timestamp window.
+ */
+export function getAgentRunById(runId: number): AgentRunRow | null {
+  const row = db
+    .prepare('SELECT rowid as id, * FROM agent_runs WHERE rowid = ?')
+    .get(runId) as
+    | (Omit<AgentRunRow, 'is_error'> & { is_error: number })
     | undefined;
   if (!row) return null;
   return { ...row, is_error: row.is_error === 1 };

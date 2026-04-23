@@ -166,10 +166,14 @@ const pendingOrigins: Record<string, { originJid: string; threadId?: string }> =
   {};
 
 /** Broadcast usage metrics to web UI clients */
-function broadcastUsage(chatJid: string, usage: UsageData): void {
+function broadcastUsage(
+  chatJid: string,
+  usage: UsageData,
+  runId?: number,
+): void {
   for (const ch of channels) {
     if (ch.name === 'web' && 'broadcastUsageUpdate' in ch) {
-      (ch as any).broadcastUsageUpdate(chatJid, usage);
+      (ch as any).broadcastUsageUpdate(chatJid, usage, runId);
       break;
     }
   }
@@ -1790,7 +1794,7 @@ async function runAgent(
         // so onOutput fires once per user message, not once per container)
         if (output.usage && output.usage.numTurns > 0) {
           const u = output.usage;
-          storeAgentRun({
+          const runId = storeAgentRun({
             chat_jid: chatJid,
             group_folder: group.folder,
             session_id: sessions[agentId],
@@ -1813,8 +1817,9 @@ async function runAgent(
               ...u,
               toolHistory: toolHistory.length > 0 ? toolHistory : undefined,
             }),
+            runId,
           );
-          broadcastUsage(chatJid, u);
+          broadcastUsage(chatJid, u, runId);
           const cacheHitRatio =
             u.cacheReadTokens /
             Math.max(1, u.cacheReadTokens + u.cacheWriteTokens);
@@ -1894,7 +1899,7 @@ async function runAgent(
 
     if (output.usage && output.usage.numTurns > 0) {
       const u = output.usage;
-      storeAgentRun({
+      const runId = storeAgentRun({
         chat_jid: chatJid,
         group_folder: group.folder,
         session_id: sessions[agentId],
@@ -1917,8 +1922,9 @@ async function runAgent(
           ...u,
           toolHistory: toolHistory.length > 0 ? toolHistory : undefined,
         }),
+        runId,
       );
-      broadcastUsage(chatJid, u);
+      broadcastUsage(chatJid, u, runId);
       const cacheHitRatio =
         u.cacheReadTokens / Math.max(1, u.cacheReadTokens + u.cacheWriteTokens);
       logger.info(
