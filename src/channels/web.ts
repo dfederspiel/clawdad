@@ -1939,6 +1939,10 @@ You do not delegate. If something falls outside your role, say so plainly in you
           return (match?.[1] ?? raw).trim();
         };
 
+        // Track tool_use.id → tool name so we can label tool_result entries,
+        // which only carry a tool_use_id (not the tool name).
+        const toolNameById = new Map<string, string>();
+
         for (const entry of entries) {
           if (!inWindow(entry.timestamp)) continue;
 
@@ -1947,6 +1951,13 @@ You do not delegate. If something falls outside your role, say so plainly in you
 
           if (entry.type === 'assistant' && Array.isArray(content)) {
             for (const block of content) {
+              if (block.type === 'thinking' && block.thinking) {
+                timeline.push({
+                  type: 'thinking',
+                  content: block.thinking.slice(0, 2000),
+                  timestamp: entry.timestamp,
+                });
+              }
               if (block.type === 'text' && block.text) {
                 timeline.push({
                   type: 'text',
@@ -1956,6 +1967,9 @@ You do not delegate. If something falls outside your role, say so plainly in you
                 });
               }
               if (block.type === 'tool_use') {
+                if (block.id && block.name) {
+                  toolNameById.set(block.id, block.name);
+                }
                 timeline.push({
                   type: 'tool_use',
                   tool: block.name,
@@ -1969,7 +1983,9 @@ You do not delegate. If something falls outside your role, say so plainly in you
           if (entry.type === 'user') {
             if (typeof content === 'string') {
               const text = unwrapUserText(content);
-              if (text) {
+              // SDK harness reminders ("[system] You completed tool calls
+              // but did not send a visible reply...") are not user turns.
+              if (text && !text.startsWith('[system]')) {
                 timeline.push({
                   type: 'text',
                   role: 'user',
@@ -1988,7 +2004,11 @@ You do not delegate. If something falls outside your role, say so plainly in you
                 if (block.type === 'tool_result') {
                   timeline.push({
                     type: 'tool_result',
-                    tool: block.name,
+                    tool:
+                      (block.tool_use_id &&
+                        toolNameById.get(block.tool_use_id)) ||
+                      block.name ||
+                      '',
                     content: extractResultContent(block.content),
                     timestamp: entry.timestamp,
                   });
@@ -1996,7 +2016,7 @@ You do not delegate. If something falls outside your role, say so plainly in you
               }
               if (textParts.length) {
                 const text = unwrapUserText(textParts.join(''));
-                if (text) {
+                if (text && !text.startsWith('[system]')) {
                   timeline.push({
                     type: 'text',
                     role: 'user',

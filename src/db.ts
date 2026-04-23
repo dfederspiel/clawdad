@@ -207,6 +207,37 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+
+  // One-shot backfill: link pre-existing bot messages to their agent_runs row
+  // by emulating what attachUsageToLastBotMessage does live — for each run in
+  // chronological order, claim the most recent orphan bot message in the same
+  // chat whose timestamp is ≤ the run's timestamp.
+  const backfillDone = database
+    .prepare(`SELECT value FROM router_state WHERE key = ?`)
+    .get('migrated_run_id_backfill') as { value: string } | undefined;
+  if (!backfillDone) {
+    const runs = database
+      .prepare(
+        `SELECT rowid AS id, chat_jid, timestamp FROM agent_runs ORDER BY timestamp ASC`,
+      )
+      .all() as Array<{ id: number; chat_jid: string; timestamp: string }>;
+    const claim = database.prepare(`
+      UPDATE messages SET run_id = ?
+      WHERE rowid = (
+        SELECT rowid FROM messages
+        WHERE chat_jid = ? AND is_bot_message = 1 AND run_id IS NULL
+          AND timestamp <= ?
+        ORDER BY timestamp DESC LIMIT 1
+      )
+    `);
+    const tx = database.transaction((rows: typeof runs) => {
+      for (const r of rows) claim.run(r.id, r.chat_jid, r.timestamp);
+    });
+    tx(runs);
+    database
+      .prepare(`INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)`)
+      .run('migrated_run_id_backfill', new Date().toISOString());
+  }
   database.exec(`
     CREATE TABLE IF NOT EXISTS threads (
       thread_id TEXT PRIMARY KEY,

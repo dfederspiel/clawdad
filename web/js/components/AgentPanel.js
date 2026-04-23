@@ -28,7 +28,31 @@ function formatCost(usd) {
   return `$${usd.toFixed(2)}`;
 }
 
+function ThinkingEntry({ entry }) {
+  const [open, setOpen] = useState(false);
+  return html`
+    <div class="py-1 px-2 border-l-2 border-txt-muted/30 opacity-70">
+      <button
+        class="text-[10px] text-txt-muted font-mono hover:text-txt-2 transition-colors flex items-center gap-1.5 cursor-pointer"
+        onClick=${() => setOpen(!open)}
+        title="Agent internal reasoning"
+      >
+        <span class="text-[9px] transition-transform ${open ? 'rotate-90' : ''}">\u25B6</span>
+        <span>thinking</span>
+      </button>
+      ${open && html`
+        <div class="mt-1 text-[11px] text-txt-muted italic whitespace-pre-wrap break-words">
+          ${entry.content}
+        </div>
+      `}
+    </div>
+  `;
+}
+
 function Entry({ entry }) {
+  if (entry.type === 'thinking') {
+    return html`<${ThinkingEntry} entry=${entry} />`;
+  }
   if (entry.type === 'text') {
     const isUser = entry.role === 'user';
     return html`
