@@ -78,6 +78,10 @@ export interface ContainerInput {
   constraints?: RuntimeTurnConstraints; // per-turn safety rails (maxTurns, disallowedTools)
   systemContext?: string; // multi-agent context injected into systemPrompt.append (survives compaction)
   achievements?: { id: string; name: string; description: string }[];
+  // Optional positive allowlist over container/skills/*. Undefined = copy
+  // every global skill (backward compat). Empty array = copy none.
+  // See Phase 3 of #74 / #42.
+  skillsAllowlist?: string[];
 }
 
 export interface UsageData {
@@ -151,6 +155,7 @@ function buildVolumeMounts(
   isMain: boolean,
   chatJid: string,
   agentName?: string,
+  skillsAllowlist?: string[],
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -252,13 +257,36 @@ function buildVolumeMounts(
     );
   }
 
-  // Sync skills from container/skills/ into each group's .claude/skills/
+  // Sync skills from container/skills/ into each group's .claude/skills/.
+  // Per-agent allowlist (Phase 3 of #74 / #42): when skillsAllowlist is
+  // provided, only matching skill directories are copied. Undefined
+  // preserves the receive-all behavior for backward compatibility.
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
+    const globalSkillDirs = fs
+      .readdirSync(skillsSrc)
+      .filter((d) => fs.statSync(path.join(skillsSrc, d)).isDirectory());
+    const allow = skillsAllowlist ? new Set(skillsAllowlist) : null;
+
+    // When an allowlist is set, remove any previously-copied global skills
+    // that are no longer in the allowlist. Only touch directories that
+    // match known global skill names — anything else in the skills dir is
+    // left alone (host-side Claude Code skills, user additions, etc).
+    if (allow && fs.existsSync(skillsDst)) {
+      for (const existing of fs.readdirSync(skillsDst)) {
+        if (globalSkillDirs.includes(existing) && !allow.has(existing)) {
+          fs.rmSync(path.join(skillsDst, existing), {
+            recursive: true,
+            force: true,
+          });
+        }
+      }
+    }
+
+    for (const skillDir of globalSkillDirs) {
+      if (allow && !allow.has(skillDir)) continue;
       const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
       const dstDir = path.join(skillsDst, skillDir);
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
@@ -718,6 +746,7 @@ export async function spawnContainer(
     input.isMain,
     input.chatJid,
     input.agentName,
+    input.skillsAllowlist,
   );
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const agentSuffix =

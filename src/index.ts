@@ -2076,6 +2076,7 @@ async function runAgent(
         poolManaged: true,
         mainChatJid: isMain ? undefined : getMainChatJid(),
         systemContext,
+        skillsAllowlist: agent?.skills,
         achievements: getAchievementsForContainer(),
       };
 
@@ -2153,6 +2154,7 @@ async function runAgent(
       poolManaged: false,
       mainChatJid: isMain ? undefined : getMainChatJid(),
       systemContext,
+      skillsAllowlist: agent?.skills,
       achievements: getAchievementsForContainer(),
     };
 

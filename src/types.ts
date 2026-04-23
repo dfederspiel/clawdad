@@ -105,6 +105,11 @@ export interface Agent {
   // wildcards on Claude (e.g. `mcp__nanoclaw__*`); Ollama matches exact
   // names only. An empty array means "no tools" — an explicit opt-out.
   tools?: string[];
+  // Positive skill allowlist over container/skills/*. Entries are skill
+  // directory names (e.g. "rich-output", "status"). Undefined preserves
+  // backward-compat behavior of receiving every global skill. An empty
+  // array means "no skills". Phase 3 of #74 / #42.
+  skills?: string[];
 }
 
 export type WorkPhase =
