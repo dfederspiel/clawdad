@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { agentPanel, portalThreads, selectedJid } from '../app.js';
+import { agentPanel, portalThreads, portalProgress, selectedJid } from '../app.js';
 import * as api from '../api.js';
 import { MessageBody } from './MessageBody.js';
 
@@ -98,6 +98,8 @@ function LiveMessage({ msg }) {
   `;
 }
 
+const STALL_THRESHOLD_MS = 30000;
+
 /** Renders one portal (specialist) as a collapsible section in the stack.
  *  isRunning drives the LIVE badge; sections stay in the stack after the
  *  agent finishes so the user can keep reading. */
@@ -106,6 +108,7 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
   const [historicalMsgs, setHistoricalMsgs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(true);
+  const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     let cancelled = false;
@@ -134,6 +137,14 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
     }
   }, [focused]);
 
+  // Tick every 2s while running so stall detection can re-render without
+  // waiting for the next progress event.
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = setInterval(() => setNow(Date.now()), 2000);
+    return () => clearInterval(id);
+  }, [isRunning]);
+
   const liveMsgs = portal?.messages || [];
   const seen = new Set(historicalMsgs.map((m) => m.id).filter(Boolean));
   const combined = [
@@ -141,6 +152,13 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
     ...liveMsgs.filter((m) => !m.id || !seen.has(m.id)),
   ];
   const count = combined.length;
+
+  // Per-portal progress feed — shows the agent's tool-call chain live.
+  const progress = portalProgress.value[threadId];
+  const lastEventAt = progress?.lastEventAt || 0;
+  const recentTool = progress?.history?.filter((h) => h.tool && h.tool !== 'text').slice(-1)[0];
+  const stalled =
+    isRunning && lastEventAt > 0 && now - lastEventAt > STALL_THRESHOLD_MS;
 
   return html`
     <section
@@ -153,8 +171,11 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
       >
         <span class="text-[9px] transition-transform ${open ? 'rotate-90' : ''}">\u25B6</span>
         <span class="text-xs font-semibold truncate">${portal.agentName || 'Agent'}</span>
-        ${isRunning && html`
+        ${isRunning && !stalled && html`
           <span class="text-[9px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/20 text-accent">live</span>
+        `}
+        ${stalled && html`
+          <span class="text-[9px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded bg-err/20 text-err" title="No activity for ${Math.round((now - lastEventAt) / 1000)}s">stalled?</span>
         `}
         <span class="text-[10px] text-txt-muted font-mono ml-auto shrink-0">
           ${count} msg${count !== 1 ? 's' : ''}
@@ -165,12 +186,22 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
           ${loading && combined.length === 0 && html`
             <div class="text-xs text-txt-muted p-2 text-center">Loading...</div>
           `}
-          ${!loading && combined.length === 0 && html`
+          ${!loading && combined.length === 0 && !isRunning && html`
+            <div class="text-xs text-txt-muted p-2 text-center">No messages.</div>
+          `}
+          ${combined.map((m, i) => html`<${LiveMessage} key=${m.id || i} msg=${m} />`)}
+          ${isRunning && recentTool && html`
+            <div class="flex items-start gap-2 py-1 px-2 text-[11px] text-txt-muted">
+              <span class="font-mono text-[10px] text-accent shrink-0 mt-px">${recentTool.tool}</span>
+              <span class="truncate">${recentTool.summary || ''}</span>
+              <span class="typing-dot inline-block ml-auto mt-1" />
+            </div>
+          `}
+          ${isRunning && !recentTool && combined.length === 0 && html`
             <div class="text-xs text-txt-muted p-2 text-center">
               Waiting for agent output... <span class="typing-dot inline-block ml-1" />
             </div>
           `}
-          ${combined.map((m, i) => html`<${LiveMessage} key=${m.id || i} msg=${m} />`)}
         </div>
       `}
     </section>

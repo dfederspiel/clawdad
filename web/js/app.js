@@ -40,6 +40,11 @@ export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group la
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
 export const typingAgentName = signal({}); // { [jid]: string } — which agent is typing
 export const agentProgress = signal({}); // { [jid]: { tool, summary, history[] } }
+// Portal-scoped progress shard. Same shape as agentProgress but keyed by
+// thread_id so each PortalSection in the drawer can render its own live
+// tool activity. Also tracks lastEventAt for stall detection.
+// { [thread_id]: { tool, summary, history[], lastEventAt } }
+export const portalProgress = signal({});
 export const activeAgents = signal({}); // { [jid]: string[] } — agent names currently working
 export const workState = signal({}); // { [jid]: WorkStateEvent }
 export const currentWorkState = computed(() => workState.value[selectedJid.value] || null);
@@ -326,6 +331,30 @@ api.onSSE('play_sound', (data) => {
 });
 
 api.onSSE('agent_progress', (data) => {
+  // If this progress carries a thread_id, route it to the portal shard —
+  // the drawer's PortalSection wants to show per-portal tool activity.
+  // Portal events bypass the typingGroups gate; the drawer stays open
+  // across typing flips so we shouldn't drop them.
+  if (data.thread_id) {
+    const prev = portalProgress.value[data.thread_id];
+    const history = prev?.history || [];
+    const updated = [
+      ...history,
+      { tool: data.tool, summary: data.summary, timestamp: data.timestamp },
+    ];
+    if (updated.length > 20) updated.shift();
+    portalProgress.value = {
+      ...portalProgress.value,
+      [data.thread_id]: {
+        tool: data.tool,
+        summary: data.summary,
+        history: updated,
+        lastEventAt: Date.now(),
+      },
+    };
+    // Don't return — also update the chat-jid shard below so the main
+    // typing indicator reflects activity in multi-agent groups.
+  }
   // Drop late-arriving progress events for groups that have already cleared
   // their typing state — prevents the indicator from flashing stale data.
   if (!typingGroups.value[data.jid]) return;
