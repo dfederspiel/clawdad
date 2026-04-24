@@ -284,6 +284,11 @@ let broadcastThreadOpened:
       sourceAgent?: string,
     ) => void)
   | null = null;
+// Callback for portal thread completion. The client clears the "live" flag
+// so only in-flight portals render in the drawer stack.
+let broadcastThreadClosed:
+  | ((originJid: string, threadId: string) => void)
+  | null = null;
 
 async function deliverAgentMessage(
   channel: Channel,
@@ -1010,6 +1015,7 @@ async function processGroupMessages(
     MAX_MESSAGES_PER_PROMPT,
     isMultiAgent, // includeBotMessages — coordinators must see specialist output
     !isThreadReply, // excludeThreaded — but include thread replies when processing a thread agent
+    isMultiAgent, // keepPortalThreads — coordinators need delegation output
   );
 
   if (missedMessages.length === 0) {
@@ -2803,6 +2809,9 @@ async function main(): Promise<void> {
   if (channelOpts.onThreadOpened) {
     broadcastThreadOpened = channelOpts.onThreadOpened;
   }
+  if (channelOpts.onThreadClosed) {
+    broadcastThreadClosed = channelOpts.onThreadClosed;
+  }
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
@@ -3289,6 +3298,7 @@ async function main(): Promise<void> {
             portalThreadId,
             agent.displayName,
           );
+          broadcastThreadClosed?.(chatJid, portalThreadId);
           if (persistExplicitAgentStatus(chatJid, agent.name, '')) {
             logger.info(
               { jid: chatJid, agentName: agent.name },

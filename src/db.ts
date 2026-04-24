@@ -579,6 +579,7 @@ export function getMessagesSince(
   limit: number = 200,
   includeBotMessages: boolean = false,
   excludeThreaded: boolean = false,
+  keepPortalThreads: boolean = false,
 ): NewMessage[] {
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
@@ -587,7 +588,22 @@ export function getMessagesSince(
   const botFilter = includeBotMessages
     ? ''
     : 'AND is_bot_message = 0 AND content NOT LIKE ?';
-  const threadFilter = excludeThreaded ? 'AND thread_id IS NULL' : '';
+  // Three filter modes:
+  //   excludeThreaded=false                         → keep everything (default)
+  //   excludeThreaded=true, keepPortalThreads=false → hide all threaded (UI main feed)
+  //   excludeThreaded=true, keepPortalThreads=true  → hide trigger threads but keep
+  //       portal-thread content so coordinators can see specialist output they
+  //       delegated to. Without this, the coordinator would be blind to the
+  //       work that happened in its own portals.
+  let threadFilter = '';
+  if (excludeThreaded) {
+    threadFilter = keepPortalThreads
+      ? `AND (thread_id IS NULL OR EXISTS (
+           SELECT 1 FROM threads t
+           WHERE t.thread_id = messages.thread_id AND t.kind = 'portal'
+         ))`
+      : 'AND thread_id IS NULL';
+  }
   const sql = `
     SELECT * FROM (
       SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, usage, run_id

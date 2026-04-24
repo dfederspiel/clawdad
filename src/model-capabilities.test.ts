@@ -151,7 +151,10 @@ describe('buildMultiAgentContext', () => {
     const out = buildMultiAgentContext(ollamaSpec, [coord, ollamaSpec]);
     expect(out).not.toContain('mcp__nanoclaw__');
     expect(out).toContain('plain text');
-    expect(out).toContain('delivered to the user');
+    // Specialists write into portal side panels that the coordinator
+    // synthesizes; that framing replaced the old "delivered to the user"
+    // copy when portal routing landed.
+    expect(out).toContain('portal');
   });
 
   it('lists teammates regardless of capability profile', () => {

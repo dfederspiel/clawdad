@@ -8,15 +8,16 @@ import {
   threadTyping,
   toggleThread,
   handleThreadReply,
-  pendingInput,
   currentWorkState,
   agentProgress,
   selectedJid,
   flashMessageId,
+  portalThreads,
 } from '../app.js';
 import { Message } from './Message.js';
 import { ThreadView } from './ThreadView.js';
 import { TypingIndicator } from './TypingIndicator.js';
+import { PortalPill } from './PortalPill.js';
 
 const SCROLL_THRESHOLD = 80;
 
@@ -82,60 +83,73 @@ export function MessageList() {
     setUnread(0);
   }
 
-  function onClickMention(e) {
-    const mention = e.target.closest('.mention');
-    if (mention) {
-      const trigger = mention.dataset.trigger;
-      if (trigger) pendingInput.value = trigger;
-    }
-  }
+  // Interleave portal pills with regular messages by timestamp. Pills are
+  // rendered as pseudo-entries; each one is scoped to the current chat.
+  const portals = portalThreads.value;
+  const portalEntries = Object.entries(portals)
+    .filter(([, p]) => p.jid === jid)
+    .map(([threadId, p]) => ({
+      kind: 'portal',
+      threadId,
+      timestamp: p.createdAt || new Date(p.openedAt).toISOString(),
+    }));
+  const visibleMsgs = msgs
+    .filter((m) => m.senderName !== 'System')
+    .map((m) => ({ kind: 'message', msg: m, timestamp: m.timestamp }));
+  const timeline = [...visibleMsgs, ...portalEntries].sort((a, b) => {
+    const ta = new Date(a.timestamp || 0).getTime();
+    const tb = new Date(b.timestamp || 0).getTime();
+    return ta - tb;
+  });
 
   return html`
     <div class="flex-1 relative flex flex-col min-h-0">
-    <div ref=${containerRef} onScroll=${onScroll} class="flex-1 overflow-y-auto p-3 md:p-5 flex flex-col gap-3" onClick=${onClickMention}>
-      ${msgs.length === 0 && !showActivity
+    <div ref=${containerRef} onScroll=${onScroll} class="flex-1 overflow-y-auto p-3 md:p-5 flex flex-col gap-3">
+      ${timeline.length === 0 && !showActivity
         ? html`
             <div class="flex-1 flex items-center justify-center">
               <p class="text-txt-muted text-sm">No messages yet. Start the conversation below.</p>
             </div>
           `
-        : msgs.filter((m) => m.senderName !== 'System').map(
-            (m, i) => {
-              const thread = m.id ? threads[m.id] : null;
-              const flashing = m.id && flashMessageId.value === m.id;
-              return html`
-                <div
-                  key=${i}
-                  data-role=${m.role}
-                  id=${m.id ? `msg-${m.id}` : undefined}
-                  class=${flashing ? 'notif-flash' : ''}
-                >
-                  <${Message}
-                    role=${m.role}
-                    content=${m.content}
-                    timestamp=${m.timestamp}
-                    senderName=${m.senderName}
-                    isError=${m.isError}
-                    usage=${m.usage}
-                    toolHistory=${m.toolHistory}
-                    runId=${m.runId}
+        : timeline.map((entry, i) => {
+            if (entry.kind === 'portal') {
+              return html`<${PortalPill} key=${`portal-${entry.threadId}`} threadId=${entry.threadId} />`;
+            }
+            const m = entry.msg;
+            const thread = m.id ? threads[m.id] : null;
+            const flashing = m.id && flashMessageId.value === m.id;
+            return html`
+              <div
+                key=${m.id || i}
+                data-role=${m.role}
+                id=${m.id ? `msg-${m.id}` : undefined}
+                class=${flashing ? 'notif-flash' : ''}
+              >
+                <${Message}
+                  role=${m.role}
+                  content=${m.content}
+                  timestamp=${m.timestamp}
+                  senderName=${m.senderName}
+                  isError=${m.isError}
+                  usage=${m.usage}
+                  toolHistory=${m.toolHistory}
+                  runId=${m.runId}
+                />
+                ${thread && html`
+                  <${ThreadView}
+                    threadId=${m.id}
+                    agentName=${thread.agent_name}
+                    messages=${expanded[m.id] || []}
+                    replyCount=${thread.reply_count || 0}
+                    isExpanded=${!!expanded[m.id]}
+                    isTyping=${!!tTyping[m.id]}
+                    onToggle=${toggleThread}
+                    onReply=${handleThreadReply}
                   />
-                  ${thread && html`
-                    <${ThreadView}
-                      threadId=${m.id}
-                      agentName=${thread.agent_name}
-                      messages=${expanded[m.id] || []}
-                      replyCount=${thread.reply_count || 0}
-                      isExpanded=${!!expanded[m.id]}
-                      isTyping=${!!tTyping[m.id]}
-                      onToggle=${toggleThread}
-                      onReply=${handleThreadReply}
-                    />
-                  `}
-                </div>
-              `;
-            },
-          )}
+                `}
+              </div>
+            `;
+          })}
       ${showActivity && html`<${TypingIndicator} />`}
     </div>
     ${unread > 0 && html`

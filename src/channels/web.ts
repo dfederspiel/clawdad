@@ -51,6 +51,7 @@ import {
   deleteTask,
   getTelemetryStats,
   getThreadsForChat,
+  getPortalThreadsForChat,
   getThreadMessages,
   getUsageStats,
   getLatestRunForChat,
@@ -129,6 +130,14 @@ export class WebChannel implements Channel {
         agent_name: agentName,
         kind,
         source_agent: sourceAgent,
+      });
+    };
+    // Portal thread completion — client clears the `live` flag so the
+    // portal drops out of the drawer's live stack.
+    opts.onThreadClosed = (originJid, threadId) => {
+      this.broadcast('thread_closed', {
+        jid: originJid,
+        thread_id: threadId,
       });
     };
   }
@@ -1552,6 +1561,16 @@ You do not delegate. If something falls outside your role, say so plainly in you
     if (method === 'GET' && threadsMatch) {
       const jid = decodeURIComponent(threadsMatch[1]);
       const threads = getThreadsForChat(jid);
+      return this.json(res, 200, { threads });
+    }
+
+    // GET /api/portal-threads/:jid — portal (side-drawer) threads for a chat
+    const portalThreadsMatch = url.pathname.match(
+      /^\/api\/portal-threads\/(.+)$/,
+    );
+    if (method === 'GET' && portalThreadsMatch) {
+      const jid = decodeURIComponent(portalThreadsMatch[1]);
+      const threads = getPortalThreadsForChat(jid);
       return this.json(res, 200, { threads });
     }
 

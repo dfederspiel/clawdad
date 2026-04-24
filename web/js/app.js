@@ -391,6 +391,8 @@ api.onSSE('thread_opened', (data) => {
   // Register it so `message` events with this thread_id route to the drawer.
   if (data.kind !== 'portal' || !data.thread_id) return;
   const folder = groups.value.find((g) => g.jid === data.jid)?.folder;
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
   portalThreads.value = {
     ...portalThreads.value,
     [data.thread_id]: {
@@ -399,23 +401,42 @@ api.onSSE('thread_opened', (data) => {
       agentName: data.agent_name,
       sourceAgent: data.source_agent,
       messages: [],
-      openedAt: Date.now(),
+      openedAt: now,
+      createdAt: nowIso,
+      replyCount: 0,
+      live: true, // in-session — shows in drawer stack until drawer is closed
+      running: true, // actively running — drives the LIVE badge
     },
   };
-  // Auto-open the drawer for the first portal in the active chat.
-  // Subsequent portals are registered but don't steal focus.
-  if (
-    data.jid === selectedJid.value &&
-    !agentPanel.value &&
-    folder
-  ) {
-    agentPanel.value = {
-      threadId: data.thread_id,
-      groupFolder: folder,
-      agentName: data.agent_name,
-      live: true,
-    };
+  // New live portal — always switch the drawer to the portals stack and
+  // focus on the new thread. If the user was inspecting a historical
+  // single portal, live activity takes precedence (they can click a pill
+  // to get back). If the drawer is on a retroactive transcript view
+  // (runId), leave it alone.
+  if (data.jid === selectedJid.value && folder) {
+    const cur = agentPanel.value;
+    if (!cur || cur.mode === 'portals' || cur.mode === 'portal-single') {
+      agentPanel.value = {
+        mode: 'portals',
+        groupFolder: folder,
+        focusedThreadId: data.thread_id,
+      };
+    }
   }
+});
+
+api.onSSE('thread_closed', (data) => {
+  // Portal's agent run finished — clear the running flag so the LIVE
+  // badge drops. The portal itself stays in the stack (live=true) so
+  // the user can still read what the agent said; it drops out of the
+  // stack only when the drawer is closed (handled separately).
+  if (!data.thread_id) return;
+  const portal = portalThreads.value[data.thread_id];
+  if (!portal) return;
+  portalThreads.value = {
+    ...portalThreads.value,
+    [data.thread_id]: { ...portal, running: false },
+  };
 });
 
 api.onSSE('thread_created', async (data) => {
@@ -604,9 +625,10 @@ export async function selectGroup(jid) {
   // are appended to a clean slate (selectedJid is already set above).
   messages.value = [];
 
-  const [msgData, threadData] = await Promise.all([
+  const [msgData, threadData, portalData] = await Promise.all([
     api.getMessages(jid),
     api.getThreads(jid),
+    api.getPortalThreads(jid),
   ]);
 
   // Build the DB message list, then merge any SSE messages that arrived
@@ -639,6 +661,40 @@ export async function selectGroup(jid) {
   threadMeta.value = meta;
   openThreads.value = {};
   threadTyping.value = {};
+
+  // Build portal index scoped to this chat. Portals loaded from the server
+  // power the pills in the main feed (persistent recall); only portals
+  // opened live in the current session (live: true) render in the drawer
+  // stack. That way a chat with 16 historical portals doesn't flood the
+  // drawer — you see pills inline and click one to inspect it.
+  const portalsByThread = {};
+  for (const t of portalData.threads || []) {
+    portalsByThread[t.thread_id] = {
+      kind: 'portal',
+      jid,
+      agentName: t.agent_name,
+      sourceAgent: null,
+      messages: [],
+      openedAt: new Date(t.created_at).getTime(),
+      createdAt: t.created_at,
+      replyCount: t.reply_count || 0,
+      live: false,
+    };
+  }
+  // Preserve live portals from this session even if DB doesn't have them yet.
+  for (const [tid, existing] of Object.entries(portalThreads.value)) {
+    if (existing.jid === jid && existing.live && !portalsByThread[tid]) {
+      portalsByThread[tid] = existing;
+    } else if (existing.jid === jid && existing.live && portalsByThread[tid]) {
+      // DB row exists AND it's the live session portal — preserve live flag
+      portalsByThread[tid] = {
+        ...portalsByThread[tid],
+        ...existing,
+        live: true,
+      };
+    }
+  }
+  portalThreads.value = portalsByThread;
 }
 
 export async function handleSend(content) {

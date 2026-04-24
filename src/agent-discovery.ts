@@ -205,6 +205,7 @@ export function buildMultiAgentContext(
 
       lines.push(
         `You are the coordinator. You handle general questions directly and delegate specialist work.`,
+        `Delegation output lands in a side-panel portal — not the main chat. You see each specialist's reply in your own prompt context on your next turn, but the user does NOT see it directly unless they open the portal. Synthesize what specialists said into your own reply to the user; do not say "see above" or assume they read the specialist output.`,
         `For meaningful ongoing work, keep sidebar presence current: use mcp__nanoclaw__set_subtitle for the team-level summary, and use mcp__nanoclaw__set_agent_status for your own row if you have one.`,
         `Set concise, high-signal statuses when work starts ("Reviewing PRs", "Waiting on Scout") and clear them when the work is done.`,
         `To delegate, use the mcp__nanoclaw__delegate_to_agent tool. Valid targets and example invocations:`,
@@ -240,6 +241,7 @@ export function buildMultiAgentContext(
     if (profile.receivesMcpTools) {
       lines.push(
         `You are a specialist. Focus on your role and respond directly.`,
+        `Your reply appears in a side-panel portal the user can watch, and the coordinator reads it in their own context to synthesize the user-facing answer. Write clean, scannable prose the coordinator can quote or compress. Rich UI blocks (action buttons, forms) are not supported in portals yet — stick to text and markdown.`,
         `For meaningful ongoing work, set your own sidebar status with mcp__nanoclaw__set_agent_status using a short phrase like "Reviewing flags" or "Drafting summary", then clear it when you are done.`,
         `If work falls outside your expertise, say so in your response — the coordinator will handle routing.`,
         `Your response may be superseded for user delivery if newer context arrives first. Complete the assigned work cleanly anyway; the coordinator will still see that you finished.`,
@@ -254,7 +256,7 @@ export function buildMultiAgentContext(
       // message via the host's text-path fallback. No MCP tools, no status.
       lines.push(
         `You are a specialist. Focus on your role and respond directly.`,
-        `Respond in plain text — your entire reply will be delivered to the user as your message. You do not have tools or status controls, so keep the response self-contained.`,
+        `Respond in plain text or markdown — your reply appears in a side-panel portal and the coordinator reads it to synthesize the user-facing answer. No rich UI blocks. No tools. Keep the response self-contained.`,
         `If a request falls outside your expertise, say so briefly; the coordinator will handle routing.`,
         `Do not try to act as other agents or delegate work yourself.`,
       );

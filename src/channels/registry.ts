@@ -74,6 +74,8 @@ export interface ChannelOpts {
     kind: 'portal',
     sourceAgent?: string,
   ) => void;
+  /** Broadcast portal thread completion */
+  onThreadClosed?: (originJid: string, threadId: string) => void;
   /** Reset session for a group (clears SDK session, evicts warm pool) */
   onResetSession?: (groupFolder: string) => Promise<void>;
   /** Get fully discovered agents for a group with runtime metadata */
