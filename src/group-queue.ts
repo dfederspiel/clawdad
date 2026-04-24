@@ -46,10 +46,6 @@ interface GroupState {
   // Set when first delegation starts, cleared when all delegations complete.
   // Survives runForGroup() cleanup so resume can find it.
   delegationCoordinatorId: string | null;
-  // Snapshotted coordinator container name for delegation network sharing.
-  // Set when first delegation enqueues so delegations can share the
-  // coordinator's network namespace (--network=container:<name>).
-  delegationCoordinatorContainerName: string | null;
 }
 
 export class GroupQueue {
@@ -95,7 +91,6 @@ export class GroupQueue {
         completedDelegationRetriggers: [],
         suppressNextDelegationRetrigger: false,
         delegationCoordinatorId: null,
-        delegationCoordinatorContainerName: null,
       };
       this.groups.set(groupJid, state);
     }
@@ -300,15 +295,6 @@ export class GroupQueue {
   }
 
   /**
-   * Get the coordinator's container name for network sharing.
-   * Returns the snapshotted name if available, otherwise the live container name.
-   */
-  getCoordinatorContainerName(groupJid: string): string | null {
-    const state = this.getGroup(groupJid);
-    return state.delegationCoordinatorContainerName || state.containerName;
-  }
-
-  /**
    * Mark the container as idle-waiting (finished work, waiting for IPC input).
    * If tasks are pending, preempt the idle container immediately.
    */
@@ -409,10 +395,6 @@ export class GroupQueue {
     ) {
       state.delegationCoordinatorId = `${state.groupFolder}/${state.coordinatorAgentName}`;
     }
-    if (!state.delegationCoordinatorContainerName && state.containerName) {
-      state.delegationCoordinatorContainerName = state.containerName;
-    }
-
     // Dedup
     if (state.pendingDelegations.some((t) => t.id === taskId)) {
       logger.debug({ groupJid, taskId }, 'Delegation already queued, skipping');
@@ -530,7 +512,6 @@ export class GroupQueue {
           const coord = rest.join('/');
           this.onDelegationStateFn(groupJid, folder, coord, false);
           state.delegationCoordinatorId = null;
-          state.delegationCoordinatorContainerName = null;
         }
 
         const needsRetrigger = state.completedDelegationRetriggers.some(

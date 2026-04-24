@@ -759,8 +759,6 @@ async function executeAutomationActions(
           const AUTOMATION_TIMEOUT = 120_000;
           const taskId = `automation-${agent.name}-${Date.now()}`;
           const batchId = `automation-${trace.ruleId}-${randomUUID()}`;
-          const autoCoordinatorContainer =
-            queue.getCoordinatorContainerName(chatJid);
           queue.enqueueDelegation(
             chatJid,
             taskId,
@@ -875,7 +873,6 @@ async function executeAutomationActions(
                   }
                 },
                 runBatchId: batchId,
-                networkContainer: autoCoordinatorContainer || undefined,
                 systemContext: multiAgentCtx || undefined,
                 messages: routedMessages,
               });
@@ -1266,9 +1263,6 @@ async function processGroupMessages(
     } else if (specialists.length > 1) {
       const MENTION_TIMEOUT = 120_000; // 2 minutes, same as coordinator delegations
       const batchId = `fanout-${randomUUID()}`;
-      const fanoutCoordinatorContainer =
-        queue.getCoordinatorContainerName(chatJid);
-
       logger.info(
         {
           group: group.name,
@@ -1382,7 +1376,6 @@ async function processGroupMessages(
                 }
               },
               runBatchId: batchId,
-              networkContainer: fanoutCoordinatorContainer || undefined,
               systemContext: multiAgentCtx || undefined,
               messages: structuredMessages,
             });
@@ -1729,7 +1722,6 @@ interface RunAgentOptions {
   isDelegation?: boolean;
   sendMessage?: (text: string) => Promise<void>;
   runBatchId?: string;
-  networkContainer?: string;
   systemContext?: string;
   messages?: StructuredMessage[];
 }
@@ -1746,7 +1738,6 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
     isDelegation,
     sendMessage,
     runBatchId,
-    networkContainer,
     systemContext,
     messages,
   } = opts;
@@ -2166,7 +2157,6 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
         constraints: resolveTurnConstraints(agent, group),
         canDelegate: agent ? !agent.trigger : false,
         isDelegation: isDelegation || false,
-        networkContainer,
         poolManaged: true,
         mainChatJid: isMain ? undefined : getMainChatJid(),
         systemContext,
@@ -2245,7 +2235,6 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
       constraints: resolveTurnConstraints(agent, group),
       canDelegate: agent ? !agent.trigger : false,
       isDelegation: isDelegation || false,
-      networkContainer,
       poolManaged: false,
       mainChatJid: isMain ? undefined : getMainChatJid(),
       systemContext,
@@ -2967,7 +2956,6 @@ async function main(): Promise<void> {
       agent.runtime,
     ).delegationTimeoutMs;
     const taskId = `delegation-${agent.name}-${Date.now()}-${randomUUID().slice(0, 8)}`;
-    const coordinatorContainer = queue.getCoordinatorContainerName(chatJid);
     const portalThreadId = `portal-${taskId}`;
     // Derive a short display title so concurrent portals to the same
     // specialist are visually distinct. Prefer an explicit title (action
@@ -3047,12 +3035,32 @@ async function main(): Promise<void> {
           prompt: delegationPrompt,
           chatJid,
           onOutput: async (result) => {
+            logger.info(
+              {
+                agent: agent.name,
+                chatJid,
+                portalThreadId,
+                status: result.status,
+                hasResult: result.result != null,
+                resultLen: result.result
+                  ? (typeof result.result === 'string'
+                      ? result.result
+                      : JSON.stringify(result.result)
+                    ).length
+                  : 0,
+                textsAlreadyStreamed: result.textsAlreadyStreamed ?? 0,
+              },
+              'Portal delegation onOutput received',
+            );
             if (result.result) {
               if (
                 result.textsAlreadyStreamed &&
                 result.textsAlreadyStreamed > 0
               ) {
-                // Text already delivered via intermediate markers
+                logger.info(
+                  { agent: agent.name, portalThreadId },
+                  'Portal delegation: skipping delivery (textsAlreadyStreamed)',
+                );
               } else {
                 const raw =
                   typeof result.result === 'string'
@@ -3131,7 +3139,6 @@ async function main(): Promise<void> {
             }
           },
           runBatchId: batchId,
-          networkContainer: coordinatorContainer || undefined,
           systemContext: multiAgentCtx || undefined,
           messages: delegationMessages,
         });
