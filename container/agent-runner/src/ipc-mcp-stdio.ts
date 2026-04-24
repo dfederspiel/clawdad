@@ -910,6 +910,70 @@ Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the thre
   );
 }
 
+// open_portal is available to every agent (solo, coordinator, specialist).
+// Unlike delegate_to_agent (coordinator-only fan-out to teammates),
+// open_portal spins focused side work into a portal drawer — useful for
+// investigations, long-running tool chains, or anything the user would
+// want to watch separately from the main conversation.
+server.tool(
+  'open_portal',
+  `Open a side-panel portal and spin up focused side work inside it. Use for investigations, long tool chains, or anything that would clutter the main thread.
+
+The portal runs a fresh agent container (by default, a new instance of yourself) with the prompt you give. Its output drains to a collapsible section in the side drawer — the user can watch it live or come back to it later via a pill in the main feed. Fire-and-forget: you continue your current turn immediately; the portal runs in parallel.
+
+Use when:
+- You need to do deep tool-call-heavy work and don't want to bury your main reply
+- You want to kick off parallel investigations
+- The user asks for something best shown as a separate focused session
+
+Do NOT use for:
+- Quick answers — put those in your main reply
+- Simple tool calls that fit in one turn
+
+Example: open_portal({ prompt: "Read every file in /workspace/group/research, find the three strongest sources on cricket acoustics, and summarize them.", title: "Cricket acoustics deep-dive" })`,
+  {
+    prompt: z.string().describe('What you want the portal agent to do. Be specific — the portal runs in a fresh container and sees only this prompt plus conversation context.'),
+    target_agent: z.string().optional().describe('Optional: specialist name to handle the work. Defaults to yourself (self-spawn). In multi-agent groups you can target a teammate when their specialty fits.'),
+    title: z.string().optional().describe('Short label for the portal (shown on the pill and section header). Defaults to the target agent name.'),
+  },
+  async (args) => {
+    const selfAgent = process.env.NANOCLAW_AGENT_NAME || 'default';
+    const trimmedPrompt = (args.prompt ?? '').trim();
+    if (trimmedPrompt.length < MIN_DELEGATION_MESSAGE_LENGTH) {
+      return {
+        isError: true,
+        content: [{
+          type: 'text' as const,
+          text: `open_portal rejected: prompt is too short (${trimmedPrompt.length} chars, minimum ${MIN_DELEGATION_MESSAGE_LENGTH}). The portal runs in a fresh container and sees ONLY this prompt. Retry with specific instructions: what to do, any context (paths, IDs), and what output you want back.`,
+        }],
+      };
+    }
+
+    const PORTALS_DIR = path.join(IPC_DIR, 'portals');
+    writeIpcFile(PORTALS_DIR, {
+      type: 'open_portal',
+      targetAgent: args.target_agent || selfAgent,
+      prompt: args.prompt,
+      title: args.title,
+      sourceAgent: selfAgent,
+      sourceBatchId: process.env.NANOCLAW_RUN_BATCH_ID || '',
+      chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const who = args.target_agent && args.target_agent !== selfAgent
+      ? args.target_agent
+      : 'a fresh instance of yourself';
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Portal opened. ${who} is running the work in a side panel; you can continue your turn normally.`,
+      }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

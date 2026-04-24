@@ -2909,7 +2909,7 @@ async function main(): Promise<void> {
     sourceAgent: string;
     sourceBatchId?: string;
     completionPolicy?: 'final_response' | 'retrigger_coordinator';
-  }): void => {
+  }): string | null => {
     const {
       sourceGroup,
       chatJid: delegationChatJid,
@@ -2934,7 +2934,7 @@ async function main(): Promise<void> {
         },
         'Delegation rejected: insufficient message context',
       );
-      return;
+      return null;
     }
 
     const groupJid = Object.keys(registeredGroups).find(
@@ -2942,7 +2942,7 @@ async function main(): Promise<void> {
     );
     if (!groupJid) {
       logger.warn({ sourceGroup, targetAgent }, 'Delegation: group not found');
-      return;
+      return null;
     }
     const group = registeredGroups[groupJid];
     const agents = groupAgents[groupJid] || [];
@@ -2952,14 +2952,14 @@ async function main(): Promise<void> {
         { sourceGroup, targetAgent, available: agents.map((a) => a.name) },
         'Delegation: target agent not found',
       );
-      return;
+      return null;
     }
 
     const chatJid = delegationChatJid || groupJid;
     const channel = findChannel(channels, chatJid);
     if (!channel) {
       logger.warn({ chatJid }, 'Delegation: no channel for JID');
-      return;
+      return null;
     }
 
     logger.info(
@@ -3193,6 +3193,7 @@ async function main(): Promise<void> {
       agent.displayName,
       completionPolicy !== 'retrigger_coordinator',
     );
+    return portalThreadId;
   };
 
   startIpcWatcher({
@@ -3353,7 +3354,22 @@ async function main(): Promise<void> {
         timestamp: new Date().toISOString(),
       });
     },
-    onDelegateToAgent: delegationHandler,
+    onDelegateToAgent: (request) => {
+      delegationHandler(request);
+    },
+    onOpenPortal: (request) => {
+      // open_portal MCP tool: route through the same delegation pipeline.
+      // Defaults to self-spawn (target agent = calling agent) so solo
+      // agents and specialists can spin off focused side work.
+      delegationHandler({
+        sourceGroup: request.sourceGroup,
+        chatJid: request.chatJid,
+        targetAgent: request.targetAgent, // already defaulted to sourceAgent in the MCP tool
+        message: request.prompt,
+        sourceAgent: request.sourceAgent,
+        sourceBatchId: request.sourceBatchId,
+      });
+    },
     onSetSubtitle: (jid, subtitle) => {
       // Update DB and broadcast
       const group = registeredGroups[jid];
