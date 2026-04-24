@@ -76,6 +76,16 @@ export interface ChannelOpts {
   ) => void;
   /** Broadcast portal thread completion */
   onThreadClosed?: (originJid: string, threadId: string) => void;
+  /** Trigger a delegation from the UI (e.g. action-button with target:"thread").
+   *  Same mechanism as the MCP tool path — reuses the shared delegation
+   *  handler so both entry points produce identical portal behavior. */
+  onUserDelegation?: (request: {
+    sourceGroup: string;
+    chatJid: string;
+    targetAgent: string;
+    message: string;
+    sourceAgent: string;
+  }) => void;
   /** Reset session for a group (clears SDK session, evicts warm pool) */
   onResetSession?: (groupFolder: string) => Promise<void>;
   /** Get fully discovered agents for a group with runtime metadata */
