@@ -3,6 +3,10 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { agentPanel, portalThreads, portalProgress, selectedJid } from '../app.js';
 import * as api from '../api.js';
 import { MessageBody } from './MessageBody.js';
+import {
+  removeLiveThreadForJid,
+  setDrawerStateFor,
+} from '../portal-persistence.js';
 
 function formatTime(ts) {
   if (!ts) return '';
@@ -166,9 +170,15 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
 
   const dismiss = (e) => {
     e.stopPropagation();
-    const next = { ...portalThreads.value };
-    delete next[threadId];
-    portalThreads.value = next;
+    const portalNow = portalThreads.value[threadId];
+    if (!portalNow) return;
+    // Dismissing removes from the drawer stack but KEEPS the portal in
+    // portalThreads so the pill in the main feed still works for recall.
+    portalThreads.value = {
+      ...portalThreads.value,
+      [threadId]: { ...portalNow, live: false },
+    };
+    removeLiveThreadForJid(portalNow.jid, threadId);
   };
 
   return html`
@@ -368,17 +378,13 @@ function RetroactivePanel({ state }) {
 }
 
 function closeDrawer() {
-  // Closing the drawer clears the "live" flag on all portals — they stay
-  // in portalThreads for pill recall but drop out of the stack. The next
-  // time the user opens the drawer (via pill click or new thread_opened),
-  // the stack starts fresh.
-  const portals = portalThreads.value;
-  const cleared = {};
-  for (const [tid, p] of Object.entries(portals)) {
-    cleared[tid] = p.live ? { ...p, live: false, running: false } : p;
-  }
-  portalThreads.value = cleared;
+  // Close = "out of sight for now", NOT "dismiss." Live flags stay on
+  // portalThreads so reopening (or refreshing, or switching back to this
+  // group) brings the same stack back. Explicit per-section X is how the
+  // user removes things from the stack.
+  const jid = selectedJid.value;
   agentPanel.value = null;
+  if (jid) setDrawerStateFor(jid, null);
 }
 
 function CloseButton() {
