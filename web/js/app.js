@@ -76,9 +76,14 @@ function loadNotifLastRead() {
 export const notifications = signal(loadNotifHistory());
 export const notifLastReadAt = signal(loadNotifLastRead());
 export const flashMessageId = signal(null);
-// Side panel: { runId, groupFolder, usage? } when open, null when closed.
-// Phase 1 of side panels (issue #90) — retroactive agent session viewer.
+// Side panel: either { runId, groupFolder, usage? } (retroactive) or
+// { threadId, groupFolder, agentName, live: true } (live delegation portal).
+// Phase 2: live streaming for portal threads (issue #90).
 export const agentPanel = signal(null);
+// Portal threads keyed by thread_id. Populated by `thread_opened` SSE; live
+// `message` events route here instead of the inline ThreadView feed.
+// Shape: { [thread_id]: { kind, agentName, jid, messages: [], sourceAgent, openedAt } }
+export const portalThreads = signal({});
 export const unreadNotifCount = computed(() => {
   const lastRead = notifLastReadAt.value;
   return notifications.value.filter(
@@ -180,7 +185,28 @@ api.connectSSE(clientId);
 
 api.onSSE('message', (data) => {
   if (data.thread_id) {
-    // Thread message — append to open thread, update reply count, clear thread typing
+    // Portal thread message — route to drawer, not inline ThreadView
+    const portal = portalThreads.value[data.thread_id];
+    if (portal) {
+      portalThreads.value = {
+        ...portalThreads.value,
+        [data.thread_id]: {
+          ...portal,
+          messages: [
+            ...portal.messages,
+            {
+              id: data.message_id,
+              role: 'assistant',
+              content: data.text,
+              timestamp: data.timestamp,
+              senderName: data.sender_name,
+            },
+          ],
+        },
+      };
+      return;
+    }
+    // Trigger thread — append to inline ThreadView, update reply count, clear thread typing
     threadTyping.value = { ...threadTyping.value, [data.thread_id]: false };
     const threads = openThreads.value;
     if (threads[data.thread_id]) {
@@ -358,6 +384,38 @@ api.onSSE('context_pressure_cleared', (data) => {
   const nextDismissed = { ...dismissedPressure.value };
   delete nextDismissed[data.jid];
   dismissedPressure.value = nextDismissed;
+});
+
+api.onSSE('thread_opened', (data) => {
+  // A portal (side-drawer) thread was opened by a delegation or action.
+  // Register it so `message` events with this thread_id route to the drawer.
+  if (data.kind !== 'portal' || !data.thread_id) return;
+  const folder = groups.value.find((g) => g.jid === data.jid)?.folder;
+  portalThreads.value = {
+    ...portalThreads.value,
+    [data.thread_id]: {
+      kind: data.kind,
+      jid: data.jid,
+      agentName: data.agent_name,
+      sourceAgent: data.source_agent,
+      messages: [],
+      openedAt: Date.now(),
+    },
+  };
+  // Auto-open the drawer for the first portal in the active chat.
+  // Subsequent portals are registered but don't steal focus.
+  if (
+    data.jid === selectedJid.value &&
+    !agentPanel.value &&
+    folder
+  ) {
+    agentPanel.value = {
+      threadId: data.thread_id,
+      groupFolder: folder,
+      agentName: data.agent_name,
+      live: true,
+    };
+  }
 });
 
 api.onSSE('thread_created', async (data) => {

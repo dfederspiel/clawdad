@@ -114,6 +114,23 @@ export class WebChannel implements Channel {
         agent_name: agentName,
       });
     };
+    // Portal (side-drawer) thread opening — distinct event so the client
+    // can auto-open the drawer instead of rendering inline like trigger threads.
+    opts.onThreadOpened = (
+      originJid,
+      threadId,
+      agentName,
+      kind,
+      sourceAgent,
+    ) => {
+      this.broadcast('thread_opened', {
+        jid: originJid,
+        thread_id: threadId,
+        agent_name: agentName,
+        kind,
+        source_agent: sourceAgent,
+      });
+    };
   }
 
   async connect(): Promise<void> {
@@ -390,12 +407,14 @@ export class WebChannel implements Channel {
   broadcastAgentProgress(
     chatJid: string,
     event: { tool?: string; summary: string; timestamp: string },
+    threadId?: string,
   ): void {
     const agentName = getActiveAgentName(chatJid);
     this.broadcast('agent_progress', {
       jid: chatJid,
       ...event,
       agent_name: agentName,
+      thread_id: threadId,
     });
   }
 

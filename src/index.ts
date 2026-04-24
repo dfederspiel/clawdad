@@ -251,10 +251,14 @@ function checkContextPressure(groupFolder: string, chatJid: string): void {
 }
 
 /** Broadcast agent progress (tool activity) to web UI clients */
-function broadcastProgress(chatJid: string, event: ProgressEvent): void {
+function broadcastProgress(
+  chatJid: string,
+  event: ProgressEvent,
+  threadId?: string,
+): void {
   for (const ch of channels) {
     if (ch.name === 'web' && 'broadcastAgentProgress' in ch) {
-      (ch as any).broadcastAgentProgress(chatJid, event);
+      (ch as any).broadcastAgentProgress(chatJid, event, threadId);
       break;
     }
   }
@@ -268,6 +272,17 @@ const activeThreads = new Map<
 // Callback set by the web channel to broadcast thread creation events
 let broadcastThreadCreated:
   | ((originJid: string, threadId: string, agentName: string) => void)
+  | null = null;
+// Callback for portal (side-drawer) thread openings. Distinct from
+// broadcastThreadCreated, which signals the inline ThreadView UX.
+let broadcastThreadOpened:
+  | ((
+      originJid: string,
+      threadId: string,
+      agentName: string,
+      kind: 'portal',
+      sourceAgent?: string,
+    ) => void)
   | null = null;
 
 async function deliverAgentMessage(
@@ -2785,6 +2800,9 @@ async function main(): Promise<void> {
   if (channelOpts.onThreadCreated) {
     broadcastThreadCreated = channelOpts.onThreadCreated;
   }
+  if (channelOpts.onThreadOpened) {
+    broadcastThreadOpened = channelOpts.onThreadOpened;
+  }
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
@@ -3099,6 +3117,23 @@ async function main(): Promise<void> {
         agent.runtime,
       ).delegationTimeoutMs;
       const taskId = `delegation-${agent.name}-${Date.now()}`;
+      // Each delegation gets its own portal thread — the specialist's
+      // output drains into the side panel rather than the main chat.
+      const portalThreadId = `portal-${taskId}`;
+      createThread(
+        portalThreadId,
+        `${group.folder}/${agent.name}`,
+        chatJid,
+        agent.displayName,
+        'portal',
+      );
+      broadcastThreadOpened?.(
+        chatJid,
+        portalThreadId,
+        agent.displayName,
+        'portal',
+        sourceAgent,
+      );
       queue.enqueueDelegation(
         chatJid,
         taskId,
@@ -3142,7 +3177,12 @@ async function main(): Promise<void> {
           ];
 
           setActiveAgentName(chatJid, agent.displayName);
-          await channel.setTyping?.(chatJid, true);
+          await channel.setTyping?.(
+            chatJid,
+            true,
+            portalThreadId,
+            agent.displayName,
+          );
           // Intermediate TEXT blocks are shown as status in the typing indicator
 
           const status = await runAgent(
@@ -3169,7 +3209,13 @@ async function main(): Promise<void> {
                     // share the same chatJid so we must claim the name each time
                     setActiveAgentName(chatJid, agent.displayName);
                     if (
-                      await deliverAgentMessage(channel, chatJid, text, lease)
+                      await deliverAgentMessage(
+                        channel,
+                        chatJid,
+                        text,
+                        lease,
+                        portalThreadId,
+                      )
                     ) {
                       deliveredToUser = true;
                     }
@@ -3182,7 +3228,7 @@ async function main(): Promise<void> {
                 await channel.setTyping?.(
                   chatJid,
                   false,
-                  undefined,
+                  portalThreadId,
                   agent.displayName,
                 );
               }
@@ -3190,19 +3236,27 @@ async function main(): Promise<void> {
                 await channel.setTyping?.(
                   chatJid,
                   false,
-                  undefined,
+                  portalThreadId,
                   agent.displayName,
                 );
               }
             },
-            (event) => broadcastProgress(chatJid, event),
+            (event) => broadcastProgress(chatJid, event, portalThreadId),
             async (rawText) => {
               const text = rawText
                 .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                 .trim();
               if (!text) return;
               setActiveAgentName(chatJid, agent.displayName);
-              if (await deliverAgentMessage(channel, chatJid, text, lease)) {
+              if (
+                await deliverAgentMessage(
+                  channel,
+                  chatJid,
+                  text,
+                  lease,
+                  portalThreadId,
+                )
+              ) {
                 deliveredToUser = true;
               }
             },
@@ -3210,7 +3264,15 @@ async function main(): Promise<void> {
             true, // isDelegation — use shorter timeout
             async (text) => {
               setActiveAgentName(chatJid, agent.displayName);
-              if (await deliverAgentMessage(channel, chatJid, text, lease)) {
+              if (
+                await deliverAgentMessage(
+                  channel,
+                  chatJid,
+                  text,
+                  lease,
+                  portalThreadId,
+                )
+              ) {
                 deliveredToUser = true;
               }
             },
@@ -3224,7 +3286,7 @@ async function main(): Promise<void> {
           await channel.setTyping?.(
             chatJid,
             false,
-            undefined,
+            portalThreadId,
             agent.displayName,
           );
           if (persistExplicitAgentStatus(chatJid, agent.name, '')) {

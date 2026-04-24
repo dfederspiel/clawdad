@@ -249,6 +249,17 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
   `);
 
+  // Add kind column to threads (Phase 2 side panel: distinguishes inline
+  // trigger threads from side-drawer portal threads). 'trigger' = existing
+  // web-all trigger reply chains (rendered inline by ThreadView), 'portal'
+  // = delegation/action-button/agent-initiated side work (rendered in the
+  // AgentPanel drawer).
+  try {
+    database.exec(`ALTER TABLE threads ADD COLUMN kind TEXT DEFAULT 'trigger'`);
+  } catch {
+    /* column already exists */
+  }
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS media_artifacts (
       id TEXT PRIMARY KEY,
@@ -615,15 +626,17 @@ export function createThread(
   agentJid: string,
   originJid: string,
   agentName?: string,
+  kind: 'trigger' | 'portal' = 'trigger',
 ): void {
   db.prepare(
-    `INSERT OR IGNORE INTO threads (thread_id, agent_jid, origin_jid, agent_name, created_at) VALUES (?, ?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO threads (thread_id, agent_jid, origin_jid, agent_name, created_at, kind) VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(
     threadId,
     agentJid,
     originJid,
     agentName || null,
     new Date().toISOString(),
+    kind,
   );
 }
 
@@ -656,11 +669,32 @@ export function getThreadMessages(
 export function getThreadsForChat(chatJid: string): ThreadInfo[] {
   return db
     .prepare(
-      `SELECT t.thread_id, t.agent_jid, t.origin_jid, t.agent_name, t.created_at,
+      `SELECT t.thread_id, t.agent_jid, t.origin_jid, t.agent_name, t.created_at, t.kind,
               COUNT(m.id) as reply_count
        FROM threads t
        LEFT JOIN messages m ON m.thread_id = t.thread_id AND m.chat_jid = ?
        WHERE t.origin_jid = ?
+         AND (t.kind IS NULL OR t.kind = 'trigger')
+       GROUP BY t.thread_id
+       ORDER BY t.created_at DESC`,
+    )
+    .all(chatJid, chatJid) as ThreadInfo[];
+}
+
+/**
+ * Portal (side-drawer) threads for a chat. Separate from trigger threads
+ * so the inline ThreadView and drawer AgentPanel can each query only
+ * what they render.
+ */
+export function getPortalThreadsForChat(chatJid: string): ThreadInfo[] {
+  return db
+    .prepare(
+      `SELECT t.thread_id, t.agent_jid, t.origin_jid, t.agent_name, t.created_at, t.kind,
+              COUNT(m.id) as reply_count
+       FROM threads t
+       LEFT JOIN messages m ON m.thread_id = t.thread_id AND m.chat_jid = ?
+       WHERE t.origin_jid = ?
+         AND t.kind = 'portal'
        GROUP BY t.thread_id
        ORDER BY t.created_at DESC`,
     )
