@@ -260,6 +260,16 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add title column to threads (fix for #100: concurrent portals to the
+  // same specialist were ambiguous — both rendered as "Context Analyst"
+  // with no way to tell them apart). Title is the task label — derived
+  // from the button label, open_portal title, or delegation message.
+  try {
+    database.exec(`ALTER TABLE threads ADD COLUMN title TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS media_artifacts (
       id TEXT PRIMARY KEY,
@@ -643,9 +653,10 @@ export function createThread(
   originJid: string,
   agentName?: string,
   kind: 'trigger' | 'portal' = 'trigger',
+  title?: string,
 ): void {
   db.prepare(
-    `INSERT OR IGNORE INTO threads (thread_id, agent_jid, origin_jid, agent_name, created_at, kind) VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO threads (thread_id, agent_jid, origin_jid, agent_name, created_at, kind, title) VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     threadId,
     agentJid,
@@ -653,6 +664,7 @@ export function createThread(
     agentName || null,
     new Date().toISOString(),
     kind,
+    title || null,
   );
 }
 
@@ -708,7 +720,7 @@ export function getPortalThreadsForChat(chatJid: string): ThreadInfo[] {
   // compact summary on page load without a follow-up fetch per portal.
   return db
     .prepare(
-      `SELECT t.thread_id, t.agent_jid, t.origin_jid, t.agent_name, t.created_at, t.kind,
+      `SELECT t.thread_id, t.agent_jid, t.origin_jid, t.agent_name, t.created_at, t.kind, t.title,
               COUNT(m.id) as reply_count,
               (SELECT content FROM messages
                WHERE thread_id = t.thread_id AND chat_jid = ?

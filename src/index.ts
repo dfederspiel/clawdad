@@ -282,6 +282,7 @@ let broadcastThreadOpened:
       agentName: string,
       kind: 'portal',
       sourceAgent?: string,
+      title?: string,
     ) => void)
   | null = null;
 // Callback for portal thread completion. The client clears the "live" flag
@@ -297,7 +298,16 @@ async function deliverAgentMessage(
   lease: DeliveryLease,
   threadId?: string,
 ): Promise<boolean> {
-  if (!shouldDeliverForLease(lease)) {
+  // Portal deliveries bypass supersession. The lease mechanism assumes
+  // every agent output lands in the main chat's single "frontier", where
+  // newer user messages or coordinator turns should suppress stale
+  // specialist output. Portals live in their own side-drawer panel — a
+  // second concurrent portal's output isn't "stale" just because a first
+  // portal delivered. Without this bypass, concurrent delegations to the
+  // same chat would silently drop the second portal's output (#100).
+  const isPortalDelivery = !!threadId;
+
+  if (!isPortalDelivery && !shouldDeliverForLease(lease)) {
     logger.info(
       {
         jid,
@@ -310,7 +320,7 @@ async function deliverAgentMessage(
   }
 
   await channel.sendMessage(jid, text, threadId);
-  markLeaseDelivered(lease);
+  if (!isPortalDelivery) markLeaseDelivered(lease);
   return true;
 }
 
@@ -2828,6 +2838,7 @@ async function main(): Promise<void> {
       targetAgent: req.targetAgent,
       message: req.message,
       sourceAgent: req.sourceAgent,
+      title: req.title,
     });
   };
 
@@ -2909,6 +2920,7 @@ async function main(): Promise<void> {
     sourceAgent: string;
     sourceBatchId?: string;
     completionPolicy?: 'final_response' | 'retrigger_coordinator';
+    title?: string;
   }): void => {
     const {
       sourceGroup,
@@ -2918,6 +2930,7 @@ async function main(): Promise<void> {
       sourceAgent,
       sourceBatchId,
       completionPolicy,
+      title,
     } = request;
 
     const validation = validateDelegationMessage(message);
@@ -2978,14 +2991,28 @@ async function main(): Promise<void> {
     const delegationTimeout = getCapabilityProfile(
       agent.runtime,
     ).delegationTimeoutMs;
-    const taskId = `delegation-${agent.name}-${Date.now()}`;
+    const taskId = `delegation-${agent.name}-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const portalThreadId = `portal-${taskId}`;
+    // Derive a short display title so concurrent portals to the same
+    // specialist are visually distinct. Prefer an explicit title (action
+    // button label, open_portal arg); fall back to the first line of the
+    // delegation message trimmed to ~60 chars.
+    const firstLine =
+      (message ?? '')
+        .split('\n')
+        .find((l) => l.trim().length)
+        ?.trim() ?? '';
+    const portalTitle =
+      title ||
+      (firstLine.length > 60 ? firstLine.slice(0, 57) + '…' : firstLine) ||
+      undefined;
     createThread(
       portalThreadId,
       `${group.folder}/${agent.name}`,
       chatJid,
       agent.displayName,
       'portal',
+      portalTitle,
     );
     broadcastThreadOpened?.(
       chatJid,
@@ -2993,6 +3020,7 @@ async function main(): Promise<void> {
       agent.displayName,
       'portal',
       sourceAgent,
+      portalTitle,
     );
     queue.enqueueDelegation(
       chatJid,
