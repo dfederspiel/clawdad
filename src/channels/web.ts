@@ -51,6 +51,7 @@ import {
   deleteTask,
   getTelemetryStats,
   getThreadsForChat,
+  getPortalThreadsForChat,
   getThreadMessages,
   getUsageStats,
   getLatestRunForChat,
@@ -112,6 +113,31 @@ export class WebChannel implements Channel {
         jid: originJid,
         thread_id: threadId,
         agent_name: agentName,
+      });
+    };
+    // Portal (side-drawer) thread opening — distinct event so the client
+    // can auto-open the drawer instead of rendering inline like trigger threads.
+    opts.onThreadOpened = (
+      originJid,
+      threadId,
+      agentName,
+      kind,
+      sourceAgent,
+    ) => {
+      this.broadcast('thread_opened', {
+        jid: originJid,
+        thread_id: threadId,
+        agent_name: agentName,
+        kind,
+        source_agent: sourceAgent,
+      });
+    };
+    // Portal thread completion — client clears the `live` flag so the
+    // portal drops out of the drawer's live stack.
+    opts.onThreadClosed = (originJid, threadId) => {
+      this.broadcast('thread_closed', {
+        jid: originJid,
+        thread_id: threadId,
       });
     };
   }
@@ -390,12 +416,14 @@ export class WebChannel implements Channel {
   broadcastAgentProgress(
     chatJid: string,
     event: { tool?: string; summary: string; timestamp: string },
+    threadId?: string,
   ): void {
     const agentName = getActiveAgentName(chatJid);
     this.broadcast('agent_progress', {
       jid: chatJid,
       ...event,
       agent_name: agentName,
+      thread_id: threadId,
     });
   }
 
@@ -1533,6 +1561,16 @@ You do not delegate. If something falls outside your role, say so plainly in you
     if (method === 'GET' && threadsMatch) {
       const jid = decodeURIComponent(threadsMatch[1]);
       const threads = getThreadsForChat(jid);
+      return this.json(res, 200, { threads });
+    }
+
+    // GET /api/portal-threads/:jid — portal (side-drawer) threads for a chat
+    const portalThreadsMatch = url.pathname.match(
+      /^\/api\/portal-threads\/(.+)$/,
+    );
+    if (method === 'GET' && portalThreadsMatch) {
+      const jid = decodeURIComponent(portalThreadsMatch[1]);
+      const threads = getPortalThreadsForChat(jid);
       return this.json(res, 200, { threads });
     }
 

@@ -249,6 +249,17 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
   `);
 
+  // Add kind column to threads (Phase 2 side panel: distinguishes inline
+  // trigger threads from side-drawer portal threads). 'trigger' = existing
+  // web-all trigger reply chains (rendered inline by ThreadView), 'portal'
+  // = delegation/action-button/agent-initiated side work (rendered in the
+  // AgentPanel drawer).
+  try {
+    database.exec(`ALTER TABLE threads ADD COLUMN kind TEXT DEFAULT 'trigger'`);
+  } catch {
+    /* column already exists */
+  }
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS media_artifacts (
       id TEXT PRIMARY KEY,
@@ -568,6 +579,7 @@ export function getMessagesSince(
   limit: number = 200,
   includeBotMessages: boolean = false,
   excludeThreaded: boolean = false,
+  keepPortalThreads: boolean = false,
 ): NewMessage[] {
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
@@ -576,7 +588,22 @@ export function getMessagesSince(
   const botFilter = includeBotMessages
     ? ''
     : 'AND is_bot_message = 0 AND content NOT LIKE ?';
-  const threadFilter = excludeThreaded ? 'AND thread_id IS NULL' : '';
+  // Three filter modes:
+  //   excludeThreaded=false                         → keep everything (default)
+  //   excludeThreaded=true, keepPortalThreads=false → hide all threaded (UI main feed)
+  //   excludeThreaded=true, keepPortalThreads=true  → hide trigger threads but keep
+  //       portal-thread content so coordinators can see specialist output they
+  //       delegated to. Without this, the coordinator would be blind to the
+  //       work that happened in its own portals.
+  let threadFilter = '';
+  if (excludeThreaded) {
+    threadFilter = keepPortalThreads
+      ? `AND (thread_id IS NULL OR EXISTS (
+           SELECT 1 FROM threads t
+           WHERE t.thread_id = messages.thread_id AND t.kind = 'portal'
+         ))`
+      : 'AND thread_id IS NULL';
+  }
   const sql = `
     SELECT * FROM (
       SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, usage, run_id
@@ -615,15 +642,17 @@ export function createThread(
   agentJid: string,
   originJid: string,
   agentName?: string,
+  kind: 'trigger' | 'portal' = 'trigger',
 ): void {
   db.prepare(
-    `INSERT OR IGNORE INTO threads (thread_id, agent_jid, origin_jid, agent_name, created_at) VALUES (?, ?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO threads (thread_id, agent_jid, origin_jid, agent_name, created_at, kind) VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(
     threadId,
     agentJid,
     originJid,
     agentName || null,
     new Date().toISOString(),
+    kind,
   );
 }
 
@@ -656,11 +685,32 @@ export function getThreadMessages(
 export function getThreadsForChat(chatJid: string): ThreadInfo[] {
   return db
     .prepare(
-      `SELECT t.thread_id, t.agent_jid, t.origin_jid, t.agent_name, t.created_at,
+      `SELECT t.thread_id, t.agent_jid, t.origin_jid, t.agent_name, t.created_at, t.kind,
               COUNT(m.id) as reply_count
        FROM threads t
        LEFT JOIN messages m ON m.thread_id = t.thread_id AND m.chat_jid = ?
        WHERE t.origin_jid = ?
+         AND (t.kind IS NULL OR t.kind = 'trigger')
+       GROUP BY t.thread_id
+       ORDER BY t.created_at DESC`,
+    )
+    .all(chatJid, chatJid) as ThreadInfo[];
+}
+
+/**
+ * Portal (side-drawer) threads for a chat. Separate from trigger threads
+ * so the inline ThreadView and drawer AgentPanel can each query only
+ * what they render.
+ */
+export function getPortalThreadsForChat(chatJid: string): ThreadInfo[] {
+  return db
+    .prepare(
+      `SELECT t.thread_id, t.agent_jid, t.origin_jid, t.agent_name, t.created_at, t.kind,
+              COUNT(m.id) as reply_count
+       FROM threads t
+       LEFT JOIN messages m ON m.thread_id = t.thread_id AND m.chat_jid = ?
+       WHERE t.origin_jid = ?
+         AND t.kind = 'portal'
        GROUP BY t.thread_id
        ORDER BY t.created_at DESC`,
     )

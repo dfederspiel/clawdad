@@ -138,5 +138,7 @@ export const getTranscript = (groupFolder, runId) => {
   const qs = runId != null ? `&run_id=${encodeURIComponent(runId)}` : '';
   return fetchJson(`/api/transcript?group=${encodeURIComponent(groupFolder)}${qs}`);
 };
+export const getPortalThreads = (jid) =>
+  fetchJson(`/api/portal-threads/${encodeURIComponent(jid)}`);
 export const getAchievements = () => fetchJson('/api/achievements');
 export const getSessionPressure = () => fetchJson('/api/session/pressure');

@@ -1,10 +1,8 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
-import { parseBlocks } from '../block-parser.js';
-import { BlockRenderer } from './blocks/BlockRenderer.js';
-import { md } from '../markdown.js';
 import { selectedGroup } from '../app.js';
 import { openAgentPanel } from './AgentPanel.js';
+import { MessageBody } from './MessageBody.js';
 
 // Consistent color for each agent name (hash → HSL hue)
 const AGENT_COLORS = {};
@@ -121,19 +119,13 @@ export function Message({ role, content, timestamp, senderName, isError, compact
 
   const errorClass = isError ? 'border-err/30' : '';
 
-  const blocks = parseBlocks(content);
-
   return html`
     <div class="${sizeClass} leading-relaxed ${bubbleClass} ${errorClass} overflow-hidden break-words"
       ${showAgentBadge ? { style: `border-left: 3px solid ${nameColor}` } : {}}>
       ${showAgentBadge && html`
         <div class="text-[11px] font-semibold mb-1" style="color: ${nameColor}">${senderName}</div>
       `}
-      ${blocks
-        ? html`<div class="block-container">
-            ${blocks.map((block, i) => html`<${BlockRenderer} key=${i} block=${block} />`)}
-          </div>`
-        : html`<div class="prose" dangerouslySetInnerHTML=${{ __html: md(content) }} />`}
+      <${MessageBody} content=${content} />
       <div class="text-[11px] text-txt-muted mt-1.5">
         ${senderName && !showAgentBadge ? `${senderName} \u00B7 ${time}` : time}
       </div>

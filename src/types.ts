@@ -90,6 +90,7 @@ export interface ThreadInfo {
   agent_name?: string;
   created_at: string;
   reply_count?: number;
+  kind?: 'trigger' | 'portal';
 }
 
 export interface Agent {

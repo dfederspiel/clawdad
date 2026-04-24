@@ -1,7 +1,8 @@
 import { html } from 'htm/preact';
-import { useEffect, useState } from 'preact/hooks';
-import { agentPanel } from '../app.js';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { agentPanel, portalThreads, selectedJid } from '../app.js';
 import * as api from '../api.js';
+import { MessageBody } from './MessageBody.js';
 
 function formatTime(ts) {
   if (!ts) return '';
@@ -83,18 +84,175 @@ function Entry({ entry }) {
   return null;
 }
 
-export function AgentPanel() {
-  const state = agentPanel.value;
+function LiveMessage({ msg }) {
+  const isUser = msg.role === 'user';
+  return html`
+    <div class="flex flex-col gap-1 py-2 px-3 rounded-md overflow-hidden break-words ${isUser ? 'bg-userbg' : 'bg-asstbg'}">
+      <div class="text-[10px] text-txt-muted font-mono">
+        ${msg.senderName || (isUser ? 'user' : 'assistant')} · ${formatTime(msg.timestamp)}
+      </div>
+      <div class="text-xs leading-relaxed">
+        <${MessageBody} content=${msg.content} />
+      </div>
+    </div>
+  `;
+}
+
+/** Renders one portal (specialist) as a collapsible section in the stack.
+ *  isRunning drives the LIVE badge; sections stay in the stack after the
+ *  agent finishes so the user can keep reading. */
+function PortalSection({ threadId, portal, focused, isRunning }) {
+  const sectionRef = useRef(null);
+  const [historicalMsgs, setHistoricalMsgs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getThreadMessages(threadId)
+      .then((resp) => {
+        if (cancelled) return;
+        const msgs = (resp?.messages || []).map((m) => ({
+          id: m.id,
+          role: m.is_bot_message || m.is_from_me ? 'assistant' : 'user',
+          content: m.content,
+          timestamp: m.timestamp,
+          senderName: m.sender_name,
+        }));
+        setHistoricalMsgs(msgs);
+        setLoading(false);
+      })
+      .catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [threadId]);
+
+  useEffect(() => {
+    if (focused && sectionRef.current) {
+      sectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      setOpen(true);
+    }
+  }, [focused]);
+
+  const liveMsgs = portal?.messages || [];
+  const seen = new Set(historicalMsgs.map((m) => m.id).filter(Boolean));
+  const combined = [
+    ...historicalMsgs,
+    ...liveMsgs.filter((m) => !m.id || !seen.has(m.id)),
+  ];
+  const count = combined.length;
+
+  return html`
+    <section
+      ref=${sectionRef}
+      class="flex flex-col border border-border rounded-md overflow-hidden ${focused ? 'ring-1 ring-accent/60' : ''}"
+    >
+      <button
+        class="flex items-center gap-2 px-3 py-2 bg-bg-3 hover:bg-bg-hover transition-colors text-left cursor-pointer"
+        onClick=${() => setOpen(!open)}
+      >
+        <span class="text-[9px] transition-transform ${open ? 'rotate-90' : ''}">\u25B6</span>
+        <span class="text-xs font-semibold truncate">${portal.agentName || 'Agent'}</span>
+        ${isRunning && html`
+          <span class="text-[9px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/20 text-accent">live</span>
+        `}
+        <span class="text-[10px] text-txt-muted font-mono ml-auto shrink-0">
+          ${count} msg${count !== 1 ? 's' : ''}
+        </span>
+      </button>
+      ${open && html`
+        <div class="p-2 flex flex-col gap-1.5 bg-bg-2">
+          ${loading && combined.length === 0 && html`
+            <div class="text-xs text-txt-muted p-2 text-center">Loading...</div>
+          `}
+          ${!loading && combined.length === 0 && html`
+            <div class="text-xs text-txt-muted p-2 text-center">
+              Waiting for agent output... <span class="typing-dot inline-block ml-1" />
+            </div>
+          `}
+          ${combined.map((m, i) => html`<${LiveMessage} key=${m.id || i} msg=${m} />`)}
+        </div>
+      `}
+    </section>
+  `;
+}
+
+function PortalsPanel({ state }) {
+  const portals = portalThreads.value;
+  const jid = selectedJid.value;
+  // Only show live (this-session) portals in the drawer stack. Historical
+  // portals are reachable via pills in the main feed — clicking a pill
+  // opens the single-portal view (PortalSinglePanel).
+  const entries = Object.entries(portals)
+    .filter(([, p]) => p.jid === jid && p.live)
+    .sort((a, b) => (b[1].openedAt || 0) - (a[1].openedAt || 0)); // newest first
+
+  return html`
+    <header class="flex items-center justify-between px-4 py-3 border-b border-border">
+      <div class="flex flex-col gap-0.5 min-w-0">
+        <h3 class="text-sm font-semibold truncate">
+          ${entries.length > 1 ? `${entries.length} live portals` : 'Agent portal'}
+        </h3>
+        <div class="text-[11px] text-txt-muted font-mono truncate">
+          side work · click header to collapse
+        </div>
+      </div>
+      <${CloseButton} />
+    </header>
+    <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+      ${entries.length === 0 && html`
+        <div class="text-xs text-txt-muted p-4 text-center">
+          No active portals. Click a portal pill in the chat to view a past session.
+        </div>
+      `}
+      ${entries.map(([threadId, portal]) => html`
+        <${PortalSection}
+          key=${threadId}
+          threadId=${threadId}
+          portal=${portal}
+          focused=${state.focusedThreadId === threadId}
+          isRunning=${!!portal.running}
+        />
+      `)}
+    </div>
+  `;
+}
+
+function PortalSinglePanel({ state }) {
+  const portals = portalThreads.value;
+  const portal = portals[state.threadId];
+  return html`
+    <header class="flex items-center justify-between px-4 py-3 border-b border-border">
+      <div class="flex flex-col gap-0.5 min-w-0">
+        <h3 class="text-sm font-semibold truncate">
+          ${portal?.agentName || 'Agent'}'s portal
+        </h3>
+        <div class="text-[11px] text-txt-muted font-mono truncate">
+          ${portal?.createdAt ? formatTime(portal.createdAt) : ''}
+          ${portal?.sourceAgent ? ` · delegated by ${portal.sourceAgent}` : ''}
+        </div>
+      </div>
+      <${CloseButton} />
+    </header>
+    <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+      ${portal
+        ? html`<${PortalSection}
+            threadId=${state.threadId}
+            portal=${portal}
+            focused=${true}
+            isLive=${!!portal.live}
+          />`
+        : html`<div class="text-xs text-txt-muted p-4 text-center">Portal not found.</div>`}
+    </div>
+  `;
+}
+
+function RetroactivePanel({ state }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (!state) {
-      setData(null);
-      setError(null);
-      return;
-    }
     const { runId, groupFolder } = state;
     let cancelled = false;
     setLoading(true);
@@ -112,12 +270,79 @@ export function AgentPanel() {
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [state?.runId, state?.groupFolder]);
+  }, [state.runId, state.groupFolder]);
+
+  const run = data?.run;
+  const timeline = data?.timeline || [];
+
+  return html`
+    <header class="flex items-center justify-between px-4 py-3 border-b border-border">
+      <div class="flex flex-col gap-0.5 min-w-0">
+        <h3 class="text-sm font-semibold truncate">Agent conversation</h3>
+        ${run && html`
+          <div class="text-[11px] text-txt-muted font-mono truncate">
+            ${formatTime(run.timestamp)}
+            ${run.duration_ms ? ` · ${formatDuration(run.duration_ms)}` : ''}
+            ${run.num_turns ? ` · ${run.num_turns} turn${run.num_turns !== 1 ? 's' : ''}` : ''}
+            ${run.cost_usd ? ` · ${formatCost(run.cost_usd)}` : ''}
+          </div>
+        `}
+      </div>
+      <${CloseButton} />
+    </header>
+    <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-1.5">
+      ${loading && html`<div class="text-xs text-txt-muted p-4 text-center">Loading transcript...</div>`}
+      ${error && html`
+        <div class="text-xs text-err p-4 text-center">
+          ${error}
+          ${state.runId == null && html`
+            <div class="text-txt-muted mt-2">No run ID recorded for this message. Older messages may not have this data.</div>
+          `}
+        </div>
+      `}
+      ${!loading && !error && timeline.length === 0 && html`
+        <div class="text-xs text-txt-muted p-4 text-center">No transcript entries in this run window.</div>
+      `}
+      ${timeline.map((entry, i) => html`<${Entry} key=${i} entry=${entry} />`)}
+    </div>
+  `;
+}
+
+function closeDrawer() {
+  // Closing the drawer clears the "live" flag on all portals — they stay
+  // in portalThreads for pill recall but drop out of the stack. The next
+  // time the user opens the drawer (via pill click or new thread_opened),
+  // the stack starts fresh.
+  const portals = portalThreads.value;
+  const cleared = {};
+  for (const [tid, p] of Object.entries(portals)) {
+    cleared[tid] = p.live ? { ...p, live: false, running: false } : p;
+  }
+  portalThreads.value = cleared;
+  agentPanel.value = null;
+}
+
+function CloseButton() {
+  return html`
+    <button
+      class="w-7 h-7 flex items-center justify-center rounded-md text-txt-2 hover:bg-bg-hover hover:text-txt transition-colors shrink-0 ml-2"
+      title="Close"
+      onClick=${closeDrawer}
+    >
+      <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+      </svg>
+    </button>
+  `;
+}
+
+export function AgentPanel() {
+  const state = agentPanel.value;
 
   useEffect(() => {
     if (!state) return;
     const onKey = (e) => {
-      if (e.key === 'Escape') agentPanel.value = null;
+      if (e.key === 'Escape') closeDrawer();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -125,58 +350,24 @@ export function AgentPanel() {
 
   if (!state) return null;
 
-  const run = data?.run;
-  const timeline = data?.timeline || [];
+  const close = closeDrawer;
 
-  function close() {
-    agentPanel.value = null;
+  let body;
+  if (state.mode === 'portals') {
+    body = html`<${PortalsPanel} state=${state} />`;
+  } else if (state.mode === 'portal-single') {
+    body = html`<${PortalSinglePanel} state=${state} />`;
+  } else {
+    body = html`<${RetroactivePanel} state=${state} />`;
   }
 
   return html`
-    <div
-      class="fixed inset-0 z-40 bg-black/40"
-      onClick=${close}
-    />
+    <div class="fixed inset-0 z-40 bg-black/40 md:hidden" onClick=${close} />
     <aside
-      class="fixed top-0 right-0 h-full w-full md:w-[440px] lg:w-[520px] z-50 bg-bg-2 border-l border-border shadow-xl flex flex-col"
+      class="fixed top-0 right-0 h-full w-full z-50 bg-bg-2 border-l border-border shadow-xl flex flex-col
+             md:static md:z-auto md:shadow-none md:w-[440px] lg:w-[520px] md:shrink-0"
     >
-      <header class="flex items-center justify-between px-4 py-3 border-b border-border">
-        <div class="flex flex-col gap-0.5 min-w-0">
-          <h3 class="text-sm font-semibold truncate">Agent conversation</h3>
-          ${run && html`
-            <div class="text-[11px] text-txt-muted font-mono truncate">
-              ${formatTime(run.timestamp)}
-              ${run.duration_ms ? ` · ${formatDuration(run.duration_ms)}` : ''}
-              ${run.num_turns ? ` · ${run.num_turns} turn${run.num_turns !== 1 ? 's' : ''}` : ''}
-              ${run.cost_usd ? ` · ${formatCost(run.cost_usd)}` : ''}
-            </div>
-          `}
-        </div>
-        <button
-          class="w-7 h-7 flex items-center justify-center rounded-md text-txt-2 hover:bg-bg-hover hover:text-txt transition-colors shrink-0 ml-2"
-          title="Close"
-          onClick=${close}
-        >
-          <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
-          </svg>
-        </button>
-      </header>
-      <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-1.5">
-        ${loading && html`<div class="text-xs text-txt-muted p-4 text-center">Loading transcript...</div>`}
-        ${error && html`
-          <div class="text-xs text-err p-4 text-center">
-            ${error}
-            ${state.runId == null && html`
-              <div class="text-txt-muted mt-2">No run ID recorded for this message. Older messages may not have this data.</div>
-            `}
-          </div>
-        `}
-        ${!loading && !error && timeline.length === 0 && html`
-          <div class="text-xs text-txt-muted p-4 text-center">No transcript entries in this run window.</div>
-        `}
-        ${timeline.map((entry, i) => html`<${Entry} key=${i} entry=${entry} />`)}
-      </div>
+      ${body}
     </aside>
   `;
 }
