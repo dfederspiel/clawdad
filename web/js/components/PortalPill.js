@@ -1,23 +1,24 @@
 import { html } from 'htm/preact';
-import { agentPanel, portalThreads, selectedGroup } from '../app.js';
+import { agentPanel, portalThreads, selectedGroup, selectedJid } from '../app.js';
+import { setDrawerStateFor } from '../portal-persistence.js';
 
 export function openPortalInDrawer(threadId) {
   const group = selectedGroup.value;
   if (!group) return;
   const portal = portalThreads.value[threadId];
-  if (portal?.live) {
-    agentPanel.value = {
-      mode: 'portals',
-      groupFolder: group.folder,
-      focusedThreadId: threadId,
-    };
-  } else {
-    agentPanel.value = {
-      mode: 'portal-single',
-      groupFolder: group.folder,
-      threadId,
-    };
-  }
+  const next = portal?.live
+    ? {
+        mode: 'portals',
+        groupFolder: group.folder,
+        focusedThreadId: threadId,
+      }
+    : {
+        mode: 'portal-single',
+        groupFolder: group.folder,
+        threadId,
+      };
+  agentPanel.value = next;
+  setDrawerStateFor(selectedJid.value, next);
 }
 
 function formatDuration(ms) {
