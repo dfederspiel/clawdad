@@ -1672,6 +1672,47 @@ You do not delegate. If something falls outside your role, say so plainly in you
       return this.json(res, 200, { ok: true, messageId: msg.id });
     }
 
+    // POST /api/action — invoke an action-button with target:"thread".
+    // Mints a portal thread routed to a specific specialist agent, then
+    // reuses the shared delegation machinery via onUserDelegation.
+    if (method === 'POST' && url.pathname === '/api/action') {
+      const body = await this.readBody(req);
+      const { jid, target_agent, label, action_message, sender } = body;
+      if (!jid || !target_agent || !action_message) {
+        return this.json(res, 400, {
+          error: 'jid, target_agent, and action_message are required',
+        });
+      }
+      if (!jid.startsWith('web:')) {
+        return this.json(res, 400, { error: 'jid must start with web:' });
+      }
+      const groups = this.opts.registeredGroups();
+      const group = groups[jid];
+      if (!group) {
+        return this.json(res, 404, { error: 'Group not registered' });
+      }
+      if (!this.opts.onUserDelegation) {
+        return this.json(res, 503, {
+          error: 'Delegation handler not wired on this channel',
+        });
+      }
+      this.opts.onUserDelegation({
+        sourceGroup: group.folder,
+        chatJid: jid,
+        targetAgent: target_agent,
+        message: action_message,
+        // The prompt string "Delegation from X" is surfaced to the
+        // specialist; user-initiated actions read more naturally as
+        // "the user" than as a synthetic identifier.
+        sourceAgent: sender || 'the user',
+      });
+      logger.info(
+        { jid, target_agent, label },
+        'Portal action invoked from web UI',
+      );
+      return this.json(res, 200, { ok: true });
+    }
+
     // GET /api/status — container/queue status + uptime
     if (method === 'GET' && url.pathname === '/api/status') {
       const status = this.opts.getStatus?.() || {};

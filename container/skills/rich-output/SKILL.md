@@ -153,7 +153,7 @@ Unified diff display with add/remove line coloring.
 | `filename` | no | File being diffed |
 
 ### action
-Clickable buttons the user can press. Clicking sends `[action: button_id]` as a chat message back to you.
+Clickable buttons the user can press. Clicking sends `[action: button_id]` as a chat message back to you — unless the button targets a portal (see below).
 
 ```json
 { "type": "action", "buttons": [{ "id": "approve", "label": "Approve", "style": "primary" }, { "id": "reject", "label": "Reject", "style": "danger" }, { "id": "skip", "label": "Skip", "style": "default" }] }
@@ -163,8 +163,20 @@ Clickable buttons the user can press. Clicking sends `[action: button_id]` as a 
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `buttons` | yes | Array of `{ id, label, style? }` objects |
+| `buttons` | yes | Array of `{ id, label, style?, target?, target_agent?, action_message? }` objects |
 | `style` | no | `primary` (blue), `danger` (red), `default` (gray) |
+| `target` | no | `"main"` (default — click sends a user message in chat) or `"thread"` (click runs a specialist agent in a side-panel portal instead of cluttering the main feed). Use for "run a focused task" actions like "Review PR #1310" or "Regenerate weekly report". |
+| `target_agent` | required when `target="thread"` | Name of the specialist agent that should handle this action. The portal drains that agent's output. |
+| `action_message` | no | Custom prompt sent to the target agent. Defaults to the button label. Prefer an explicit, specific prompt so the specialist has the context it needs. |
+
+**Portal button example** — dashboard with drill-in actions that don't bury the status report:
+
+```json
+{ "type": "action", "buttons": [
+  { "id": "review_1310", "label": "Review PR #1310", "style": "primary", "target": "thread", "target_agent": "reviewer", "action_message": "Review polaris-ui PR #1310 in detail — check the diff, call out any risky changes, and flag files that look off." },
+  { "id": "skip", "label": "Skip", "style": "default" }
+] }
+```
 
 ### form
 Interactive form for collecting structured input from the user. Renders as labeled fields with a submit button. When submitted, sends a structured `[form: id]...[/form]` message back to you.
