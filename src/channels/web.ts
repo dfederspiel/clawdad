@@ -123,6 +123,7 @@ export class WebChannel implements Channel {
       agentName,
       kind,
       sourceAgent,
+      title,
     ) => {
       this.broadcast('thread_opened', {
         jid: originJid,
@@ -130,6 +131,7 @@ export class WebChannel implements Channel {
         agent_name: agentName,
         kind,
         source_agent: sourceAgent,
+        title,
       });
     };
     // Portal thread completion — client clears the `live` flag so the
@@ -1705,6 +1707,9 @@ You do not delegate. If something falls outside your role, say so plainly in you
         // specialist; user-initiated actions read more naturally as
         // "the user" than as a synthetic identifier.
         sourceAgent: sender || 'the user',
+        // Button label becomes the portal's title so concurrent actions
+        // to the same specialist are distinguishable in pills/sections.
+        title: label || undefined,
       });
       logger.info(
         { jid, target_agent, label },

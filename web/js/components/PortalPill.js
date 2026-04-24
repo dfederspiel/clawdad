@@ -1,23 +1,24 @@
 import { html } from 'htm/preact';
-import { agentPanel, portalThreads, selectedGroup } from '../app.js';
+import { agentPanel, portalThreads, selectedGroup, selectedJid } from '../app.js';
+import { setDrawerStateFor } from '../portal-persistence.js';
 
 export function openPortalInDrawer(threadId) {
   const group = selectedGroup.value;
   if (!group) return;
   const portal = portalThreads.value[threadId];
-  if (portal?.live) {
-    agentPanel.value = {
-      mode: 'portals',
-      groupFolder: group.folder,
-      focusedThreadId: threadId,
-    };
-  } else {
-    agentPanel.value = {
-      mode: 'portal-single',
-      groupFolder: group.folder,
-      threadId,
-    };
-  }
+  const next = portal?.live
+    ? {
+        mode: 'portals',
+        groupFolder: group.folder,
+        focusedThreadId: threadId,
+      }
+    : {
+        mode: 'portal-single',
+        groupFolder: group.folder,
+        threadId,
+      };
+  agentPanel.value = next;
+  setDrawerStateFor(selectedJid.value, next);
 }
 
 function formatDuration(ms) {
@@ -72,7 +73,10 @@ export function PortalPill({ threadId }) {
       <div class="flex items-center gap-2 text-[11px]">
         <span class="${iconColor} text-sm leading-none">${icon}</span>
         <span class="font-semibold text-txt">${portal.agentName || 'Agent'}</span>
-        <span class="text-txt-muted">
+        ${portal.title && html`
+          <span class="text-txt-2 font-normal truncate">\u2014 ${portal.title}</span>
+        `}
+        <span class="text-txt-muted shrink-0">
           ${isRunning ? 'running' : `${count} msg${count !== 1 ? 's' : ''}`}
           ${duration ? ` \u00B7 ${duration}` : ''}
         </span>

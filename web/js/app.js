@@ -2,6 +2,11 @@ import { render } from 'preact';
 import { signal, computed } from 'preact/signals';
 import { html } from 'htm/preact';
 import * as api from './api.js';
+import {
+  loadPortalStateFor,
+  addLiveThreadForJid,
+  setDrawerStateFor,
+} from './portal-persistence.js';
 import { playNotification, TONES, isMuted } from './sounds.js';
 import { App } from './components/App.js';
 import { showAchievementToast } from './components/blocks/AchievementToast.js';
@@ -428,28 +433,32 @@ api.onSSE('thread_opened', (data) => {
       kind: data.kind,
       jid: data.jid,
       agentName: data.agent_name,
+      title: data.title || null,
       sourceAgent: data.source_agent,
       messages: [],
       openedAt: now,
       createdAt: nowIso,
       replyCount: 0,
-      live: true, // in-session — shows in drawer stack until drawer is closed
-      running: true, // actively running — drives the LIVE badge
+      live: true,
+      running: true,
     },
   };
-  // New live portal — always switch the drawer to the portals stack and
-  // focus on the new thread. If the user was inspecting a historical
-  // single portal, live activity takes precedence (they can click a pill
-  // to get back). If the drawer is on a retroactive transcript view
-  // (runId), leave it alone.
+  // Persist the new portal as live for this jid so a refresh keeps it in
+  // the stack.
+  addLiveThreadForJid(data.jid, data.thread_id);
+
+  // New live portal — switch the drawer to the portals stack and focus.
+  // Retroactive transcript views (runId mode) are left alone.
   if (data.jid === selectedJid.value && folder) {
     const cur = agentPanel.value;
     if (!cur || cur.mode === 'portals' || cur.mode === 'portal-single') {
-      agentPanel.value = {
+      const next = {
         mode: 'portals',
         groupFolder: folder,
         focusedThreadId: data.thread_id,
       };
+      agentPanel.value = next;
+      setDrawerStateFor(data.jid, next);
     }
   }
 });
@@ -704,10 +713,11 @@ export async function selectGroup(jid) {
   threadTyping.value = {};
 
   // Build portal index scoped to this chat. Portals loaded from the server
-  // power the pills in the main feed (persistent recall); only portals
-  // opened live in the current session (live: true) render in the drawer
-  // stack. That way a chat with 16 historical portals doesn't flood the
-  // drawer — you see pills inline and click one to inspect it.
+  // power the pills in the main feed (persistent recall); whether each one
+  // lives in the drawer stack is driven by per-jid persisted state so
+  // refreshing or switching groups doesn't lose the user's working panel.
+  const persisted = loadPortalStateFor(jid);
+  const liveSet = new Set(persisted.liveThreadIds);
   const portalsByThread = {};
   for (const t of portalData.threads || []) {
     const closedAt =
@@ -720,6 +730,7 @@ export async function selectGroup(jid) {
       kind: 'portal',
       jid,
       agentName: t.agent_name,
+      title: t.title || null,
       sourceAgent: null,
       messages: [],
       openedAt: new Date(t.created_at).getTime(),
@@ -727,16 +738,15 @@ export async function selectGroup(jid) {
       replyCount: t.reply_count || 0,
       lastMessagePreview: t.last_message_preview || null,
       durationMs,
-      live: false,
+      live: liveSet.has(t.thread_id), // restored from persisted state
       running: false,
     };
   }
-  // Preserve live portals from this session even if DB doesn't have them yet.
+  // Preserve in-flight portals from this session that may not be in the DB yet.
   for (const [tid, existing] of Object.entries(portalThreads.value)) {
     if (existing.jid === jid && existing.live && !portalsByThread[tid]) {
       portalsByThread[tid] = existing;
     } else if (existing.jid === jid && existing.live && portalsByThread[tid]) {
-      // DB row exists AND it's the live session portal — preserve live flag
       portalsByThread[tid] = {
         ...portalsByThread[tid],
         ...existing,
@@ -745,6 +755,25 @@ export async function selectGroup(jid) {
     }
   }
   portalThreads.value = portalsByThread;
+
+  // Restore the drawer state for this jid (open + mode + focus). If this
+  // group had a drawer open last time you were in it, reopen to the same
+  // portal or stack.
+  const currentPanel = agentPanel.value;
+  const currentGroupFolder = groups.value.find((g) => g.jid === jid)?.folder;
+  if (persisted.drawer && currentGroupFolder) {
+    agentPanel.value = {
+      ...persisted.drawer,
+      groupFolder: currentGroupFolder,
+    };
+  } else if (
+    currentPanel &&
+    (currentPanel.mode === 'portals' || currentPanel.mode === 'portal-single')
+  ) {
+    // Previous group's drawer was open but this group has no persisted state —
+    // close the drawer rather than leaving it pointing at stale content.
+    agentPanel.value = null;
+  }
 }
 
 export async function handleSend(content) {

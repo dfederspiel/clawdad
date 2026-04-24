@@ -73,6 +73,7 @@ export interface ChannelOpts {
     agentName: string,
     kind: 'portal',
     sourceAgent?: string,
+    title?: string,
   ) => void;
   /** Broadcast portal thread completion */
   onThreadClosed?: (originJid: string, threadId: string) => void;
@@ -85,6 +86,7 @@ export interface ChannelOpts {
     targetAgent: string;
     message: string;
     sourceAgent: string;
+    title?: string;
   }) => void;
   /** Reset session for a group (clears SDK session, evicts warm pool) */
   onResetSession?: (groupFolder: string) => Promise<void>;
