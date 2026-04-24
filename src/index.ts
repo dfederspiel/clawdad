@@ -168,10 +168,14 @@ const pendingOrigins: Record<string, { originJid: string; threadId?: string }> =
   {};
 
 /** Broadcast usage metrics to web UI clients */
-function broadcastUsage(chatJid: string, usage: UsageData): void {
+function broadcastUsage(
+  chatJid: string,
+  usage: UsageData,
+  runId?: number,
+): void {
   for (const ch of channels) {
     if (ch.name === 'web' && 'broadcastUsageUpdate' in ch) {
-      (ch as any).broadcastUsageUpdate(chatJid, usage);
+      (ch as any).broadcastUsageUpdate(chatJid, usage, runId);
       break;
     }
   }
@@ -249,10 +253,14 @@ function checkContextPressure(groupFolder: string, chatJid: string): void {
 }
 
 /** Broadcast agent progress (tool activity) to web UI clients */
-function broadcastProgress(chatJid: string, event: ProgressEvent): void {
+function broadcastProgress(
+  chatJid: string,
+  event: ProgressEvent,
+  threadId?: string,
+): void {
   for (const ch of channels) {
     if (ch.name === 'web' && 'broadcastAgentProgress' in ch) {
-      (ch as any).broadcastAgentProgress(chatJid, event);
+      (ch as any).broadcastAgentProgress(chatJid, event, threadId);
       break;
     }
   }
@@ -266,6 +274,22 @@ const activeThreads = new Map<
 // Callback set by the web channel to broadcast thread creation events
 let broadcastThreadCreated:
   | ((originJid: string, threadId: string, agentName: string) => void)
+  | null = null;
+// Callback for portal (side-drawer) thread openings. Distinct from
+// broadcastThreadCreated, which signals the inline ThreadView UX.
+let broadcastThreadOpened:
+  | ((
+      originJid: string,
+      threadId: string,
+      agentName: string,
+      kind: 'portal',
+      sourceAgent?: string,
+    ) => void)
+  | null = null;
+// Callback for portal thread completion. The client clears the "live" flag
+// so only in-flight portals render in the drawer stack.
+let broadcastThreadClosed:
+  | ((originJid: string, threadId: string) => void)
   | null = null;
 
 async function deliverAgentMessage(
@@ -997,6 +1021,7 @@ async function processGroupMessages(
     MAX_MESSAGES_PER_PROMPT,
     true, // includeBotMessages — agents must see their own prior output for conversational continuity
     !isThreadReply, // excludeThreaded — but include thread replies when processing a thread agent
+    isMultiAgent, // keepPortalThreads — coordinators need delegation output
   );
 
   if (missedMessages.length === 0) {
@@ -1846,7 +1871,7 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
         // so onOutput fires once per user message, not once per container)
         if (output.usage && output.usage.numTurns > 0) {
           const u = output.usage;
-          storeAgentRun({
+          const runId = storeAgentRun({
             chat_jid: chatJid,
             group_folder: group.folder,
             session_id: sessions[agentId],
@@ -1869,8 +1894,9 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
               ...u,
               toolHistory: toolHistory.length > 0 ? toolHistory : undefined,
             }),
+            runId,
           );
-          broadcastUsage(chatJid, u);
+          broadcastUsage(chatJid, u, runId);
           const cacheHitRatio =
             u.cacheReadTokens /
             Math.max(1, u.cacheReadTokens + u.cacheWriteTokens);
@@ -1950,7 +1976,7 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
 
     if (output.usage && output.usage.numTurns > 0) {
       const u = output.usage;
-      storeAgentRun({
+      const runId = storeAgentRun({
         chat_jid: chatJid,
         group_folder: group.folder,
         session_id: sessions[agentId],
@@ -1973,8 +1999,9 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
           ...u,
           toolHistory: toolHistory.length > 0 ? toolHistory : undefined,
         }),
+        runId,
       );
-      broadcastUsage(chatJid, u);
+      broadcastUsage(chatJid, u, runId);
       const cacheHitRatio =
         u.cacheReadTokens / Math.max(1, u.cacheReadTokens + u.cacheWriteTokens);
       logger.info(
@@ -2133,6 +2160,7 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
         poolManaged: true,
         mainChatJid: isMain ? undefined : getMainChatJid(),
         systemContext,
+        skillsAllowlist: agent?.skills,
         achievements: getAchievementsForContainer(),
       };
 
@@ -2211,6 +2239,7 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
       poolManaged: false,
       mainChatJid: isMain ? undefined : getMainChatJid(),
       systemContext,
+      skillsAllowlist: agent?.skills,
       achievements: getAchievementsForContainer(),
     };
 
@@ -2837,10 +2866,30 @@ async function main(): Promise<void> {
   if (channelOpts.onThreadCreated) {
     broadcastThreadCreated = channelOpts.onThreadCreated;
   }
+  if (channelOpts.onThreadOpened) {
+    broadcastThreadOpened = channelOpts.onThreadOpened;
+  }
+  if (channelOpts.onThreadClosed) {
+    broadcastThreadClosed = channelOpts.onThreadClosed;
+  }
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
   }
+  // Web channel's action-button click path (target:"thread") needs a way
+  // to invoke the delegation machinery without the MCP tool. channelOpts
+  // was already passed to the channel constructor, but onUserDelegation is
+  // optional — channels opt into it. The adapter routes through the
+  // shared delegationHandler (declared below, after startIpcWatcher setup).
+  channelOpts.onUserDelegation = (req) => {
+    delegationHandler({
+      sourceGroup: req.sourceGroup,
+      chatJid: req.chatJid,
+      targetAgent: req.targetAgent,
+      message: req.message,
+      sourceAgent: req.sourceAgent,
+    });
+  };
 
   // Shared callback: tasks mutated or a run completed. Refreshes per-group
   // task snapshots and nudges the web UI to re-sort the sidebar (used when
@@ -3078,10 +3127,6 @@ async function main(): Promise<void> {
         completionPolicy,
       } = request;
 
-      // Platform-level backstop (#48). Duplicates the check the MCP tool
-      // already applies in the coordinator container — this catches the
-      // case where the container image is stale (pre-validation) and would
-      // otherwise waste a ~30-60s specialist startup on hollow context.
       const validation = validateDelegationMessage(message);
       if (!validation.ok) {
         logger.warn(
@@ -3099,7 +3144,6 @@ async function main(): Promise<void> {
         return;
       }
 
-      // Find the group JID from the source folder
       const groupJid = Object.keys(registeredGroups).find(
         (jid) => registeredGroups[jid].folder === sourceGroup,
       );
@@ -3140,20 +3184,11 @@ async function main(): Promise<void> {
         'Processing agent delegation',
       );
 
-      // Run the delegation in parallel — delegations bypass per-group
-      // serialization and can run alongside the coordinator and other
-      // delegations. The queue re-triggers the coordinator automatically
-      // when all delegations for a group complete.
       const savedConfig = group.containerConfig;
-      // Specialist's capability profile dictates how long the host will
-      // wait — fast cloud APIs (Claude) fail fast, slow local runtimes
-      // (CPU-only Ollama) get headroom. See src/model-capabilities.ts.
       const delegationTimeout = getCapabilityProfile(
         agent.runtime,
       ).delegationTimeoutMs;
       const taskId = `delegation-${agent.name}-${Date.now()}`;
-      // Share coordinator's network namespace so delegation containers can
-      // reach services (e.g. Storybook) running on the coordinator's localhost.
       const coordinatorContainer = queue.getCoordinatorContainerName(chatJid);
       queue.enqueueDelegation(
         chatJid,
@@ -3169,24 +3204,18 @@ async function main(): Promise<void> {
               delegationTimeout,
             ),
           };
-          // Build prompt at execution time (not enqueue time) so conversation
-          // context includes any messages that arrived while queued.
           const multiAgentCtx = buildMultiAgentContext(agent, agents);
           const recentMessages = getMessagesSince(
             chatJid,
             '',
             ASSISTANT_NAME,
             MAX_MESSAGES_PER_PROMPT,
-            true, // include bot messages for full context
+            true,
           );
           const conversationCtx = formatMessages(recentMessages, TIMEZONE);
           const delegationPrompt =
             conversationCtx +
             `\n\n--- Delegation from ${sourceAgent} ---\n${message}\n--- End delegation ---\n`;
-          // For non-Claude runtimes the delegation instruction was silently
-          // dropped by the XML parser (it lives outside <messages>). Inject
-          // it as a synthetic final user message so it actually reaches the
-          // model via the structured path.
           const delegationMessages: StructuredMessage[] = [
             ...toStructuredMessages(recentMessages),
             {
@@ -3199,7 +3228,6 @@ async function main(): Promise<void> {
 
           setActiveAgentName(chatJid, agent.displayName);
           await channel.setTyping?.(chatJid, true);
-          // Intermediate TEXT blocks are shown as status in the typing indicator
 
           const status = await runAgent({
             group,
@@ -3221,8 +3249,6 @@ async function main(): Promise<void> {
                     .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                     .trim();
                   if (text) {
-                    // Set agent name right before sending — parallel delegations
-                    // share the same chatJid so we must claim the name each time
                     setActiveAgentName(chatJid, agent.displayName);
                     if (
                       await deliverAgentMessage(channel, chatJid, text, lease)
@@ -3232,8 +3258,6 @@ async function main(): Promise<void> {
                   }
                 }
               }
-              // Delegation containers exit on their own (isDelegation skips
-              // the idle loop in agent-runner) — no notifyIdle needed.
               if (result.status === 'success') {
                 await channel.setTyping?.(
                   chatJid,
@@ -3276,7 +3300,7 @@ async function main(): Promise<void> {
             messages: delegationMessages,
           });
 
-          group.containerConfig = savedConfig; // restore original config
+          group.containerConfig = savedConfig;
           clearActiveAgentName(chatJid);
           await channel.setTyping?.(
             chatJid,
@@ -3291,7 +3315,6 @@ async function main(): Promise<void> {
             );
           }
 
-          // Evaluate and execute automation rules on delegation result
           if (status === 'success') {
             const resultTraces = evaluateAutomationRules(
               group.folder,
@@ -3315,8 +3338,6 @@ async function main(): Promise<void> {
             }
           }
 
-          // Store a system message so the coordinator sees the result attribution.
-          // The queue re-triggers the coordinator when all delegations complete.
           const resultNote =
             status === 'error'
               ? `[${agent.displayName} was unable to complete the delegated task.]`

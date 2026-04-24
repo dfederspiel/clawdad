@@ -51,9 +51,11 @@ import {
   deleteTask,
   getTelemetryStats,
   getThreadsForChat,
+  getPortalThreadsForChat,
   getThreadMessages,
   getUsageStats,
   getLatestRunForChat,
+  getAgentRunById,
   getSession,
   getSessionPressure,
   getAllSessionPressure,
@@ -111,6 +113,31 @@ export class WebChannel implements Channel {
         jid: originJid,
         thread_id: threadId,
         agent_name: agentName,
+      });
+    };
+    // Portal (side-drawer) thread opening — distinct event so the client
+    // can auto-open the drawer instead of rendering inline like trigger threads.
+    opts.onThreadOpened = (
+      originJid,
+      threadId,
+      agentName,
+      kind,
+      sourceAgent,
+    ) => {
+      this.broadcast('thread_opened', {
+        jid: originJid,
+        thread_id: threadId,
+        agent_name: agentName,
+        kind,
+        source_agent: sourceAgent,
+      });
+    };
+    // Portal thread completion — client clears the `live` flag so the
+    // portal drops out of the drawer's live stack.
+    opts.onThreadClosed = (originJid, threadId) => {
+      this.broadcast('thread_closed', {
+        jid: originJid,
+        thread_id: threadId,
       });
     };
   }
@@ -389,12 +416,14 @@ export class WebChannel implements Channel {
   broadcastAgentProgress(
     chatJid: string,
     event: { tool?: string; summary: string; timestamp: string },
+    threadId?: string,
   ): void {
     const agentName = getActiveAgentName(chatJid);
     this.broadcast('agent_progress', {
       jid: chatJid,
       ...event,
       agent_name: agentName,
+      thread_id: threadId,
     });
   }
 
@@ -414,8 +443,13 @@ export class WebChannel implements Channel {
       durationApiMs: number;
       numTurns: number;
     },
+    runId?: number,
   ): void {
-    this.broadcast('usage_update', { jid: chatJid, ...usage });
+    this.broadcast('usage_update', {
+      jid: chatJid,
+      ...usage,
+      run_id: runId,
+    });
   }
 
   // --- HTTP Request Handler ---
@@ -1530,6 +1564,16 @@ You do not delegate. If something falls outside your role, say so plainly in you
       return this.json(res, 200, { threads });
     }
 
+    // GET /api/portal-threads/:jid — portal (side-drawer) threads for a chat
+    const portalThreadsMatch = url.pathname.match(
+      /^\/api\/portal-threads\/(.+)$/,
+    );
+    if (method === 'GET' && portalThreadsMatch) {
+      const jid = decodeURIComponent(portalThreadsMatch[1]);
+      const threads = getPortalThreadsForChat(jid);
+      return this.json(res, 200, { threads });
+    }
+
     // GET /api/thread-messages/:threadId — messages in a thread
     const threadMsgsMatch = url.pathname.match(
       /^\/api\/thread-messages\/(.+)$/,
@@ -1626,6 +1670,47 @@ You do not delegate. If something falls outside your role, say so plainly in you
       }
 
       return this.json(res, 200, { ok: true, messageId: msg.id });
+    }
+
+    // POST /api/action — invoke an action-button with target:"thread".
+    // Mints a portal thread routed to a specific specialist agent, then
+    // reuses the shared delegation machinery via onUserDelegation.
+    if (method === 'POST' && url.pathname === '/api/action') {
+      const body = await this.readBody(req);
+      const { jid, target_agent, label, action_message, sender } = body;
+      if (!jid || !target_agent || !action_message) {
+        return this.json(res, 400, {
+          error: 'jid, target_agent, and action_message are required',
+        });
+      }
+      if (!jid.startsWith('web:')) {
+        return this.json(res, 400, { error: 'jid must start with web:' });
+      }
+      const groups = this.opts.registeredGroups();
+      const group = groups[jid];
+      if (!group) {
+        return this.json(res, 404, { error: 'Group not registered' });
+      }
+      if (!this.opts.onUserDelegation) {
+        return this.json(res, 503, {
+          error: 'Delegation handler not wired on this channel',
+        });
+      }
+      this.opts.onUserDelegation({
+        sourceGroup: group.folder,
+        chatJid: jid,
+        targetAgent: target_agent,
+        message: action_message,
+        // The prompt string "Delegation from X" is surfaced to the
+        // specialist; user-initiated actions read more naturally as
+        // "the user" than as a synthetic identifier.
+        sourceAgent: sender || 'the user',
+      });
+      logger.info(
+        { jid, target_agent, label },
+        'Portal action invoked from web UI',
+      );
+      return this.json(res, 200, { ok: true });
     }
 
     // GET /api/status — container/queue status + uptime
@@ -1785,24 +1870,58 @@ You do not delegate. If something falls outside your role, say so plainly in you
       return this.json(res, 200, { ok: true });
     }
 
-    // GET /api/transcript?group=folder — parse the session transcript for a group
+    // GET /api/transcript?group=folder[&run_id=N] — parse the session transcript
+    // for a group, optionally scoped to a single agent_runs row's time window.
     if (method === 'GET' && url.pathname === '/api/transcript') {
       const folder = url.searchParams.get('group');
       if (!folder) return this.json(res, 400, { error: 'group required' });
 
-      const sessionId = getSession(folder);
+      const runIdParam = url.searchParams.get('run_id');
+      let runWindow: { start: number; end: number } | null = null;
+      let runSessionId: string | null = null;
+      let runMeta: {
+        id: number;
+        timestamp: string;
+        duration_ms: number;
+        cost_usd: number;
+        num_turns: number;
+        session_id?: string;
+      } | null = null;
+      if (runIdParam) {
+        const runId = parseInt(runIdParam, 10);
+        if (!Number.isFinite(runId)) {
+          return this.json(res, 400, { error: 'invalid run_id' });
+        }
+        const run = getAgentRunById(runId);
+        if (!run) {
+          return this.json(res, 404, { error: 'run not found' });
+        }
+        const end = new Date(run.timestamp).getTime();
+        const start = end - (run.duration_ms || 0);
+        // Pad by 2s on the leading edge — the SDK timestamps the `result`
+        // message when the run ends, and earlier tool_use entries may have
+        // slightly earlier clock readings than duration_ms alone captures.
+        runWindow = { start: start - 2000, end: end + 500 };
+        runSessionId = run.session_id || null;
+        runMeta = {
+          id: run.id,
+          timestamp: run.timestamp,
+          duration_ms: run.duration_ms,
+          cost_usd: run.cost_usd,
+          num_turns: run.num_turns,
+          session_id: run.session_id,
+        };
+      }
+
+      const sessionId = runSessionId || getSession(folder);
       if (!sessionId) {
         return this.json(res, 404, { error: 'No active session' });
       }
 
-      // Find transcript JSONL — try common project paths
-      const sessionsBase = path.join(
-        DATA_DIR,
-        'sessions',
-        folder,
-        '.claude',
-        'projects',
-      );
+      // Find transcript JSONL anywhere under the group's session dir. Older
+      // single-agent sessions live at `{folder}/.claude/projects/...` while
+      // multi-agent ones nest under `{folder}/{agent}/.claude/projects/...`.
+      const sessionsBase = path.join(DATA_DIR, 'sessions', folder);
       let transcriptPath: string | null = null;
       if (fs.existsSync(sessionsBase)) {
         const findJsonl = (dir: string): string | null => {
@@ -1848,9 +1967,76 @@ You do not delegate. If something falls outside your role, say so plainly in you
           timestamp?: string;
         }> = [];
 
+        const inWindow = (ts: string | undefined): boolean => {
+          if (!runWindow) return true;
+          if (!ts) return false;
+          const t = new Date(ts).getTime();
+          return t >= runWindow.start && t <= runWindow.end;
+        };
+
+        const extractToolSummary = (
+          input: Record<string, unknown> | undefined,
+        ): string => {
+          if (!input) return '';
+          const s = (v: unknown, n: number): string =>
+            String(v).split('\n')[0].slice(0, n);
+          if (input.command) return s(input.command, 120);
+          if (input.file_path)
+            return String(input.file_path).split(/[/\\]/).pop() ?? '';
+          if (input.pattern) return s(input.pattern, 80);
+          if (input.path) return s(input.path, 120);
+          if (input.url) return s(input.url, 120);
+          if (input.query) return s(input.query, 120);
+          return '';
+        };
+
+        const extractResultContent = (c: unknown): string => {
+          if (typeof c === 'string') return c.slice(0, 500);
+          if (Array.isArray(c)) {
+            return c
+              .filter(
+                (b: unknown): b is { type: string; text?: string } =>
+                  typeof b === 'object' &&
+                  b !== null &&
+                  (b as { type: string }).type === 'text',
+              )
+              .map((b) => b.text ?? '')
+              .join('')
+              .slice(0, 500);
+          }
+          return '';
+        };
+
+        // The orchestrator wraps inbound user text in a <messages> envelope
+        // with sender+time metadata. For display, extract the raw message
+        // body from the innermost <message> tag when present.
+        const unwrapUserText = (raw: string): string => {
+          // Require whitespace after `message` so we don't also match `<messages>`.
+          const match = raw.match(
+            /<message\s[^>]*>([\s\S]*?)<\/message>\s*<\/messages>/i,
+          );
+          return (match?.[1] ?? raw).trim();
+        };
+
+        // Track tool_use.id → tool name so we can label tool_result entries,
+        // which only carry a tool_use_id (not the tool name).
+        const toolNameById = new Map<string, string>();
+
         for (const entry of entries) {
-          if (entry.type === 'assistant' && entry.message?.content) {
-            for (const block of entry.message.content) {
+          if (!inWindow(entry.timestamp)) continue;
+
+          const content = entry.message?.content;
+          if (!content) continue;
+
+          if (entry.type === 'assistant' && Array.isArray(content)) {
+            for (const block of content) {
+              if (block.type === 'thinking' && block.thinking) {
+                timeline.push({
+                  type: 'thinking',
+                  content: block.thinking.slice(0, 2000),
+                  timestamp: entry.timestamp,
+                });
+              }
               if (block.type === 'text' && block.text) {
                 timeline.push({
                   type: 'text',
@@ -1860,58 +2046,69 @@ You do not delegate. If something falls outside your role, say so plainly in you
                 });
               }
               if (block.type === 'tool_use') {
-                const summary = block.input?.command
-                  ? String(block.input.command).split('\n')[0].slice(0, 120)
-                  : block.input?.file_path
-                    ? String(block.input.file_path).split(/[/\\]/).pop()
-                    : block.input?.pattern
-                      ? String(block.input.pattern).slice(0, 80)
-                      : '';
+                if (block.id && block.name) {
+                  toolNameById.set(block.id, block.name);
+                }
                 timeline.push({
                   type: 'tool_use',
                   tool: block.name,
-                  summary,
-                  timestamp: entry.timestamp,
-                });
-              }
-              if (block.type === 'tool_result') {
-                timeline.push({
-                  type: 'tool_result',
-                  tool: block.name,
-                  content:
-                    typeof block.content === 'string'
-                      ? block.content.slice(0, 500)
-                      : '',
+                  summary: extractToolSummary(block.input),
                   timestamp: entry.timestamp,
                 });
               }
             }
           }
-          if (entry.type === 'user' && entry.message?.content) {
-            const text =
-              typeof entry.message.content === 'string'
-                ? entry.message.content
-                : Array.isArray(entry.message.content)
-                  ? entry.message.content
-                      .filter(
-                        (b: { type: string; text?: string }) =>
-                          b.type === 'text',
-                      )
-                      .map((b: { text: string }) => b.text)
-                      .join('')
-                  : '';
-            if (text) {
-              timeline.push({
-                type: 'text',
-                role: 'user',
-                content: text.slice(0, 2000),
-                timestamp: entry.timestamp,
-              });
+
+          if (entry.type === 'user') {
+            if (typeof content === 'string') {
+              const text = unwrapUserText(content);
+              // SDK harness reminders ("[system] You completed tool calls
+              // but did not send a visible reply...") are not user turns.
+              if (text && !text.startsWith('[system]')) {
+                timeline.push({
+                  type: 'text',
+                  role: 'user',
+                  content: text.slice(0, 2000),
+                  timestamp: entry.timestamp,
+                });
+              }
+            } else if (Array.isArray(content)) {
+              // User messages can carry either plain text (a real user turn)
+              // or tool_result blocks (the agent's tool chain). Surface both.
+              const textParts: string[] = [];
+              for (const block of content) {
+                if (block.type === 'text' && block.text) {
+                  textParts.push(block.text);
+                }
+                if (block.type === 'tool_result') {
+                  timeline.push({
+                    type: 'tool_result',
+                    tool:
+                      (block.tool_use_id &&
+                        toolNameById.get(block.tool_use_id)) ||
+                      block.name ||
+                      '',
+                    content: extractResultContent(block.content),
+                    timestamp: entry.timestamp,
+                  });
+                }
+              }
+              if (textParts.length) {
+                const text = unwrapUserText(textParts.join(''));
+                if (text && !text.startsWith('[system]')) {
+                  timeline.push({
+                    type: 'text',
+                    role: 'user',
+                    content: text.slice(0, 2000),
+                    timestamp: entry.timestamp,
+                  });
+                }
+              }
             }
           }
         }
 
-        return this.json(res, 200, { sessionId, timeline });
+        return this.json(res, 200, { sessionId, timeline, run: runMeta });
       } catch (err) {
         logger.error({ err, folder }, 'Failed to parse transcript');
         return this.json(res, 500, { error: 'Failed to parse transcript' });

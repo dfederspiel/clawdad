@@ -40,6 +40,11 @@ export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group la
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
 export const typingAgentName = signal({}); // { [jid]: string } — which agent is typing
 export const agentProgress = signal({}); // { [jid]: { tool, summary, history[] } }
+// Portal-scoped progress shard. Same shape as agentProgress but keyed by
+// thread_id so each PortalSection in the drawer can render its own live
+// tool activity. Also tracks lastEventAt for stall detection.
+// { [thread_id]: { tool, summary, history[], lastEventAt } }
+export const portalProgress = signal({});
 export const activeAgents = signal({}); // { [jid]: string[] } — agent names currently working
 export const workState = signal({}); // { [jid]: WorkStateEvent }
 export const currentWorkState = computed(() => workState.value[selectedJid.value] || null);
@@ -76,6 +81,14 @@ function loadNotifLastRead() {
 export const notifications = signal(loadNotifHistory());
 export const notifLastReadAt = signal(loadNotifLastRead());
 export const flashMessageId = signal(null);
+// Side panel: either { runId, groupFolder, usage? } (retroactive) or
+// { threadId, groupFolder, agentName, live: true } (live delegation portal).
+// Phase 2: live streaming for portal threads (issue #90).
+export const agentPanel = signal(null);
+// Portal threads keyed by thread_id. Populated by `thread_opened` SSE; live
+// `message` events route here instead of the inline ThreadView feed.
+// Shape: { [thread_id]: { kind, agentName, jid, messages: [], sourceAgent, openedAt } }
+export const portalThreads = signal({});
 export const unreadNotifCount = computed(() => {
   const lastRead = notifLastReadAt.value;
   return notifications.value.filter(
@@ -177,7 +190,28 @@ api.connectSSE(clientId);
 
 api.onSSE('message', (data) => {
   if (data.thread_id) {
-    // Thread message — append to open thread, update reply count, clear thread typing
+    // Portal thread message — route to drawer, not inline ThreadView
+    const portal = portalThreads.value[data.thread_id];
+    if (portal) {
+      portalThreads.value = {
+        ...portalThreads.value,
+        [data.thread_id]: {
+          ...portal,
+          messages: [
+            ...portal.messages,
+            {
+              id: data.message_id,
+              role: 'assistant',
+              content: data.text,
+              timestamp: data.timestamp,
+              senderName: data.sender_name,
+            },
+          ],
+        },
+      };
+      return;
+    }
+    // Trigger thread — append to inline ThreadView, update reply count, clear thread typing
     threadTyping.value = { ...threadTyping.value, [data.thread_id]: false };
     const threads = openThreads.value;
     if (threads[data.thread_id]) {
@@ -297,6 +331,30 @@ api.onSSE('play_sound', (data) => {
 });
 
 api.onSSE('agent_progress', (data) => {
+  // If this progress carries a thread_id, route it to the portal shard —
+  // the drawer's PortalSection wants to show per-portal tool activity.
+  // Portal events bypass the typingGroups gate; the drawer stays open
+  // across typing flips so we shouldn't drop them.
+  if (data.thread_id) {
+    const prev = portalProgress.value[data.thread_id];
+    const history = prev?.history || [];
+    const updated = [
+      ...history,
+      { tool: data.tool, summary: data.summary, timestamp: data.timestamp },
+    ];
+    if (updated.length > 20) updated.shift();
+    portalProgress.value = {
+      ...portalProgress.value,
+      [data.thread_id]: {
+        tool: data.tool,
+        summary: data.summary,
+        history: updated,
+        lastEventAt: Date.now(),
+      },
+    };
+    // Don't return — also update the chat-jid shard below so the main
+    // typing indicator reflects activity in multi-agent groups.
+  }
   // Drop late-arriving progress events for groups that have already cleared
   // their typing state — prevents the indicator from flashing stale data.
   if (!typingGroups.value[data.jid]) return;
@@ -326,6 +384,7 @@ api.onSSE('usage_update', (data) => {
           ...msgs[i],
           usage: data,
           toolHistory: progressData?.history || [],
+          runId: data.run_id ?? msgs[i].runId ?? null,
         };
         messages.value = msgs;
         break;
@@ -354,6 +413,71 @@ api.onSSE('context_pressure_cleared', (data) => {
   const nextDismissed = { ...dismissedPressure.value };
   delete nextDismissed[data.jid];
   dismissedPressure.value = nextDismissed;
+});
+
+api.onSSE('thread_opened', (data) => {
+  // A portal (side-drawer) thread was opened by a delegation or action.
+  // Register it so `message` events with this thread_id route to the drawer.
+  if (data.kind !== 'portal' || !data.thread_id) return;
+  const folder = groups.value.find((g) => g.jid === data.jid)?.folder;
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  portalThreads.value = {
+    ...portalThreads.value,
+    [data.thread_id]: {
+      kind: data.kind,
+      jid: data.jid,
+      agentName: data.agent_name,
+      sourceAgent: data.source_agent,
+      messages: [],
+      openedAt: now,
+      createdAt: nowIso,
+      replyCount: 0,
+      live: true, // in-session — shows in drawer stack until drawer is closed
+      running: true, // actively running — drives the LIVE badge
+    },
+  };
+  // New live portal — always switch the drawer to the portals stack and
+  // focus on the new thread. If the user was inspecting a historical
+  // single portal, live activity takes precedence (they can click a pill
+  // to get back). If the drawer is on a retroactive transcript view
+  // (runId), leave it alone.
+  if (data.jid === selectedJid.value && folder) {
+    const cur = agentPanel.value;
+    if (!cur || cur.mode === 'portals' || cur.mode === 'portal-single') {
+      agentPanel.value = {
+        mode: 'portals',
+        groupFolder: folder,
+        focusedThreadId: data.thread_id,
+      };
+    }
+  }
+});
+
+api.onSSE('thread_closed', (data) => {
+  // Portal's agent run finished — clear the running flag so the LIVE
+  // badge drops. The portal itself stays in the stack (live=true) so
+  // the user can still read what the agent said; it drops out of the
+  // stack only when the drawer is closed (handled separately).
+  if (!data.thread_id) return;
+  const portal = portalThreads.value[data.thread_id];
+  if (!portal) return;
+  const duration =
+    portal.openedAt ? Date.now() - portal.openedAt : portal.durationMs;
+  // Snapshot the final assistant reply as the pill's preview line so the
+  // main-feed summary renders even after the section's live buffer clears.
+  const lastAssistant = [...(portal.messages || [])]
+    .reverse()
+    .find((m) => m.role === 'assistant');
+  portalThreads.value = {
+    ...portalThreads.value,
+    [data.thread_id]: {
+      ...portal,
+      running: false,
+      durationMs: duration,
+      lastMessagePreview: lastAssistant?.content || portal.lastMessagePreview,
+    },
+  };
 });
 
 api.onSSE('thread_created', async (data) => {
@@ -542,9 +666,10 @@ export async function selectGroup(jid) {
   // are appended to a clean slate (selectedJid is already set above).
   messages.value = [];
 
-  const [msgData, threadData] = await Promise.all([
+  const [msgData, threadData, portalData] = await Promise.all([
     api.getMessages(jid),
     api.getThreads(jid),
+    api.getPortalThreads(jid),
   ]);
 
   // Build the DB message list, then merge any SSE messages that arrived
@@ -562,6 +687,7 @@ export async function selectGroup(jid) {
       senderName: m.sender_name,
       usage: parsedUsage,
       toolHistory: parsedUsage?.toolHistory || [],
+      runId: m.run_id ?? null,
     };
   });
   const dbIds = new Set(dbMessages.map((m) => m.id));
@@ -576,6 +702,49 @@ export async function selectGroup(jid) {
   threadMeta.value = meta;
   openThreads.value = {};
   threadTyping.value = {};
+
+  // Build portal index scoped to this chat. Portals loaded from the server
+  // power the pills in the main feed (persistent recall); only portals
+  // opened live in the current session (live: true) render in the drawer
+  // stack. That way a chat with 16 historical portals doesn't flood the
+  // drawer — you see pills inline and click one to inspect it.
+  const portalsByThread = {};
+  for (const t of portalData.threads || []) {
+    const closedAt =
+      t.last_message_at && t.last_message_at !== t.created_at
+        ? new Date(t.last_message_at).getTime()
+        : null;
+    const durationMs =
+      closedAt ? closedAt - new Date(t.created_at).getTime() : null;
+    portalsByThread[t.thread_id] = {
+      kind: 'portal',
+      jid,
+      agentName: t.agent_name,
+      sourceAgent: null,
+      messages: [],
+      openedAt: new Date(t.created_at).getTime(),
+      createdAt: t.created_at,
+      replyCount: t.reply_count || 0,
+      lastMessagePreview: t.last_message_preview || null,
+      durationMs,
+      live: false,
+      running: false,
+    };
+  }
+  // Preserve live portals from this session even if DB doesn't have them yet.
+  for (const [tid, existing] of Object.entries(portalThreads.value)) {
+    if (existing.jid === jid && existing.live && !portalsByThread[tid]) {
+      portalsByThread[tid] = existing;
+    } else if (existing.jid === jid && existing.live && portalsByThread[tid]) {
+      // DB row exists AND it's the live session portal — preserve live flag
+      portalsByThread[tid] = {
+        ...portalsByThread[tid],
+        ...existing,
+        live: true,
+      };
+    }
+  }
+  portalThreads.value = portalsByThread;
 }
 
 export async function handleSend(content) {

@@ -62,6 +62,7 @@ export interface NewMessage {
   is_bot_message?: boolean;
   thread_id?: string;
   usage?: string;
+  run_id?: number | null;
 }
 
 export interface MediaArtifact {
@@ -89,6 +90,9 @@ export interface ThreadInfo {
   agent_name?: string;
   created_at: string;
   reply_count?: number;
+  kind?: 'trigger' | 'portal';
+  last_message_preview?: string;
+  last_message_at?: string;
 }
 
 export interface Agent {
@@ -105,6 +109,11 @@ export interface Agent {
   // wildcards on Claude (e.g. `mcp__nanoclaw__*`); Ollama matches exact
   // names only. An empty array means "no tools" — an explicit opt-out.
   tools?: string[];
+  // Positive skill allowlist over container/skills/*. Entries are skill
+  // directory names (e.g. "rich-output", "status"). Undefined preserves
+  // backward-compat behavior of receiving every global skill. An empty
+  // array means "no skills". Phase 3 of #74 / #42.
+  skills?: string[];
 }
 
 export type WorkPhase =

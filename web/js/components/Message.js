@@ -1,9 +1,8 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
-import { parseBlocks } from '../block-parser.js';
-import { BlockRenderer } from './blocks/BlockRenderer.js';
-import { md } from '../markdown.js';
 import { selectedGroup } from '../app.js';
+import { openAgentPanel } from './AgentPanel.js';
+import { MessageBody } from './MessageBody.js';
 
 // Consistent color for each agent name (hash → HSL hue)
 const AGENT_COLORS = {};
@@ -48,7 +47,7 @@ function renderToolLabel(tool) {
   return tool || '>';
 }
 
-function UsageFooter({ usage, toolHistory, expanded, onToggle }) {
+function UsageFooter({ usage, toolHistory, expanded, onToggle, runId, groupFolder }) {
   if (!usage || (!usage.numTurns && !usage.durationMs)) return null;
 
   const parts = [];
@@ -59,20 +58,32 @@ function UsageFooter({ usage, toolHistory, expanded, onToggle }) {
   if (usage.costUsd) parts.push(formatCost(usage.costUsd));
 
   const hasHistory = toolHistory && toolHistory.length > 0;
+  const canViewConversation = runId != null && groupFolder;
 
   return html`
     <div class="mt-1">
-      <div
-        class="flex items-center gap-1.5 text-[10px] text-txt-muted font-mono ${hasHistory ? 'cursor-pointer hover:text-txt-2' : ''}"
-        onClick=${hasHistory ? onToggle : undefined}
-      >
-        ${hasHistory && html`
-          <span class="text-[9px] transition-transform ${expanded ? 'rotate-90' : ''}">\u25B6</span>
+      <div class="flex items-center gap-2 flex-wrap">
+        <div
+          class="flex items-center gap-1.5 text-[10px] text-txt-muted font-mono ${hasHistory ? 'cursor-pointer hover:text-txt-2' : ''}"
+          onClick=${hasHistory ? onToggle : undefined}
+        >
+          ${hasHistory && html`
+            <span class="text-[9px] transition-transform ${expanded ? 'rotate-90' : ''}">\u25B6</span>
+          `}
+          ${parts.map((p, i) => html`
+            ${i > 0 && html`<span class="opacity-40">\u00B7</span>`}
+            <span>${p}</span>
+          `)}
+        </div>
+        ${canViewConversation && html`
+          <button
+            class="text-[10px] text-txt-muted hover:text-accent transition-colors font-mono cursor-pointer"
+            onClick=${(e) => { e.stopPropagation(); openAgentPanel(runId, groupFolder); }}
+            title="Open the agent's full tool call chain in a side panel"
+          >
+            view conversation \u2192
+          </button>
         `}
-        ${parts.map((p, i) => html`
-          ${i > 0 && html`<span class="opacity-40">\u00B7</span>`}
-          <span>${p}</span>
-        `)}
       </div>
       ${expanded && hasHistory && html`
         <div class="mt-1.5 pl-3 border-l-2 border-border flex flex-col gap-0.5">
@@ -88,7 +99,7 @@ function UsageFooter({ usage, toolHistory, expanded, onToggle }) {
   `;
 }
 
-export function Message({ role, content, timestamp, senderName, isError, compact, usage, toolHistory }) {
+export function Message({ role, content, timestamp, senderName, isError, compact, usage, toolHistory, runId }) {
   const isAssistant = role === 'assistant';
   const time = timestamp
     ? new Date(timestamp).toLocaleTimeString()
@@ -108,19 +119,13 @@ export function Message({ role, content, timestamp, senderName, isError, compact
 
   const errorClass = isError ? 'border-err/30' : '';
 
-  const blocks = parseBlocks(content);
-
   return html`
     <div class="${sizeClass} leading-relaxed ${bubbleClass} ${errorClass} overflow-hidden break-words"
       ${showAgentBadge ? { style: `border-left: 3px solid ${nameColor}` } : {}}>
       ${showAgentBadge && html`
         <div class="text-[11px] font-semibold mb-1" style="color: ${nameColor}">${senderName}</div>
       `}
-      ${blocks
-        ? html`<div class="block-container">
-            ${blocks.map((block, i) => html`<${BlockRenderer} key=${i} block=${block} />`)}
-          </div>`
-        : html`<div class="prose" dangerouslySetInnerHTML=${{ __html: md(content) }} />`}
+      <${MessageBody} content=${content} />
       <div class="text-[11px] text-txt-muted mt-1.5">
         ${senderName && !showAgentBadge ? `${senderName} \u00B7 ${time}` : time}
       </div>
@@ -130,6 +135,8 @@ export function Message({ role, content, timestamp, senderName, isError, compact
           toolHistory=${toolHistory}
           expanded=${expanded}
           onToggle=${() => setExpanded(!expanded)}
+          runId=${runId}
+          groupFolder=${group?.folder}
         />
       `}
     </div>
