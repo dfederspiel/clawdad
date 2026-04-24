@@ -184,7 +184,7 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
   return html`
     <section
       ref=${sectionRef}
-      class="flex flex-col border border-border rounded-md overflow-hidden ${focused ? 'ring-1 ring-accent/60' : ''}"
+      class="shrink-0 flex flex-col border border-border rounded-md overflow-hidden ${focused ? 'ring-1 ring-accent/60' : ''}"
     >
       <div
         class="flex items-center gap-2 px-3 py-2 bg-bg-3 hover:bg-bg-hover transition-colors cursor-pointer"
@@ -214,7 +214,7 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
         </button>
       </div>
       ${open && html`
-        <div class="portal-scroll p-2 flex flex-col gap-1.5 bg-bg-2" style="min-height: 4rem; max-height: 40rem; overflow-y: scroll;">
+        <div class="portal-scroll p-2 flex flex-col gap-1.5 bg-bg-2" style="min-height: 4rem; max-height: 27rem; overflow-y: scroll;">
           ${loading && combined.length === 0 && html`
             <div class="text-xs text-txt-muted p-2 text-center">Loading...</div>
           `}
