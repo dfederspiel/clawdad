@@ -462,9 +462,21 @@ api.onSSE('thread_closed', (data) => {
   if (!data.thread_id) return;
   const portal = portalThreads.value[data.thread_id];
   if (!portal) return;
+  const duration =
+    portal.openedAt ? Date.now() - portal.openedAt : portal.durationMs;
+  // Snapshot the final assistant reply as the pill's preview line so the
+  // main-feed summary renders even after the section's live buffer clears.
+  const lastAssistant = [...(portal.messages || [])]
+    .reverse()
+    .find((m) => m.role === 'assistant');
   portalThreads.value = {
     ...portalThreads.value,
-    [data.thread_id]: { ...portal, running: false },
+    [data.thread_id]: {
+      ...portal,
+      running: false,
+      durationMs: duration,
+      lastMessagePreview: lastAssistant?.content || portal.lastMessagePreview,
+    },
   };
 });
 
@@ -698,6 +710,12 @@ export async function selectGroup(jid) {
   // drawer — you see pills inline and click one to inspect it.
   const portalsByThread = {};
   for (const t of portalData.threads || []) {
+    const closedAt =
+      t.last_message_at && t.last_message_at !== t.created_at
+        ? new Date(t.last_message_at).getTime()
+        : null;
+    const durationMs =
+      closedAt ? closedAt - new Date(t.created_at).getTime() : null;
     portalsByThread[t.thread_id] = {
       kind: 'portal',
       jid,
@@ -707,7 +725,10 @@ export async function selectGroup(jid) {
       openedAt: new Date(t.created_at).getTime(),
       createdAt: t.created_at,
       replyCount: t.reply_count || 0,
+      lastMessagePreview: t.last_message_preview || null,
+      durationMs,
       live: false,
+      running: false,
     };
   }
   // Preserve live portals from this session even if DB doesn't have them yet.

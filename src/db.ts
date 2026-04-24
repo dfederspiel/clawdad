@@ -703,10 +703,20 @@ export function getThreadsForChat(chatJid: string): ThreadInfo[] {
  * what they render.
  */
 export function getPortalThreadsForChat(chatJid: string): ThreadInfo[] {
+  // Includes message count + preview of the last assistant reply + duration
+  // (last_message_at - created_at) so the main-feed pill can render a
+  // compact summary on page load without a follow-up fetch per portal.
   return db
     .prepare(
       `SELECT t.thread_id, t.agent_jid, t.origin_jid, t.agent_name, t.created_at, t.kind,
-              COUNT(m.id) as reply_count
+              COUNT(m.id) as reply_count,
+              (SELECT content FROM messages
+               WHERE thread_id = t.thread_id AND chat_jid = ?
+                 AND is_bot_message = 1
+               ORDER BY timestamp DESC LIMIT 1) as last_message_preview,
+              (SELECT timestamp FROM messages
+               WHERE thread_id = t.thread_id AND chat_jid = ?
+               ORDER BY timestamp DESC LIMIT 1) as last_message_at
        FROM threads t
        LEFT JOIN messages m ON m.thread_id = t.thread_id AND m.chat_jid = ?
        WHERE t.origin_jid = ?
@@ -714,7 +724,7 @@ export function getPortalThreadsForChat(chatJid: string): ThreadInfo[] {
        GROUP BY t.thread_id
        ORDER BY t.created_at DESC`,
     )
-    .all(chatJid, chatJid) as ThreadInfo[];
+    .all(chatJid, chatJid, chatJid, chatJid) as ThreadInfo[];
 }
 
 export function storeMediaArtifact(artifact: MediaArtifact): void {

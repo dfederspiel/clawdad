@@ -91,6 +91,8 @@ export interface ThreadInfo {
   created_at: string;
   reply_count?: number;
   kind?: 'trigger' | 'portal';
+  last_message_preview?: string;
+  last_message_at?: string;
 }
 
 export interface Agent {
