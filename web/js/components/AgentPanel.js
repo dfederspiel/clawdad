@@ -187,7 +187,9 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
         onClick=${() => setOpen(!open)}
       >
         <span class="text-[9px] transition-transform ${open ? 'rotate-90' : ''}">\u25B6</span>
-        <span class="text-xs font-semibold truncate">${portal.agentName || 'Agent'}</span>
+        <span class="text-xs font-semibold truncate">
+          ${portal.agentName || 'Agent'}${portal.title ? html`<span class="font-normal text-txt-2"> \u2014 ${portal.title}</span>` : ''}
+        </span>
         ${isRunning && !stalled && html`
           <span class="text-[9px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/20 text-accent">live</span>
         `}

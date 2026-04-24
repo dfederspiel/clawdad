@@ -72,7 +72,10 @@ export function PortalPill({ threadId }) {
       <div class="flex items-center gap-2 text-[11px]">
         <span class="${iconColor} text-sm leading-none">${icon}</span>
         <span class="font-semibold text-txt">${portal.agentName || 'Agent'}</span>
-        <span class="text-txt-muted">
+        ${portal.title && html`
+          <span class="text-txt-2 font-normal truncate">\u2014 ${portal.title}</span>
+        `}
+        <span class="text-txt-muted shrink-0">
           ${isRunning ? 'running' : `${count} msg${count !== 1 ? 's' : ''}`}
           ${duration ? ` \u00B7 ${duration}` : ''}
         </span>
