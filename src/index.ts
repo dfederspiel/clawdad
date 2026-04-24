@@ -2955,6 +2955,21 @@ async function main(): Promise<void> {
     ).delegationTimeoutMs;
     const taskId = `delegation-${agent.name}-${Date.now()}`;
     const coordinatorContainer = queue.getCoordinatorContainerName(chatJid);
+    const portalThreadId = `portal-${taskId}`;
+    createThread(
+      portalThreadId,
+      `${group.folder}/${agent.name}`,
+      chatJid,
+      agent.displayName,
+      'portal',
+    );
+    broadcastThreadOpened?.(
+      chatJid,
+      portalThreadId,
+      agent.displayName,
+      'portal',
+      sourceAgent,
+    );
     queue.enqueueDelegation(
       chatJid,
       taskId,
@@ -2992,7 +3007,12 @@ async function main(): Promise<void> {
         ];
 
         setActiveAgentName(chatJid, agent.displayName);
-        await channel.setTyping?.(chatJid, true);
+        await channel.setTyping?.(
+          chatJid,
+          true,
+          portalThreadId,
+          agent.displayName,
+        );
 
         const status = await runAgent({
           group,
@@ -3016,7 +3036,13 @@ async function main(): Promise<void> {
                 if (text) {
                   setActiveAgentName(chatJid, agent.displayName);
                   if (
-                    await deliverAgentMessage(channel, chatJid, text, lease)
+                    await deliverAgentMessage(
+                      channel,
+                      chatJid,
+                      text,
+                      lease,
+                      portalThreadId,
+                    )
                   ) {
                     deliveredToUser = true;
                   }
@@ -3027,7 +3053,7 @@ async function main(): Promise<void> {
               await channel.setTyping?.(
                 chatJid,
                 false,
-                undefined,
+                portalThreadId,
                 agent.displayName,
               );
             }
@@ -3035,19 +3061,28 @@ async function main(): Promise<void> {
               await channel.setTyping?.(
                 chatJid,
                 false,
-                undefined,
+                portalThreadId,
                 agent.displayName,
               );
             }
           },
-          onProgress: (event) => broadcastProgress(chatJid, event),
+          onProgress: (event) =>
+            broadcastProgress(chatJid, event, portalThreadId),
           onText: async (rawText) => {
             const text = rawText
               .replace(/<internal>[\s\S]*?<\/internal>/g, '')
               .trim();
             if (!text) return;
             setActiveAgentName(chatJid, agent.displayName);
-            if (await deliverAgentMessage(channel, chatJid, text, lease)) {
+            if (
+              await deliverAgentMessage(
+                channel,
+                chatJid,
+                text,
+                lease,
+                portalThreadId,
+              )
+            ) {
               deliveredToUser = true;
             }
           },
@@ -3055,7 +3090,15 @@ async function main(): Promise<void> {
           isDelegation: true,
           sendMessage: async (text) => {
             setActiveAgentName(chatJid, agent.displayName);
-            if (await deliverAgentMessage(channel, chatJid, text, lease)) {
+            if (
+              await deliverAgentMessage(
+                channel,
+                chatJid,
+                text,
+                lease,
+                portalThreadId,
+              )
+            ) {
               deliveredToUser = true;
             }
           },
@@ -3067,7 +3110,13 @@ async function main(): Promise<void> {
 
         group.containerConfig = savedConfig;
         clearActiveAgentName(chatJid);
-        await channel.setTyping?.(chatJid, false, undefined, agent.displayName);
+        await channel.setTyping?.(
+          chatJid,
+          false,
+          portalThreadId,
+          agent.displayName,
+        );
+        broadcastThreadClosed?.(chatJid, portalThreadId);
         if (persistExplicitAgentStatus(chatJid, agent.name, '')) {
           logger.info(
             { jid: chatJid, agentName: agent.name },
