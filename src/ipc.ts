@@ -58,6 +58,15 @@ export interface IpcDeps {
     sourceBatchId?: string;
     completionPolicy?: 'final_response' | 'retrigger_coordinator';
   }) => void;
+  onOpenPortal?: (request: {
+    sourceGroup: string;
+    chatJid: string;
+    targetAgent: string; // defaults to sourceAgent for self-spawn
+    prompt: string;
+    title?: string;
+    sourceAgent: string;
+    sourceBatchId?: string;
+  }) => void;
   onPublishMedia?: (request: {
     sourceGroup: string;
     chatJid: string;
@@ -275,6 +284,67 @@ export function startIpcWatcher(deps: IpcDeps): void {
         logger.error(
           { err, sourceGroup },
           'Error reading IPC delegations directory',
+        );
+      }
+
+      // Process portal-open requests (open_portal MCP tool). Same wire
+      // format as delegations but writes into a separate /portals/ dir
+      // so the handler can distinguish "coordinator fans out" from
+      // "agent spins off side work for itself".
+      const portalsDir = path.join(ipcBaseDir, sourceGroup, 'portals');
+      try {
+        if (fs.existsSync(portalsDir)) {
+          const portalFiles = fs
+            .readdirSync(portalsDir)
+            .filter((f) => f.endsWith('.json'));
+          for (const file of portalFiles) {
+            const filePath = path.join(portalsDir, file);
+            try {
+              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              fs.unlinkSync(filePath);
+              if (
+                data.type === 'open_portal' &&
+                data.targetAgent &&
+                data.prompt
+              ) {
+                if (deps.onOpenPortal) {
+                  deps.onOpenPortal({
+                    sourceGroup,
+                    chatJid: data.chatJid || '',
+                    targetAgent: data.targetAgent,
+                    prompt: data.prompt,
+                    title: data.title,
+                    sourceAgent: data.sourceAgent || 'unknown',
+                    sourceBatchId: data.sourceBatchId || '',
+                  });
+                  logger.info(
+                    {
+                      sourceGroup,
+                      sourceAgent: data.sourceAgent,
+                      targetAgent: data.targetAgent,
+                      title: data.title,
+                    },
+                    'Portal opened via MCP',
+                  );
+                }
+              }
+            } catch (err) {
+              logger.error(
+                { file, sourceGroup, err },
+                'Error processing IPC portal request',
+              );
+              try {
+                fs.unlinkSync(filePath);
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(
+          { err, sourceGroup },
+          'Error reading IPC portals directory',
         );
       }
 
