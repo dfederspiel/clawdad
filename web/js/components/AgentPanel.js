@@ -86,8 +86,12 @@ function Entry({ entry }) {
 
 function LiveMessage({ msg }) {
   const isUser = msg.role === 'user';
+  // shrink-0: inside a flex-col scroll container, children default to
+  // flex-shrink:1 which collapses them to fit the container's max-height
+  // instead of overflowing — so nothing scrolls. shrink-0 keeps each
+  // message at its natural size; the parent's overflow-y handles it.
   return html`
-    <div class="flex flex-col gap-1 py-2 px-3 rounded-md overflow-hidden break-words ${isUser ? 'bg-userbg' : 'bg-asstbg'}">
+    <div class="shrink-0 flex flex-col gap-1 py-2 px-3 rounded-md break-words ${isUser ? 'bg-userbg' : 'bg-asstbg'}">
       <div class="text-[10px] text-txt-muted font-mono">
         ${msg.senderName || (isUser ? 'user' : 'assistant')} · ${formatTime(msg.timestamp)}
       </div>
@@ -105,7 +109,6 @@ const STALL_THRESHOLD_MS = 30000;
  *  agent finishes so the user can keep reading. */
 function PortalSection({ threadId, portal, focused, isRunning }) {
   const sectionRef = useRef(null);
-  const bodyRef = useRef(null);
   const [historicalMsgs, setHistoricalMsgs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(true);
@@ -168,15 +171,6 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
     portalThreads.value = next;
   };
 
-  // Auto-scroll body to bottom when new content arrives, but only if the
-  // user was already at the bottom (don't yank them off their scroll position).
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    if (atBottom) el.scrollTop = el.scrollHeight;
-  }, [combined.length, recentTool?.timestamp]);
-
   return html`
     <section
       ref=${sectionRef}
@@ -210,7 +204,7 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
         </button>
       </div>
       ${open && html`
-        <div ref=${bodyRef} class="p-2 flex flex-col gap-1.5 bg-bg-2 min-h-[4rem] max-h-[24rem] overflow-y-auto">
+        <div class="portal-scroll p-2 flex flex-col gap-1.5 bg-bg-2" style="min-height: 4rem; max-height: 40rem; overflow-y: scroll;">
           ${loading && combined.length === 0 && html`
             <div class="text-xs text-txt-muted p-2 text-center">Loading...</div>
           `}
@@ -247,32 +241,34 @@ function PortalsPanel({ state }) {
     .sort((a, b) => (b[1].openedAt || 0) - (a[1].openedAt || 0)); // newest first
 
   return html`
-    <header class="flex items-center justify-between px-4 py-3 border-b border-border">
-      <div class="flex flex-col gap-0.5 min-w-0">
-        <h3 class="text-sm font-semibold truncate">
-          ${entries.length > 1 ? `${entries.length} live portals` : 'Agent portal'}
-        </h3>
-        <div class="text-[11px] text-txt-muted font-mono truncate">
-          side work · click header to collapse
+    <div class="flex flex-col h-full min-h-0">
+      <header class="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <h3 class="text-sm font-semibold truncate">
+            ${entries.length > 1 ? `${entries.length} live portals` : 'Agent portal'}
+          </h3>
+          <div class="text-[11px] text-txt-muted font-mono truncate">
+            side work · click header to collapse
+          </div>
         </div>
+        <${CloseButton} />
+      </header>
+      <div class="portal-scroll flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
+        ${entries.length === 0 && html`
+          <div class="text-xs text-txt-muted p-4 text-center">
+            No active portals. Click a portal pill in the chat to view a past session.
+          </div>
+        `}
+        ${entries.map(([threadId, portal]) => html`
+          <${PortalSection}
+            key=${threadId}
+            threadId=${threadId}
+            portal=${portal}
+            focused=${state.focusedThreadId === threadId}
+            isRunning=${!!portal.running}
+          />
+        `)}
       </div>
-      <${CloseButton} />
-    </header>
-    <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
-      ${entries.length === 0 && html`
-        <div class="text-xs text-txt-muted p-4 text-center">
-          No active portals. Click a portal pill in the chat to view a past session.
-        </div>
-      `}
-      ${entries.map(([threadId, portal]) => html`
-        <${PortalSection}
-          key=${threadId}
-          threadId=${threadId}
-          portal=${portal}
-          focused=${state.focusedThreadId === threadId}
-          isRunning=${!!portal.running}
-        />
-      `)}
     </div>
   `;
 }
@@ -281,27 +277,29 @@ function PortalSinglePanel({ state }) {
   const portals = portalThreads.value;
   const portal = portals[state.threadId];
   return html`
-    <header class="flex items-center justify-between px-4 py-3 border-b border-border">
-      <div class="flex flex-col gap-0.5 min-w-0">
-        <h3 class="text-sm font-semibold truncate">
-          ${portal?.agentName || 'Agent'}'s portal
-        </h3>
-        <div class="text-[11px] text-txt-muted font-mono truncate">
-          ${portal?.createdAt ? formatTime(portal.createdAt) : ''}
-          ${portal?.sourceAgent ? ` · delegated by ${portal.sourceAgent}` : ''}
+    <div class="flex flex-col h-full min-h-0">
+      <header class="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <h3 class="text-sm font-semibold truncate">
+            ${portal?.agentName || 'Agent'}'s portal
+          </h3>
+          <div class="text-[11px] text-txt-muted font-mono truncate">
+            ${portal?.createdAt ? formatTime(portal.createdAt) : ''}
+            ${portal?.sourceAgent ? ` · delegated by ${portal.sourceAgent}` : ''}
+          </div>
         </div>
+        <${CloseButton} />
+      </header>
+      <div class="portal-scroll flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
+        ${portal
+          ? html`<${PortalSection}
+              threadId=${state.threadId}
+              portal=${portal}
+              focused=${true}
+              isRunning=${!!portal.running}
+            />`
+          : html`<div class="text-xs text-txt-muted p-4 text-center">Portal not found.</div>`}
       </div>
-      <${CloseButton} />
-    </header>
-    <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
-      ${portal
-        ? html`<${PortalSection}
-            threadId=${state.threadId}
-            portal=${portal}
-            focused=${true}
-            isLive=${!!portal.live}
-          />`
-        : html`<div class="text-xs text-txt-muted p-4 text-center">Portal not found.</div>`}
     </div>
   `;
 }
@@ -335,34 +333,36 @@ function RetroactivePanel({ state }) {
   const timeline = data?.timeline || [];
 
   return html`
-    <header class="flex items-center justify-between px-4 py-3 border-b border-border">
-      <div class="flex flex-col gap-0.5 min-w-0">
-        <h3 class="text-sm font-semibold truncate">Agent conversation</h3>
-        ${run && html`
-          <div class="text-[11px] text-txt-muted font-mono truncate">
-            ${formatTime(run.timestamp)}
-            ${run.duration_ms ? ` · ${formatDuration(run.duration_ms)}` : ''}
-            ${run.num_turns ? ` · ${run.num_turns} turn${run.num_turns !== 1 ? 's' : ''}` : ''}
-            ${run.cost_usd ? ` · ${formatCost(run.cost_usd)}` : ''}
-          </div>
-        `}
-      </div>
-      <${CloseButton} />
-    </header>
-    <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-1.5">
-      ${loading && html`<div class="text-xs text-txt-muted p-4 text-center">Loading transcript...</div>`}
-      ${error && html`
-        <div class="text-xs text-err p-4 text-center">
-          ${error}
-          ${state.runId == null && html`
-            <div class="text-txt-muted mt-2">No run ID recorded for this message. Older messages may not have this data.</div>
+    <div class="flex flex-col h-full min-h-0">
+      <header class="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <h3 class="text-sm font-semibold truncate">Agent conversation</h3>
+          ${run && html`
+            <div class="text-[11px] text-txt-muted font-mono truncate">
+              ${formatTime(run.timestamp)}
+              ${run.duration_ms ? ` · ${formatDuration(run.duration_ms)}` : ''}
+              ${run.num_turns ? ` · ${run.num_turns} turn${run.num_turns !== 1 ? 's' : ''}` : ''}
+              ${run.cost_usd ? ` · ${formatCost(run.cost_usd)}` : ''}
+            </div>
           `}
         </div>
-      `}
-      ${!loading && !error && timeline.length === 0 && html`
-        <div class="text-xs text-txt-muted p-4 text-center">No transcript entries in this run window.</div>
-      `}
-      ${timeline.map((entry, i) => html`<${Entry} key=${i} entry=${entry} />`)}
+        <${CloseButton} />
+      </header>
+      <div class="portal-scroll flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-1.5">
+        ${loading && html`<div class="text-xs text-txt-muted p-4 text-center">Loading transcript...</div>`}
+        ${error && html`
+          <div class="text-xs text-err p-4 text-center">
+            ${error}
+            ${state.runId == null && html`
+              <div class="text-txt-muted mt-2">No run ID recorded for this message. Older messages may not have this data.</div>
+            `}
+          </div>
+        `}
+        ${!loading && !error && timeline.length === 0 && html`
+          <div class="text-xs text-txt-muted p-4 text-center">No transcript entries in this run window.</div>
+        `}
+        ${timeline.map((entry, i) => html`<${Entry} key=${i} entry=${entry} />`)}
+      </div>
     </div>
   `;
 }
@@ -423,7 +423,8 @@ export function AgentPanel() {
   return html`
     <div class="fixed inset-0 z-40 bg-black/40 md:hidden" onClick=${close} />
     <aside
-      class="fixed top-0 right-0 h-full w-full z-50 bg-bg-2 border-l border-border shadow-xl flex flex-col
+      style="height: 100vh; max-height: 100vh;"
+      class="fixed top-0 right-0 w-full z-50 bg-bg-2 border-l border-border shadow-xl flex flex-col
              md:static md:z-auto md:shadow-none md:w-[440px] lg:w-[520px] md:shrink-0"
     >
       ${body}
