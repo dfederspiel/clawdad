@@ -2876,11 +2876,254 @@ async function main(): Promise<void> {
     logger.fatal('No channels connected');
     process.exit(1);
   }
-  // Web channel's action-button click path (target:"thread") needs a way
-  // to invoke the delegation machinery without the MCP tool. channelOpts
-  // was already passed to the channel constructor, but onUserDelegation is
-  // optional — channels opt into it. The adapter routes through the
-  // shared delegationHandler (declared below, after startIpcWatcher setup).
+  const delegationHandler = (request: {
+    sourceGroup: string;
+    chatJid: string;
+    targetAgent: string;
+    message: string;
+    sourceAgent: string;
+    sourceBatchId?: string;
+    completionPolicy?: 'final_response' | 'retrigger_coordinator';
+  }): void => {
+    const {
+      sourceGroup,
+      chatJid: delegationChatJid,
+      targetAgent,
+      message,
+      sourceAgent,
+      sourceBatchId,
+      completionPolicy,
+    } = request;
+
+    const validation = validateDelegationMessage(message);
+    if (!validation.ok) {
+      logger.warn(
+        {
+          event: 'multi_agent.delegation_rejected',
+          sourceGroup,
+          sourceAgent,
+          targetAgent,
+          sourceBatchId,
+          messageLen: (message ?? '').trim().length,
+          reason: validation.reason,
+        },
+        'Delegation rejected: insufficient message context',
+      );
+      return;
+    }
+
+    const groupJid = Object.keys(registeredGroups).find(
+      (jid) => registeredGroups[jid].folder === sourceGroup,
+    );
+    if (!groupJid) {
+      logger.warn({ sourceGroup, targetAgent }, 'Delegation: group not found');
+      return;
+    }
+    const group = registeredGroups[groupJid];
+    const agents = groupAgents[groupJid] || [];
+    const agent = agents.find((a) => a.name === targetAgent);
+    if (!agent) {
+      logger.warn(
+        { sourceGroup, targetAgent, available: agents.map((a) => a.name) },
+        'Delegation: target agent not found',
+      );
+      return;
+    }
+
+    const chatJid = delegationChatJid || groupJid;
+    const channel = findChannel(channels, chatJid);
+    if (!channel) {
+      logger.warn({ chatJid }, 'Delegation: no channel for JID');
+      return;
+    }
+
+    logger.info(
+      {
+        event: 'multi_agent.delegation_invoked',
+        group: group.name,
+        source: sourceAgent,
+        target: targetAgent,
+        sourceBatchId,
+        messageLen: message.length,
+      },
+      'Processing agent delegation',
+    );
+
+    const savedConfig = group.containerConfig;
+    const delegationTimeout = getCapabilityProfile(
+      agent.runtime,
+    ).delegationTimeoutMs;
+    const taskId = `delegation-${agent.name}-${Date.now()}`;
+    const coordinatorContainer = queue.getCoordinatorContainerName(chatJid);
+    queue.enqueueDelegation(
+      chatJid,
+      taskId,
+      async () => {
+        const batchId = sourceBatchId || `delegation-${randomUUID()}`;
+        const lease = beginDeliveryLease(chatJid, batchId);
+        let deliveredToUser = false;
+        group.containerConfig = {
+          ...savedConfig,
+          timeout: Math.min(
+            savedConfig?.timeout || Infinity,
+            delegationTimeout,
+          ),
+        };
+        const multiAgentCtx = buildMultiAgentContext(agent, agents);
+        const recentMessages = getMessagesSince(
+          chatJid,
+          '',
+          ASSISTANT_NAME,
+          MAX_MESSAGES_PER_PROMPT,
+          true,
+        );
+        const conversationCtx = formatMessages(recentMessages, TIMEZONE);
+        const delegationPrompt =
+          conversationCtx +
+          `\n\n--- Delegation from ${sourceAgent} ---\n${message}\n--- End delegation ---\n`;
+        const delegationMessages: StructuredMessage[] = [
+          ...toStructuredMessages(recentMessages),
+          {
+            role: 'user',
+            content: `Delegation from ${sourceAgent}: ${message}`,
+            sender: sourceAgent,
+            timestamp: new Date().toISOString(),
+          },
+        ];
+
+        setActiveAgentName(chatJid, agent.displayName);
+        await channel.setTyping?.(chatJid, true);
+
+        const status = await runAgent({
+          group,
+          prompt: delegationPrompt,
+          chatJid,
+          onOutput: async (result) => {
+            if (result.result) {
+              if (
+                result.textsAlreadyStreamed &&
+                result.textsAlreadyStreamed > 0
+              ) {
+                // Text already delivered via intermediate markers
+              } else {
+                const raw =
+                  typeof result.result === 'string'
+                    ? result.result
+                    : JSON.stringify(result.result);
+                const text = raw
+                  .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                  .trim();
+                if (text) {
+                  setActiveAgentName(chatJid, agent.displayName);
+                  if (
+                    await deliverAgentMessage(channel, chatJid, text, lease)
+                  ) {
+                    deliveredToUser = true;
+                  }
+                }
+              }
+            }
+            if (result.status === 'success') {
+              await channel.setTyping?.(
+                chatJid,
+                false,
+                undefined,
+                agent.displayName,
+              );
+            }
+            if (result.status === 'error') {
+              await channel.setTyping?.(
+                chatJid,
+                false,
+                undefined,
+                agent.displayName,
+              );
+            }
+          },
+          onProgress: (event) => broadcastProgress(chatJid, event),
+          onText: async (rawText) => {
+            const text = rawText
+              .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+              .trim();
+            if (!text) return;
+            setActiveAgentName(chatJid, agent.displayName);
+            if (await deliverAgentMessage(channel, chatJid, text, lease)) {
+              deliveredToUser = true;
+            }
+          },
+          agent,
+          isDelegation: true,
+          sendMessage: async (text) => {
+            setActiveAgentName(chatJid, agent.displayName);
+            if (await deliverAgentMessage(channel, chatJid, text, lease)) {
+              deliveredToUser = true;
+            }
+          },
+          runBatchId: batchId,
+          networkContainer: coordinatorContainer || undefined,
+          systemContext: multiAgentCtx || undefined,
+          messages: delegationMessages,
+        });
+
+        group.containerConfig = savedConfig;
+        clearActiveAgentName(chatJid);
+        await channel.setTyping?.(chatJid, false, undefined, agent.displayName);
+        if (persistExplicitAgentStatus(chatJid, agent.name, '')) {
+          logger.info(
+            { jid: chatJid, agentName: agent.name },
+            'Cleared agent status after delegation completed',
+          );
+        }
+
+        if (status === 'success') {
+          const resultTraces = evaluateAutomationRules(
+            group.folder,
+            {
+              type: 'agent_result',
+              groupJid: chatJid,
+              groupFolder: group.folder,
+              agentName: agent.name,
+            },
+            agents.map((a) => a.name),
+          );
+          if (resultTraces.length > 0) {
+            await executeAutomationActions(
+              resultTraces,
+              chatJid,
+              group,
+              agents,
+              channel,
+              '',
+            );
+          }
+        }
+
+        const resultNote =
+          status === 'error'
+            ? `[${agent.displayName} was unable to complete the delegated task.]`
+            : deliveredToUser
+              ? `[${agent.displayName} has responded above.]`
+              : `[${agent.displayName} completed but output was superseded by newer context.]`;
+        storeMessage({
+          id: `delegation-result-${Date.now()}`,
+          chat_jid: chatJid,
+          sender: 'system',
+          sender_name: 'System',
+          content: resultNote,
+          timestamp: new Date().toISOString(),
+          is_from_me: false,
+          is_bot_message: false,
+        });
+        logger.info(
+          { group: group.name, target: targetAgent, status },
+          'Delegation complete',
+        );
+      },
+      agent.displayName,
+      completionPolicy !== 'retrigger_coordinator',
+    );
+  };
+
   channelOpts.onUserDelegation = (req) => {
     delegationHandler({
       sourceGroup: req.sourceGroup,
@@ -3116,253 +3359,7 @@ async function main(): Promise<void> {
         timestamp: new Date().toISOString(),
       });
     },
-    onDelegateToAgent: (request) => {
-      const {
-        sourceGroup,
-        chatJid: delegationChatJid,
-        targetAgent,
-        message,
-        sourceAgent,
-        sourceBatchId,
-        completionPolicy,
-      } = request;
-
-      const validation = validateDelegationMessage(message);
-      if (!validation.ok) {
-        logger.warn(
-          {
-            event: 'multi_agent.delegation_rejected',
-            sourceGroup,
-            sourceAgent,
-            targetAgent,
-            sourceBatchId,
-            messageLen: (message ?? '').trim().length,
-            reason: validation.reason,
-          },
-          'Delegation rejected: insufficient message context',
-        );
-        return;
-      }
-
-      const groupJid = Object.keys(registeredGroups).find(
-        (jid) => registeredGroups[jid].folder === sourceGroup,
-      );
-      if (!groupJid) {
-        logger.warn(
-          { sourceGroup, targetAgent },
-          'Delegation: group not found',
-        );
-        return;
-      }
-      const group = registeredGroups[groupJid];
-      const agents = groupAgents[groupJid] || [];
-      const agent = agents.find((a) => a.name === targetAgent);
-      if (!agent) {
-        logger.warn(
-          { sourceGroup, targetAgent, available: agents.map((a) => a.name) },
-          'Delegation: target agent not found',
-        );
-        return;
-      }
-
-      const chatJid = delegationChatJid || groupJid;
-      const channel = findChannel(channels, chatJid);
-      if (!channel) {
-        logger.warn({ chatJid }, 'Delegation: no channel for JID');
-        return;
-      }
-
-      logger.info(
-        {
-          event: 'multi_agent.delegation_invoked',
-          group: group.name,
-          source: sourceAgent,
-          target: targetAgent,
-          sourceBatchId,
-          messageLen: message.length,
-        },
-        'Processing agent delegation',
-      );
-
-      const savedConfig = group.containerConfig;
-      const delegationTimeout = getCapabilityProfile(
-        agent.runtime,
-      ).delegationTimeoutMs;
-      const taskId = `delegation-${agent.name}-${Date.now()}`;
-      const coordinatorContainer = queue.getCoordinatorContainerName(chatJid);
-      queue.enqueueDelegation(
-        chatJid,
-        taskId,
-        async () => {
-          const batchId = sourceBatchId || `delegation-${randomUUID()}`;
-          const lease = beginDeliveryLease(chatJid, batchId);
-          let deliveredToUser = false;
-          group.containerConfig = {
-            ...savedConfig,
-            timeout: Math.min(
-              savedConfig?.timeout || Infinity,
-              delegationTimeout,
-            ),
-          };
-          const multiAgentCtx = buildMultiAgentContext(agent, agents);
-          const recentMessages = getMessagesSince(
-            chatJid,
-            '',
-            ASSISTANT_NAME,
-            MAX_MESSAGES_PER_PROMPT,
-            true,
-          );
-          const conversationCtx = formatMessages(recentMessages, TIMEZONE);
-          const delegationPrompt =
-            conversationCtx +
-            `\n\n--- Delegation from ${sourceAgent} ---\n${message}\n--- End delegation ---\n`;
-          const delegationMessages: StructuredMessage[] = [
-            ...toStructuredMessages(recentMessages),
-            {
-              role: 'user',
-              content: `Delegation from ${sourceAgent}: ${message}`,
-              sender: sourceAgent,
-              timestamp: new Date().toISOString(),
-            },
-          ];
-
-          setActiveAgentName(chatJid, agent.displayName);
-          await channel.setTyping?.(chatJid, true);
-
-          const status = await runAgent({
-            group,
-            prompt: delegationPrompt,
-            chatJid,
-            onOutput: async (result) => {
-              if (result.result) {
-                if (
-                  result.textsAlreadyStreamed &&
-                  result.textsAlreadyStreamed > 0
-                ) {
-                  // Text already delivered via intermediate markers
-                } else {
-                  const raw =
-                    typeof result.result === 'string'
-                      ? result.result
-                      : JSON.stringify(result.result);
-                  const text = raw
-                    .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                    .trim();
-                  if (text) {
-                    setActiveAgentName(chatJid, agent.displayName);
-                    if (
-                      await deliverAgentMessage(channel, chatJid, text, lease)
-                    ) {
-                      deliveredToUser = true;
-                    }
-                  }
-                }
-              }
-              if (result.status === 'success') {
-                await channel.setTyping?.(
-                  chatJid,
-                  false,
-                  undefined,
-                  agent.displayName,
-                );
-              }
-              if (result.status === 'error') {
-                await channel.setTyping?.(
-                  chatJid,
-                  false,
-                  undefined,
-                  agent.displayName,
-                );
-              }
-            },
-            onProgress: (event) => broadcastProgress(chatJid, event),
-            onText: async (rawText) => {
-              const text = rawText
-                .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                .trim();
-              if (!text) return;
-              setActiveAgentName(chatJid, agent.displayName);
-              if (await deliverAgentMessage(channel, chatJid, text, lease)) {
-                deliveredToUser = true;
-              }
-            },
-            agent,
-            isDelegation: true,
-            sendMessage: async (text) => {
-              setActiveAgentName(chatJid, agent.displayName);
-              if (await deliverAgentMessage(channel, chatJid, text, lease)) {
-                deliveredToUser = true;
-              }
-            },
-            runBatchId: batchId,
-            networkContainer: coordinatorContainer || undefined,
-            systemContext: multiAgentCtx || undefined,
-            messages: delegationMessages,
-          });
-
-          group.containerConfig = savedConfig;
-          clearActiveAgentName(chatJid);
-          await channel.setTyping?.(
-            chatJid,
-            false,
-            undefined,
-            agent.displayName,
-          );
-          if (persistExplicitAgentStatus(chatJid, agent.name, '')) {
-            logger.info(
-              { jid: chatJid, agentName: agent.name },
-              'Cleared agent status after delegation completed',
-            );
-          }
-
-          if (status === 'success') {
-            const resultTraces = evaluateAutomationRules(
-              group.folder,
-              {
-                type: 'agent_result',
-                groupJid: chatJid,
-                groupFolder: group.folder,
-                agentName: agent.name,
-              },
-              agents.map((a) => a.name),
-            );
-            if (resultTraces.length > 0) {
-              await executeAutomationActions(
-                resultTraces,
-                chatJid,
-                group,
-                agents,
-                channel,
-                '',
-              );
-            }
-          }
-
-          const resultNote =
-            status === 'error'
-              ? `[${agent.displayName} was unable to complete the delegated task.]`
-              : deliveredToUser
-                ? `[${agent.displayName} has responded above.]`
-                : `[${agent.displayName} completed but output was superseded by newer context.]`;
-          storeMessage({
-            id: `delegation-result-${Date.now()}`,
-            chat_jid: chatJid,
-            sender: 'system',
-            sender_name: 'System',
-            content: resultNote,
-            timestamp: new Date().toISOString(),
-            is_from_me: false,
-            is_bot_message: false,
-          });
-          logger.info(
-            { group: group.name, target: targetAgent, status },
-            'Delegation complete',
-          );
-        },
-        agent.displayName,
-        completionPolicy !== 'retrigger_coordinator',
-      );
-    },
+    onDelegateToAgent: delegationHandler,
     onSetSubtitle: (jid, subtitle) => {
       // Update DB and broadcast
       const group = registeredGroups[jid];
