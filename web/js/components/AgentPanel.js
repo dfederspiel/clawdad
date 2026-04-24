@@ -246,12 +246,15 @@ export function AgentPanel() {
 
   if (!state) return null;
 
+  // Mobile: overlay (with backdrop). Desktop (md+): docked side panel that
+  // takes real layout space next to ChatView.
   const close = () => { agentPanel.value = null; };
 
   return html`
-    <div class="fixed inset-0 z-40 bg-black/40" onClick=${close} />
+    <div class="fixed inset-0 z-40 bg-black/40 md:hidden" onClick=${close} />
     <aside
-      class="fixed top-0 right-0 h-full w-full md:w-[440px] lg:w-[520px] z-50 bg-bg-2 border-l border-border shadow-xl flex flex-col"
+      class="fixed top-0 right-0 h-full w-full z-50 bg-bg-2 border-l border-border shadow-xl flex flex-col
+             md:static md:z-auto md:shadow-none md:w-[440px] lg:w-[520px] md:shrink-0"
     >
       ${state.live
         ? html`<${LivePanel} state=${state} />`
