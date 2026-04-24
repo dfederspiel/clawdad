@@ -105,6 +105,7 @@ const STALL_THRESHOLD_MS = 30000;
  *  agent finishes so the user can keep reading. */
 function PortalSection({ threadId, portal, focused, isRunning }) {
   const sectionRef = useRef(null);
+  const bodyRef = useRef(null);
   const [historicalMsgs, setHistoricalMsgs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(true);
@@ -160,13 +161,29 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
   const stalled =
     isRunning && lastEventAt > 0 && now - lastEventAt > STALL_THRESHOLD_MS;
 
+  const dismiss = (e) => {
+    e.stopPropagation();
+    const next = { ...portalThreads.value };
+    delete next[threadId];
+    portalThreads.value = next;
+  };
+
+  // Auto-scroll body to bottom when new content arrives, but only if the
+  // user was already at the bottom (don't yank them off their scroll position).
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (atBottom) el.scrollTop = el.scrollHeight;
+  }, [combined.length, recentTool?.timestamp]);
+
   return html`
     <section
       ref=${sectionRef}
       class="flex flex-col border border-border rounded-md overflow-hidden ${focused ? 'ring-1 ring-accent/60' : ''}"
     >
-      <button
-        class="flex items-center gap-2 px-3 py-2 bg-bg-3 hover:bg-bg-hover transition-colors text-left cursor-pointer"
+      <div
+        class="flex items-center gap-2 px-3 py-2 bg-bg-3 hover:bg-bg-hover transition-colors cursor-pointer"
         onClick=${() => setOpen(!open)}
       >
         <span class="text-[9px] transition-transform ${open ? 'rotate-90' : ''}">\u25B6</span>
@@ -180,9 +197,18 @@ function PortalSection({ threadId, portal, focused, isRunning }) {
         <span class="text-[10px] text-txt-muted font-mono ml-auto shrink-0">
           ${count} msg${count !== 1 ? 's' : ''}
         </span>
-      </button>
+        <button
+          class="w-5 h-5 flex items-center justify-center rounded text-txt-muted hover:text-err hover:bg-bg-2 transition-colors shrink-0"
+          title="Remove from stack"
+          onClick=${dismiss}
+        >
+          <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+          </svg>
+        </button>
+      </div>
       ${open && html`
-        <div class="p-2 flex flex-col gap-1.5 bg-bg-2">
+        <div ref=${bodyRef} class="p-2 flex flex-col gap-1.5 bg-bg-2 min-h-[4rem] max-h-[24rem] overflow-y-auto">
           ${loading && combined.length === 0 && html`
             <div class="text-xs text-txt-muted p-2 text-center">Loading...</div>
           `}
