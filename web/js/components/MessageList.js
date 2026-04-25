@@ -126,6 +126,7 @@ export function MessageList() {
                 class=${flashing ? 'notif-flash' : ''}
               >
                 <${Message}
+                  id=${m.id}
                   role=${m.role}
                   content=${m.content}
                   timestamp=${m.timestamp}

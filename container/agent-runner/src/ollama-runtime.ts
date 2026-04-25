@@ -78,6 +78,7 @@ interface ContainerInputLike {
   systemContext?: string;
   assistantName?: string;
   achievements?: unknown[];
+  portalThreadId?: string;
 }
 
 /**
@@ -99,6 +100,9 @@ function mcpServerEnv(
     NANOCLAW_CAN_DELEGATE: containerInput.canDelegate ? '1' : '0',
     NANOCLAW_MAIN_JID: containerInput.mainChatJid || '',
     NANOCLAW_ACHIEVEMENTS: JSON.stringify(containerInput.achievements || []),
+    // When set, IPC-driven tools (e.g. send_message) tag outputs so the
+    // host can route them to the side-panel portal instead of main feed.
+    NANOCLAW_PORTAL_THREAD_ID: containerInput.portalThreadId || '',
   };
 }
 

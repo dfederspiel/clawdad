@@ -20,14 +20,24 @@ function handleMentionClick(e) {
  * Prefers structured block rendering when the content parses as blocks,
  * falls back to markdown for plain text. Keep this the single path for
  * message content so new surfaces get the same behavior for free.
+ *
+ * messageId and messageTimestamp flow down so blocks like SoundBlock
+ * can gate side-effects (playback) on per-instance identity instead of
+ * firing every time the surface re-renders (#99).
  */
-export function MessageBody({ content }) {
+export function MessageBody({ content, messageId, messageTimestamp }) {
   if (!content) return null;
   const blocks = parseBlocks(content);
   if (blocks) {
     return html`
       <div class="block-container" onClick=${handleMentionClick}>
-        ${blocks.map((block, i) => html`<${BlockRenderer} key=${i} block=${block} />`)}
+        ${blocks.map((block, i) => html`<${BlockRenderer}
+          key=${i}
+          block=${block}
+          messageId=${messageId}
+          messageTimestamp=${messageTimestamp}
+          blockIndex=${i}
+        />`)}
       </div>
     `;
   }

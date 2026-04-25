@@ -56,6 +56,7 @@ interface ContainerInput {
   systemContext?: string;
   maxTurns?: number;
   disallowedTools?: string[];
+  portalThreadId?: string;
 }
 
 interface UsageData {
