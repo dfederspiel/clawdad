@@ -1,6 +1,14 @@
 import { html } from 'htm/preact';
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect } from 'preact/hooks';
 import { TONES, isMuted } from '../../sounds.js';
+
+// Tracks which sound blocks have already been played in this browser
+// session so re-renders (group switch, drawer toggles, scrolling) don't
+// replay them. Cleared naturally on full page reload — combined with
+// the sessionStart gate below, that means historical sounds don't replay
+// after a refresh either. (#99)
+const playedKeys = new Set();
+const sessionStartMs = Date.now();
 
 // Play a custom tone definition
 function playCustom(notes) {
@@ -34,19 +42,40 @@ function playCustom(notes) {
   }
 }
 
-export function SoundBlock({ tone, custom, label }) {
-  const played = useRef(false);
+export function SoundBlock({
+  tone,
+  custom,
+  label,
+  messageId,
+  messageTimestamp,
+  blockIndex,
+}) {
+  // Stable per-instance key. Prefer messageId+index when available
+  // (carries through across remounts), fall back to JSON content (will
+  // collapse two identical sounds in the same message — acceptable).
+  const key =
+    messageId != null
+      ? `${messageId}::${blockIndex ?? 0}`
+      : JSON.stringify({ tone, custom: custom || null, label: label || null });
 
   useEffect(() => {
-    if (played.current) return;
-    played.current = true;
+    if (playedKeys.has(key)) return;
+    playedKeys.add(key);
+
+    // Don't play sounds that arrived before this browser session started
+    // — they're historical content, not new events. Avoids the "every
+    // sound in chat history blares on page load" problem.
+    if (messageTimestamp) {
+      const ts = new Date(messageTimestamp).getTime();
+      if (Number.isFinite(ts) && ts < sessionStartMs) return;
+    }
 
     if (custom) {
       playCustom(custom);
     } else if (tone && TONES[tone]) {
       if (!isMuted()) TONES[tone].play();
     }
-  }, []);
+  }, [key]);
 
   // Visual indicator
   const displayName = tone

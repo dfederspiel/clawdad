@@ -28,7 +28,15 @@ const RENDERERS = {
   image: ImageBlock,
 };
 
-export function BlockRenderer({ block }) {
+export function BlockRenderer({ block, messageId, messageTimestamp, blockIndex }) {
   const Component = RENDERERS[block.type] || TextBlock;
-  return html`<${Component} ...${block} />`;
+  // SoundBlock uses messageId/messageTimestamp/blockIndex to skip
+  // playback on re-renders (group switch, refresh) — see #99. Other
+  // blocks ignore the extra props.
+  return html`<${Component}
+    ...${block}
+    messageId=${messageId}
+    messageTimestamp=${messageTimestamp}
+    blockIndex=${blockIndex}
+  />`;
 }
