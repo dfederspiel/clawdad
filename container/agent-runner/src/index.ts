@@ -53,6 +53,10 @@ interface ContainerInput {
   runtime?: AgentRuntimeConfig;
   constraints?: RuntimeTurnConstraints;
   achievements?: { id: string; name: string; description: string }[];
+  // Portal routing (host-side issue #107). When set, send_message-style
+  // tools tag their IPC payloads with this thread_id so the host routes
+  // them to the side-panel portal instead of the main feed.
+  portalThreadId?: string;
 }
 
 interface UsageData {
