@@ -30,6 +30,7 @@ interface ContainerInputLike {
   systemContext?: string;
   achievements?: { id: string; name: string; description: string }[];
   runtime?: AgentRuntimeConfig;
+  portalThreadId?: string;
 }
 
 interface SessionEntry {
@@ -471,6 +472,8 @@ export class ClaudeCodeRuntime implements RuntimeSession {
               NANOCLAW_ACHIEVEMENTS: JSON.stringify(
                 this.options.containerInput.achievements || [],
               ),
+              NANOCLAW_PORTAL_THREAD_ID:
+                this.options.containerInput.portalThreadId || '',
             },
           },
           ollama: {

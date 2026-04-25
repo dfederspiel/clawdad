@@ -87,6 +87,10 @@ server.tool(
     sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
   },
   async (args) => {
+    // If this run is portal-scoped (delegation/action button/open_portal),
+    // tag the message so the host routes it to the side panel instead of
+    // the main feed. Empty env var = main-feed message (#107).
+    const portalThreadId = process.env.NANOCLAW_PORTAL_THREAD_ID || '';
     const data: Record<string, string | undefined> = {
       type: 'message',
       chatJid,
@@ -95,6 +99,7 @@ server.tool(
       groupFolder,
       agentId: process.env.NANOCLAW_AGENT_ID || undefined,
       sessionId: process.env.NANOCLAW_SESSION_ID || undefined,
+      threadId: portalThreadId || undefined,
       timestamp: new Date().toISOString(),
     };
 

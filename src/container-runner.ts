@@ -78,6 +78,10 @@ export interface ContainerInput {
   constraints?: RuntimeTurnConstraints; // per-turn safety rails (maxTurns, disallowedTools)
   systemContext?: string; // multi-agent context injected into systemPrompt.append (survives compaction)
   achievements?: { id: string; name: string; description: string }[];
+  // When set, this run is draining into a side-panel portal. Tools (esp.
+  // send_message via IPC) tag their outputs with this thread_id so they
+  // route to the portal instead of leaking to the main feed (#107).
+  portalThreadId?: string;
   // Optional positive allowlist over container/skills/*. Undefined = copy
   // every global skill (backward compat). Empty array = copy none.
   // See Phase 3 of #74 / #42.

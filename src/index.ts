@@ -1705,6 +1705,7 @@ async function runAgent(
   runBatchId?: string,
   systemContext?: string,
   messages?: StructuredMessage[],
+  portalThreadId?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
@@ -2115,6 +2116,7 @@ async function runAgent(
         systemContext,
         skillsAllowlist: agent?.skills,
         achievements: getAchievementsForContainer(),
+        portalThreadId,
       };
 
       const handle = await spawnContainer(group, containerInput);
@@ -2193,6 +2195,7 @@ async function runAgent(
       systemContext,
       skillsAllowlist: agent?.skills,
       achievements: getAchievementsForContainer(),
+      portalThreadId,
     };
 
     //
@@ -3071,12 +3074,13 @@ async function main(): Promise<void> {
           delegationPrompt,
           chatJid,
           async (result) => {
+            const alreadyStreamed =
+              !!result.textsAlreadyStreamed && result.textsAlreadyStreamed > 0;
             if (result.result) {
-              if (
-                result.textsAlreadyStreamed &&
-                result.textsAlreadyStreamed > 0
-              ) {
-                // Text already delivered via intermediate markers
+              if (alreadyStreamed) {
+                // Text already delivered via intermediate markers / tools
+                // (the deliveredViaTools path on Ollama, or TEXT markers
+                // on Claude). Don't redeliver.
               } else {
                 const raw =
                   typeof result.result === 'string'
@@ -3100,6 +3104,12 @@ async function main(): Promise<void> {
                   }
                 }
               }
+            } else if (alreadyStreamed) {
+              // result is null but the agent did stream via tools (Ollama
+              // tool-capable path). The send_message tool now carries the
+              // portalThreadId in its IPC payload, so output already
+              // routed to the portal — count as delivered.
+              deliveredToUser = true;
             }
             if (result.status === 'success') {
               await channel.setTyping?.(
@@ -3156,6 +3166,7 @@ async function main(): Promise<void> {
           batchId,
           multiAgentCtx || undefined,
           delegationMessages,
+          portalThreadId,
         );
 
         group.containerConfig = savedConfig;
@@ -3224,7 +3235,7 @@ async function main(): Promise<void> {
   };
 
   startIpcWatcher({
-    sendMessage: (jid, rawText) => {
+    sendMessage: (jid, rawText, threadId) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       // Always strip <internal> tags — agents use these for reasoning
@@ -3245,7 +3256,9 @@ async function main(): Promise<void> {
           ? stripped
           : formatOutbound(stripped, channel.name as ChannelType);
       if (!text) return Promise.resolve();
-      return channel.sendMessage(jid, text).then(() => {});
+      // threadId routes the message into a side-panel portal when set
+      // (#107 — Ollama tool-capable agents in delegations).
+      return channel.sendMessage(jid, text, threadId).then(() => {});
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
