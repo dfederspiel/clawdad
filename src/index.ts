@@ -803,34 +803,35 @@ async function executeAutomationActions(
                 prompt: delegationPrompt,
                 chatJid,
                 onOutput: async (result) => {
+                  // textsAlreadyStreamed counts intermediate TEXT markers,
+                  // which #110 made progress-only (not chat deliveries).
+                  // Whenever result.result is non-null, deliver it. The
+                  // Ollama tool path where the agent delivered via
+                  // send_message has result.result === null and is handled
+                  // by the else-if branch.
                   if (result.result) {
-                    if (
-                      result.textsAlreadyStreamed &&
-                      result.textsAlreadyStreamed > 0
-                    ) {
-                      // Text already delivered via onText → sendMessage
-                    } else {
-                      const raw =
-                        typeof result.result === 'string'
-                          ? result.result
-                          : JSON.stringify(result.result);
-                      const text = raw
-                        .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                        .trim();
-                      if (text) {
-                        setActiveAgentName(chatJid, agent.displayName);
-                        if (
-                          await deliverAgentMessage(
-                            channel,
-                            chatJid,
-                            text,
-                            lease,
-                          )
-                        ) {
-                          deliveredToUser = true;
-                        }
+                    const raw =
+                      typeof result.result === 'string'
+                        ? result.result
+                        : JSON.stringify(result.result);
+                    const text = raw
+                      .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                      .trim();
+                    if (text) {
+                      setActiveAgentName(chatJid, agent.displayName);
+                      if (
+                        await deliverAgentMessage(channel, chatJid, text, lease)
+                      ) {
+                        deliveredToUser = true;
                       }
                     }
+                  } else if (
+                    result.textsAlreadyStreamed &&
+                    result.textsAlreadyStreamed > 0
+                  ) {
+                    // Ollama tool path delivered via send_message — count
+                    // as delivered so the result-note reflects it.
+                    deliveredToUser = true;
                   }
                   if (
                     result.status === 'success' ||
@@ -1278,35 +1279,37 @@ async function processGroupMessages(
               prompt,
               chatJid,
               onOutput: async (result) => {
+                // See automation handler note above: textsAlreadyStreamed
+                // is now progress-only after #110, so it can't gate
+                // delivery. Always deliver result.result if non-null.
                 if (result.result) {
-                  if (
-                    result.textsAlreadyStreamed &&
-                    result.textsAlreadyStreamed > 0
-                  ) {
-                    // Text already delivered via intermediate markers
-                  } else {
-                    const raw =
-                      typeof result.result === 'string'
-                        ? result.result
-                        : JSON.stringify(result.result);
-                    const text = raw
-                      .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                      .trim();
-                    if (text) {
-                      setActiveAgentName(responseJid, agent.displayName);
-                      if (
-                        await deliverAgentMessage(
-                          responseChannel,
-                          responseJid,
-                          text,
-                          lease,
-                          threadId,
-                        )
-                      ) {
-                        deliveredToUser = true;
-                      }
+                  const raw =
+                    typeof result.result === 'string'
+                      ? result.result
+                      : JSON.stringify(result.result);
+                  const text = raw
+                    .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                    .trim();
+                  if (text) {
+                    setActiveAgentName(responseJid, agent.displayName);
+                    if (
+                      await deliverAgentMessage(
+                        responseChannel,
+                        responseJid,
+                        text,
+                        lease,
+                        threadId,
+                      )
+                    ) {
+                      deliveredToUser = true;
                     }
                   }
+                } else if (
+                  result.textsAlreadyStreamed &&
+                  result.textsAlreadyStreamed > 0
+                ) {
+                  // Ollama tool path delivered via send_message.
+                  deliveredToUser = true;
                 }
                 if (result.status === 'success' || result.status === 'error') {
                   await responseChannel.setTyping?.(
@@ -3095,39 +3098,37 @@ async function main(): Promise<void> {
           onOutput: async (result) => {
             const alreadyStreamed =
               !!result.textsAlreadyStreamed && result.textsAlreadyStreamed > 0;
+            // textsAlreadyStreamed counts intermediate TEXT markers, which
+            // #110 made progress-only — they don't deliver to the portal.
+            // Always deliver result.result when non-null. The Ollama tool
+            // path with empty fullText (result.result === null) is handled
+            // by the else-if; its send_message calls already routed to
+            // the portal via NANOCLAW_PORTAL_THREAD_ID (#107).
             if (result.result) {
-              if (alreadyStreamed) {
-                // Text already delivered via intermediate markers / tools
-                // (the deliveredViaTools path on Ollama, or TEXT markers
-                // on Claude). Don't redeliver.
-              } else {
-                const raw =
-                  typeof result.result === 'string'
-                    ? result.result
-                    : JSON.stringify(result.result);
-                const text = raw
-                  .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                  .trim();
-                if (text) {
-                  setActiveAgentName(chatJid, agent.displayName);
-                  if (
-                    await deliverAgentMessage(
-                      channel,
-                      chatJid,
-                      text,
-                      lease,
-                      portalThreadId,
-                    )
-                  ) {
-                    deliveredToUser = true;
-                  }
+              const raw =
+                typeof result.result === 'string'
+                  ? result.result
+                  : JSON.stringify(result.result);
+              const text = raw
+                .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                .trim();
+              if (text) {
+                setActiveAgentName(chatJid, agent.displayName);
+                if (
+                  await deliverAgentMessage(
+                    channel,
+                    chatJid,
+                    text,
+                    lease,
+                    portalThreadId,
+                  )
+                ) {
+                  deliveredToUser = true;
                 }
               }
             } else if (alreadyStreamed) {
-              // result is null but the agent did stream via tools (Ollama
-              // tool-capable path). The send_message tool now carries the
-              // portalThreadId in its IPC payload, so output already
-              // routed to the portal — count as delivered.
+              // Ollama tool path delivered via send_message. Output
+              // already routed to the portal — count as delivered.
               deliveredToUser = true;
             }
             if (result.status === 'success') {
