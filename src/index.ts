@@ -798,11 +798,11 @@ async function executeAutomationActions(
               setActiveAgentName(chatJid, agent.displayName);
               await channel.setTyping?.(chatJid, true);
 
-              const status = await runAgent(
+              const status = await runAgent({
                 group,
-                delegationPrompt,
+                prompt: delegationPrompt,
                 chatJid,
-                async (result) => {
+                onOutput: async (result) => {
                   if (result.result) {
                     if (
                       result.textsAlreadyStreamed &&
@@ -844,8 +844,8 @@ async function executeAutomationActions(
                     );
                   }
                 },
-                (event) => broadcastProgress(chatJid, event),
-                async (rawText) => {
+                onProgress: (event) => broadcastProgress(chatJid, event),
+                onText: async (rawText) => {
                   // TEXT markers deliver the actual message content as a chat
                   // message — no extra progress broadcast (would duplicate into
                   // the typing indicator's tool history).
@@ -861,8 +861,8 @@ async function executeAutomationActions(
                   }
                 },
                 agent,
-                true, // isDelegation
-                async (text) => {
+                isDelegation: true,
+                sendMessage: async (text) => {
                   setActiveAgentName(chatJid, agent.displayName);
                   if (
                     await deliverAgentMessage(channel, chatJid, text, lease)
@@ -870,10 +870,10 @@ async function executeAutomationActions(
                     deliveredToUser = true;
                   }
                 },
-                batchId,
-                multiAgentCtx || undefined,
-                routedMessages,
-              );
+                runBatchId: batchId,
+                systemContext: multiAgentCtx || undefined,
+                messages: routedMessages,
+              });
 
               group.containerConfig = savedConfig;
               clearActiveAgentName(chatJid);
@@ -1055,15 +1055,14 @@ async function processGroupMessages(
         channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
       runAgent: (prompt, onOutput) => {
         const defaultAgent = (groupAgents[chatJid] || [])[0];
-        return runAgent(
+        return runAgent({
           group,
           prompt,
           chatJid,
           onOutput,
-          undefined,
-          undefined, // onText — session commands don't stream intermediate text
-          defaultAgent,
-        );
+          // onText omitted — session commands don't stream intermediate text
+          agent: defaultAgent,
+        });
       },
       closeStdin: () => queue.closeStdin(chatJid),
       advanceCursor: (ts) => {
@@ -1274,11 +1273,11 @@ async function processGroupMessages(
             await responseChannel.setTyping?.(responseJid, true, threadId);
             // Intermediate TEXT blocks are shown as status in the typing indicator
 
-            const status = await runAgent(
+            const status = await runAgent({
               group,
               prompt,
               chatJid,
-              async (result) => {
+              onOutput: async (result) => {
                 if (result.result) {
                   if (
                     result.textsAlreadyStreamed &&
@@ -1318,8 +1317,8 @@ async function processGroupMessages(
                   );
                 }
               },
-              (event) => broadcastProgress(responseJid, event),
-              async (rawText) => {
+              onProgress: (event) => broadcastProgress(responseJid, event),
+              onText: async (rawText) => {
                 // Deliver intermediate text as a chat message; the typing
                 // indicator's tool history is reserved for actual tool calls.
                 const text = rawText
@@ -1340,8 +1339,8 @@ async function processGroupMessages(
                 }
               },
               agent,
-              true, // isDelegation
-              async (text) => {
+              isDelegation: true,
+              sendMessage: async (text) => {
                 setActiveAgentName(responseJid, agent.displayName);
                 if (
                   await deliverAgentMessage(
@@ -1355,10 +1354,10 @@ async function processGroupMessages(
                   deliveredToUser = true;
                 }
               },
-              batchId,
-              multiAgentCtx || undefined,
-              structuredMessages,
-            );
+              runBatchId: batchId,
+              systemContext: multiAgentCtx || undefined,
+              messages: structuredMessages,
+            });
 
             group.containerConfig = savedConfig;
             clearActiveAgentName(responseJid);
@@ -1479,11 +1478,11 @@ async function processGroupMessages(
     let outputSentForCurrentQuery = false;
     let outputSentToUser = false;
     let automationFiredForAgent = false;
-    const output = await runAgent(
+    const output = await runAgent({
       group,
       prompt,
       chatJid,
-      async (result) => {
+      onOutput: async (result) => {
         if (result.result) {
           const raw =
             typeof result.result === 'string'
@@ -1596,10 +1595,10 @@ async function processGroupMessages(
           hadError = true;
         }
       },
-      (event) => {
+      onProgress: (event) => {
         broadcastProgress(responseJid, event);
       },
-      async (rawText) => {
+      onText: async (rawText) => {
         // Intermediate text — show as status in typing indicator, not a chat message.
         // The final result will be sent as the real message.
         const text = rawText
@@ -1617,8 +1616,8 @@ async function processGroupMessages(
         resetIdleTimer();
       },
       agent,
-      undefined, // isDelegation
-      async (text) => {
+      // isDelegation omitted — main message-loop path is non-delegation
+      sendMessage: async (text) => {
         if (isMultiAgent) setActiveAgentName(responseJid, agent.displayName);
         if (
           await deliverAgentMessage(
@@ -1633,10 +1632,10 @@ async function processGroupMessages(
           outputSentForCurrentQuery = true;
         }
       },
-      batchId,
-      multiAgentCtx || undefined,
-      structuredMessages,
-    );
+      runBatchId: batchId,
+      systemContext: multiAgentCtx || undefined,
+      messages: structuredMessages,
+    });
 
     await responseChannel.setTyping?.(
       responseJid,
@@ -1692,21 +1691,41 @@ async function processGroupMessages(
   return true;
 }
 
-async function runAgent(
-  group: RegisteredGroup,
-  prompt: string,
-  chatJid: string,
-  onOutput?: (output: ContainerOutput) => Promise<void>,
-  onProgress?: (event: ProgressEvent) => void,
-  onText?: (text: string) => Promise<void>,
-  agent?: Agent,
-  isDelegation?: boolean,
-  sendMessage?: (text: string) => Promise<void>,
-  runBatchId?: string,
-  systemContext?: string,
-  messages?: StructuredMessage[],
-  portalThreadId?: string,
-): Promise<'success' | 'error'> {
+interface RunAgentOptions {
+  group: RegisteredGroup;
+  prompt: string;
+  chatJid: string;
+  onOutput?: (output: ContainerOutput) => Promise<void>;
+  onProgress?: (event: ProgressEvent) => void;
+  onText?: (text: string) => Promise<void>;
+  agent?: Agent;
+  isDelegation?: boolean;
+  sendMessage?: (text: string) => Promise<void>;
+  runBatchId?: string;
+  systemContext?: string;
+  messages?: StructuredMessage[];
+  // Portal routing (#107). When set, the run drains into a side-panel
+  // portal — IPC-driven tool outputs (e.g. send_message) tag this thread
+  // so they route correctly instead of leaking to the main feed.
+  portalThreadId?: string;
+}
+
+async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
+  const {
+    group,
+    prompt,
+    chatJid,
+    onOutput,
+    onProgress,
+    onText,
+    agent,
+    isDelegation,
+    sendMessage,
+    runBatchId,
+    systemContext,
+    messages,
+    portalThreadId,
+  } = opts;
   const isMain = group.isMain === true;
   const agentId = agent?.id || `${group.folder}/${DEFAULT_AGENT_NAME}`;
   const agentName = agent?.name || DEFAULT_AGENT_NAME;
@@ -3069,11 +3088,11 @@ async function main(): Promise<void> {
           agent.displayName,
         );
 
-        const status = await runAgent(
+        const status = await runAgent({
           group,
-          delegationPrompt,
+          prompt: delegationPrompt,
           chatJid,
-          async (result) => {
+          onOutput: async (result) => {
             const alreadyStreamed =
               !!result.textsAlreadyStreamed && result.textsAlreadyStreamed > 0;
             if (result.result) {
@@ -3128,8 +3147,9 @@ async function main(): Promise<void> {
               );
             }
           },
-          (event) => broadcastProgress(chatJid, event, portalThreadId),
-          async (rawText) => {
+          onProgress: (event) =>
+            broadcastProgress(chatJid, event, portalThreadId),
+          onText: async (rawText) => {
             // Match the normal-run onText pattern (#84): intermediate TEXT
             // markers are progress signals, not chat messages. The final
             // consolidated reply still arrives via onOutput. Previously this
@@ -3149,8 +3169,8 @@ async function main(): Promise<void> {
             );
           },
           agent,
-          true,
-          async (text) => {
+          isDelegation: true,
+          sendMessage: async (text) => {
             setActiveAgentName(chatJid, agent.displayName);
             if (
               await deliverAgentMessage(
@@ -3164,11 +3184,11 @@ async function main(): Promise<void> {
               deliveredToUser = true;
             }
           },
-          batchId,
-          multiAgentCtx || undefined,
-          delegationMessages,
+          runBatchId: batchId,
+          systemContext: multiAgentCtx || undefined,
+          messages: delegationMessages,
           portalThreadId,
-        );
+        });
 
         group.containerConfig = savedConfig;
         clearActiveAgentName(chatJid);
