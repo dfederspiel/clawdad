@@ -3130,22 +3130,23 @@ async function main(): Promise<void> {
           },
           (event) => broadcastProgress(chatJid, event, portalThreadId),
           async (rawText) => {
+            // Match the normal-run onText pattern (#84): intermediate TEXT
+            // markers are progress signals, not chat messages. The final
+            // consolidated reply still arrives via onOutput. Previously this
+            // path called deliverAgentMessage per fragment, producing a
+            // stream of chattery sub-messages in the portal.
             const text = rawText
               .replace(/<internal>[\s\S]*?<\/internal>/g, '')
               .trim();
             if (!text) return;
             setActiveAgentName(chatJid, agent.displayName);
-            if (
-              await deliverAgentMessage(
-                channel,
-                chatJid,
-                text,
-                lease,
-                portalThreadId,
-              )
-            ) {
-              deliveredToUser = true;
-            }
+            const summary =
+              text.length > 120 ? text.slice(0, 117) + '...' : text;
+            broadcastProgress(
+              chatJid,
+              { tool: 'text', summary, timestamp: new Date().toISOString() },
+              portalThreadId,
+            );
           },
           agent,
           true,
