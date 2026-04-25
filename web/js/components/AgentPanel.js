@@ -100,7 +100,7 @@ function LiveMessage({ msg }) {
         ${msg.senderName || (isUser ? 'user' : 'assistant')} · ${formatTime(msg.timestamp)}
       </div>
       <div class="text-xs leading-relaxed">
-        <${MessageBody} content=${msg.content} />
+        <${MessageBody} content=${msg.content} messageId=${msg.id} messageTimestamp=${msg.timestamp} />
       </div>
     </div>
   `;

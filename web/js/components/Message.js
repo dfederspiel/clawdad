@@ -99,7 +99,7 @@ function UsageFooter({ usage, toolHistory, expanded, onToggle, runId, groupFolde
   `;
 }
 
-export function Message({ role, content, timestamp, senderName, isError, compact, usage, toolHistory, runId }) {
+export function Message({ id, role, content, timestamp, senderName, isError, compact, usage, toolHistory, runId }) {
   const isAssistant = role === 'assistant';
   const time = timestamp
     ? new Date(timestamp).toLocaleTimeString()
@@ -125,7 +125,7 @@ export function Message({ role, content, timestamp, senderName, isError, compact
       ${showAgentBadge && html`
         <div class="text-[11px] font-semibold mb-1" style="color: ${nameColor}">${senderName}</div>
       `}
-      <${MessageBody} content=${content} />
+      <${MessageBody} content=${content} messageId=${id} messageTimestamp=${timestamp} />
       <div class="text-[11px] text-txt-muted mt-1.5">
         ${senderName && !showAgentBadge ? `${senderName} \u00B7 ${time}` : time}
       </div>
