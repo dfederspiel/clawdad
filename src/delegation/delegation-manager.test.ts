@@ -102,6 +102,11 @@ describe('DelegationManager drain policy', () => {
       'group@g.us',
       'delegation_retrigger',
     );
+    expect(manager.getCoordinatorResults('group@g.us')).toEqual([
+      expect.objectContaining({ id: 'del-1' }),
+    ]);
+    manager.clearCoordinatorResults('group@g.us');
+    expect(manager.getCoordinatorResults('group@g.us')).toEqual([]);
     expect(store.update).not.toHaveBeenCalled();
   });
 

@@ -24,6 +24,8 @@ export interface DelegationScheduler {
 }
 
 export class DelegationManager {
+  private readonly pendingCoordinatorResults = new Map<string, Set<string>>();
+
   constructor(
     private readonly store: DelegationStore,
     private readonly events: DelegationEventBus,
@@ -98,7 +100,37 @@ export class DelegationManager {
       { groupJid: event.groupJid, runIds: coordinatorRuns.map((r) => r.id) },
       'Delegation manager re-triggering coordinator',
     );
+    this.addPendingCoordinatorResults(
+      event.groupJid,
+      coordinatorRuns.map((run) => run.id),
+    );
     this.scheduler.enqueueMessageCheck(event.groupJid, 'delegation_retrigger');
+  }
+
+  getCoordinatorResults(groupJid: string): DelegationRun[] {
+    const runIds = this.pendingCoordinatorResults.get(groupJid);
+    if (!runIds || runIds.size === 0) return [];
+    return [...runIds]
+      .map((runId) => this.store.get(runId))
+      .filter((run): run is DelegationRun => Boolean(run));
+  }
+
+  clearCoordinatorResults(groupJid: string): void {
+    this.pendingCoordinatorResults.delete(groupJid);
+  }
+
+  private addPendingCoordinatorResults(
+    groupJid: string,
+    runIds: string[],
+  ): void {
+    let pending = this.pendingCoordinatorResults.get(groupJid);
+    if (!pending) {
+      pending = new Set();
+      this.pendingCoordinatorResults.set(groupJid, pending);
+    }
+    for (const runId of runIds) {
+      pending.add(runId);
+    }
   }
 
   private async execute(

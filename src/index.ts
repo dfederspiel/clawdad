@@ -8,6 +8,7 @@ import {
   discoverAgents,
 } from './agent-discovery.js';
 import { validateDelegationMessage } from './delegation-validation.js';
+import { formatDelegationResults } from './delegation/coordinator-context.js';
 import { DelegationEventBus } from './delegation/delegation-events.js';
 import { DelegationManager } from './delegation/delegation-manager.js';
 import { DelegationStore } from './delegation/delegation-store.js';
@@ -1053,8 +1054,14 @@ async function processGroupMessages(
     !isThreadReply, // excludeThreaded — but include thread replies when processing a thread agent
     isMultiAgent, // keepPortalThreads — coordinators need delegation output
   );
+  const delegationResultRuns =
+    mode === 'delegation_retrigger'
+      ? delegationManager.getCoordinatorResults(chatJid)
+      : [];
+  const delegationResultsContext =
+    formatDelegationResults(delegationResultRuns);
 
-  if (missedMessages.length === 0) {
+  if (missedMessages.length === 0 && !delegationResultsContext) {
     if (isThreadReply) {
       logger.warn(
         {
@@ -1216,6 +1223,20 @@ async function processGroupMessages(
     prompt = formatMessages(missedMessages, TIMEZONE);
     structuredMessages = toStructuredMessages(missedMessages);
   }
+  if (delegationResultsContext) {
+    prompt = prompt
+      ? `${prompt}\n\n${delegationResultsContext}`
+      : delegationResultsContext;
+    structuredMessages = [
+      ...structuredMessages,
+      {
+        role: 'user',
+        content: delegationResultsContext,
+        sender: 'DelegationManager',
+        timestamp: new Date().toISOString(),
+      },
+    ];
+  }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -1294,6 +1315,7 @@ async function processGroupMessages(
           async () => {
             const lease = beginDeliveryLease(responseJid, batchId);
             let deliveredToUser = false;
+            const deliveredTexts: string[] = [];
             group.containerConfig = {
               ...savedConfig,
               timeout: Math.min(
@@ -1335,6 +1357,7 @@ async function processGroupMessages(
                       )
                     ) {
                       deliveredToUser = true;
+                      deliveredTexts.push(text);
                     }
                   }
                 } else if (
@@ -1372,6 +1395,7 @@ async function processGroupMessages(
                   )
                 ) {
                   deliveredToUser = true;
+                  deliveredTexts.push(text);
                 }
               },
               agent,
@@ -1388,6 +1412,7 @@ async function processGroupMessages(
                   )
                 ) {
                   deliveredToUser = true;
+                  deliveredTexts.push(text);
                 }
               },
               runBatchId: batchId,
@@ -1446,7 +1471,7 @@ async function processGroupMessages(
             });
             return {
               status,
-              result: resultNote,
+              result: deliveredTexts.join('\n\n') || resultNote,
               error:
                 status === 'error'
                   ? `${agent.displayName} was unable to respond.`
@@ -1717,6 +1742,9 @@ async function processGroupMessages(
 
   if (anyError) {
     if (anyOutputSent) {
+      if (delegationResultsContext) {
+        delegationManager.clearCoordinatorResults(chatJid);
+      }
       logger.warn(
         { group: group.name },
         'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
@@ -1732,6 +1760,9 @@ async function processGroupMessages(
     return false;
   }
 
+  if (delegationResultsContext) {
+    delegationManager.clearCoordinatorResults(chatJid);
+  }
   return true;
 }
 
@@ -3104,6 +3135,7 @@ async function main(): Promise<void> {
       async () => {
         const lease = beginDeliveryLease(chatJid, batchId);
         let deliveredToUser = false;
+        const deliveredTexts: string[] = [];
         group.containerConfig = {
           ...savedConfig,
           timeout: Math.min(
@@ -3174,6 +3206,7 @@ async function main(): Promise<void> {
                   )
                 ) {
                   deliveredToUser = true;
+                  deliveredTexts.push(text);
                 }
               }
             } else if (alreadyStreamed) {
@@ -3233,6 +3266,7 @@ async function main(): Promise<void> {
               )
             ) {
               deliveredToUser = true;
+              deliveredTexts.push(text);
             }
           },
           runBatchId: batchId,
@@ -3302,7 +3336,7 @@ async function main(): Promise<void> {
         );
         return {
           status,
-          result: resultNote,
+          result: deliveredTexts.join('\n\n') || resultNote,
           error:
             status === 'error'
               ? `${agent.displayName} was unable to complete the delegated task.`
