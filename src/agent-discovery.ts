@@ -198,10 +198,10 @@ export function buildMultiAgentContext(
           ? specialists
               .map(
                 (a) =>
-                  `  delegate_to_agent({ agent: "${a.name}", message: "Specific instructions for ${a.displayName}...", completion_policy: "final_response" })`,
+                  `  delegate_to_agent({ agent: "${a.name}", message: "Specific instructions for ${a.displayName}..." })`,
               )
               .join('\n')
-          : `  delegate_to_agent({ agent: "agent-name", message: "Specific instructions...", completion_policy: "final_response" })`;
+          : `  delegate_to_agent({ agent: "agent-name", message: "Specific instructions..." })`;
 
       lines.push(
         `You are the coordinator. You handle general questions directly and delegate specialist work.`,
@@ -210,7 +210,7 @@ export function buildMultiAgentContext(
         `Set concise, high-signal statuses when work starts ("Reviewing PRs", "Waiting on Scout") and clear them when the work is done.`,
         `To delegate, use the mcp__nanoclaw__delegate_to_agent tool. Valid targets and example invocations:`,
         delegationExamples,
-        `Use completion_policy: "final_response" by default. Only use "retrigger_coordinator" when you specifically need a follow-up turn to combine or interpret specialist results.`,
+        `By default you get a follow-up turn after each specialist replies — use it to acknowledge, synthesize, or hand off. Pass completion_policy: "final_response" only when the specialist's own reply IS the final answer to the user and you have nothing to add.`,
         `The target agent runs after your turn. Their user-visible output may be suppressed if newer context arrives before it is delivered.`,
         `Even when a specialist's user-visible output is suppressed, the system records that completion for you in the conversation so you can decide whether to reuse it, summarize it, or move on.`,
         `Avoid over-narrating future delegation steps to the user. If the conversation changes direction, treat older delegated work as possibly superseded and respond to the newest context.`,

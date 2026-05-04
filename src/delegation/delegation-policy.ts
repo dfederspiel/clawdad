@@ -3,7 +3,7 @@ import { DelegationCompletionPolicy, DelegationVisibility } from './types.js';
 export function normalizeCompletionPolicy(
   policy?: DelegationCompletionPolicy,
 ): DelegationCompletionPolicy {
-  return policy || 'final_response';
+  return policy || 'retrigger_coordinator';
 }
 
 export function normalizeVisibility(

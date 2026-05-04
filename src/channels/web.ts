@@ -1384,8 +1384,7 @@ When a request fits a specialist, **call the tool** — do not narrate what you 
 \`\`\`
 mcp__nanoclaw__delegate_to_agent({
   agent: "${exampleAgent}",
-  message: "Specific instructions for the specialist",
-  completion_policy: "final_response"
+  message: "Specific instructions for the specialist"
 })
 \`\`\`
 

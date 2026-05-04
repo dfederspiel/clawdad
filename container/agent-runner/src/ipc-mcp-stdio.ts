@@ -866,13 +866,13 @@ if (process.env.NANOCLAW_CAN_DELEGATE === '1') {
 
 The target agent runs after your turn completes. Their user-visible response may be suppressed if newer context arrives before delivery, but the coordinator still gets a system note that they finished.
 
-Use completion_policy: "final_response" by default. Use "retrigger_coordinator" only when you explicitly need a follow-up turn to combine or interpret specialist outputs.
+By default you get a follow-up turn after the specialist replies — use it to acknowledge, synthesize, or hand off to the next agent. Pick "final_response" only when the specialist's own output IS the final answer to the user and you have nothing to add.
 
 Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the three jokes I just told and rate them." })`,
     {
       agent: z.string().describe('Name of the target agent (e.g. "analyst", "greeter"). Must be an agent in this group.'),
       message: z.string().describe('Instructions or context for the target agent. Be specific about what you want them to do.'),
-      completion_policy: z.enum(['final_response', 'retrigger_coordinator']).default('final_response').describe('What happens after the specialist responds. "final_response" (default): the specialist\'s output is the final answer, you do NOT get a follow-up turn. "retrigger_coordinator": you get a follow-up turn to review and synthesize. Use retrigger_coordinator only when delegating to multiple agents and you need to combine their outputs.'),
+      completion_policy: z.enum(['final_response', 'retrigger_coordinator']).default('retrigger_coordinator').describe('What happens after the specialist responds. "retrigger_coordinator" (default): you get a follow-up turn to acknowledge, synthesize, or continue the conversation. Choose this whenever you might want to respond to the user after the specialist replies. "final_response": the specialist\'s output IS the final answer — you will NOT get a follow-up turn. Use this only for true fire-and-forget handoffs where you have nothing to add.'),
     },
     async (args) => {
       // Platform-level validation (#48): specialists see only this message,
@@ -895,7 +895,7 @@ Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the thre
         type: 'delegate',
         targetAgent: args.agent,
         message: args.message,
-        completionPolicy: args.completion_policy || 'final_response',
+        completionPolicy: args.completion_policy || 'retrigger_coordinator',
         sourceAgent: process.env.NANOCLAW_AGENT_NAME || 'default',
         sourceAgentId: process.env.NANOCLAW_AGENT_ID || '',
         sourceBatchId: process.env.NANOCLAW_RUN_BATCH_ID || '',

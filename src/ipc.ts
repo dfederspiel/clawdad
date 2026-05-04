@@ -251,7 +251,8 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     message: data.message,
                     sourceAgent: data.sourceAgent || 'unknown',
                     sourceBatchId: data.sourceBatchId || '',
-                    completionPolicy: data.completionPolicy || 'final_response',
+                    completionPolicy:
+                      data.completionPolicy || 'retrigger_coordinator',
                   });
                   logger.info(
                     {

@@ -3154,7 +3154,7 @@ async function main(): Promise<void> {
         targetAgentId: `${group.folder}/${agent.name}`,
         message,
         visibility: 'portal',
-        completionPolicy: completionPolicy || 'final_response',
+        completionPolicy: completionPolicy || 'retrigger_coordinator',
         batchId,
         threadId: portalThreadId,
       },
