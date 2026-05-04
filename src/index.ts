@@ -302,6 +302,7 @@ async function deliverAgentMessage(
   text: string,
   lease: DeliveryLease,
   threadId?: string,
+  senderName?: string,
 ): Promise<boolean> {
   // Portal deliveries bypass supersession. The lease mechanism assumes
   // every agent output lands in the main chat's single "frontier", where
@@ -324,7 +325,7 @@ async function deliverAgentMessage(
     return false;
   }
 
-  await channel.sendMessage(jid, text, threadId);
+  await channel.sendMessage(jid, text, threadId, senderName);
   if (!isPortalDelivery) markLeaseDelivered(lease);
   return true;
 }
@@ -831,8 +832,12 @@ async function executeAutomationActions(
                 },
               ];
 
-              setActiveAgentName(chatJid, agent.displayName);
-              await channel.setTyping?.(chatJid, true);
+              await channel.setTyping?.(
+                chatJid,
+                true,
+                undefined,
+                agent.displayName,
+              );
 
               const status = await runAgent({
                 group,
@@ -854,8 +859,14 @@ async function executeAutomationActions(
                       .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                       .trim();
                     if (text) {
-                      setActiveAgentName(chatJid, agent.displayName);
-                      await deliverAgentMessage(channel, chatJid, text, lease);
+                      await deliverAgentMessage(
+                        channel,
+                        chatJid,
+                        text,
+                        lease,
+                        undefined,
+                        agent.displayName,
+                      );
                     }
                   } else if (
                     result.textsAlreadyStreamed &&
@@ -884,14 +895,26 @@ async function executeAutomationActions(
                     .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                     .trim();
                   if (!text) return;
-                  setActiveAgentName(chatJid, agent.displayName);
-                  await deliverAgentMessage(channel, chatJid, text, lease);
+                  await deliverAgentMessage(
+                    channel,
+                    chatJid,
+                    text,
+                    lease,
+                    undefined,
+                    agent.displayName,
+                  );
                 },
                 agent,
                 isDelegation: true,
                 sendMessage: async (text) => {
-                  setActiveAgentName(chatJid, agent.displayName);
-                  await deliverAgentMessage(channel, chatJid, text, lease);
+                  await deliverAgentMessage(
+                    channel,
+                    chatJid,
+                    text,
+                    lease,
+                    undefined,
+                    agent.displayName,
+                  );
                 },
                 runBatchId: batchId,
                 systemContext: multiAgentCtx || undefined,
@@ -1347,8 +1370,12 @@ async function processGroupMessages(
             };
             const multiAgentCtx = buildMultiAgentContext(agent, agents);
 
-            setActiveAgentName(responseJid, agent.displayName);
-            await responseChannel.setTyping?.(responseJid, true, threadId);
+            await responseChannel.setTyping?.(
+              responseJid,
+              true,
+              threadId,
+              agent.displayName,
+            );
             // Intermediate TEXT blocks are shown as status in the typing indicator
 
             const status = await runAgent({
@@ -1368,7 +1395,6 @@ async function processGroupMessages(
                     .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                     .trim();
                   if (text) {
-                    setActiveAgentName(responseJid, agent.displayName);
                     if (
                       await deliverAgentMessage(
                         responseChannel,
@@ -1376,6 +1402,7 @@ async function processGroupMessages(
                         text,
                         lease,
                         threadId,
+                        agent.displayName,
                       )
                     ) {
                       deliveredToUser = true;
@@ -1406,7 +1433,6 @@ async function processGroupMessages(
                   .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                   .trim();
                 if (!text) return;
-                setActiveAgentName(responseJid, agent.displayName);
                 if (
                   await deliverAgentMessage(
                     responseChannel,
@@ -1414,6 +1440,7 @@ async function processGroupMessages(
                     text,
                     lease,
                     threadId,
+                    agent.displayName,
                   )
                 ) {
                   deliveredToUser = true;
@@ -1423,7 +1450,6 @@ async function processGroupMessages(
               agent,
               isDelegation: true,
               sendMessage: async (text) => {
-                setActiveAgentName(responseJid, agent.displayName);
                 if (
                   await deliverAgentMessage(
                     responseChannel,
@@ -1431,6 +1457,7 @@ async function processGroupMessages(
                     text,
                     lease,
                     threadId,
+                    agent.displayName,
                   )
                 ) {
                   deliveredToUser = true;
@@ -1603,8 +1630,6 @@ async function processGroupMessages(
             );
           }
           if (text) {
-            if (isMultiAgent)
-              setActiveAgentName(responseJid, agent.displayName);
             if (
               await deliverAgentMessage(
                 responseChannel,
@@ -1612,6 +1637,7 @@ async function processGroupMessages(
                 text,
                 lease,
                 threadId,
+                isMultiAgent ? agent.displayName : undefined,
               )
             ) {
               outputSentToUser = true;
@@ -1709,7 +1735,6 @@ async function processGroupMessages(
       agent,
       // isDelegation omitted — main message-loop path is non-delegation
       sendMessage: async (text) => {
-        if (isMultiAgent) setActiveAgentName(responseJid, agent.displayName);
         if (
           await deliverAgentMessage(
             responseChannel,
@@ -1717,6 +1742,7 @@ async function processGroupMessages(
             text,
             lease,
             threadId,
+            isMultiAgent ? agent.displayName : undefined,
           )
         ) {
           outputSentToUser = true;
@@ -3076,7 +3102,7 @@ async function main(): Promise<void> {
         targetAgentId: `${group.folder}/${agent.name}`,
         message,
         visibility: 'portal',
-        completionPolicy: completionPolicy || 'final_response',
+        completionPolicy: completionPolicy || 'retrigger_coordinator',
         batchId,
         threadId: portalThreadId,
       },
@@ -3154,7 +3180,6 @@ async function main(): Promise<void> {
                 .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                 .trim();
               if (text) {
-                setActiveAgentName(chatJid, agent.displayName);
                 if (
                   await deliverAgentMessage(
                     channel,
@@ -3162,6 +3187,7 @@ async function main(): Promise<void> {
                     text,
                     lease,
                     portalThreadId,
+                    agent.displayName,
                   )
                 ) {
                   deliveredToUser = true;
@@ -3209,7 +3235,6 @@ async function main(): Promise<void> {
           agent,
           isDelegation: true,
           sendMessage: async (text) => {
-            setActiveAgentName(chatJid, agent.displayName);
             if (
               await deliverAgentMessage(
                 channel,
@@ -3217,6 +3242,7 @@ async function main(): Promise<void> {
                 text,
                 lease,
                 portalThreadId,
+                agent.displayName,
               )
             ) {
               deliveredToUser = true;

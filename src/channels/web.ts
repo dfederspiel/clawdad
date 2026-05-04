@@ -225,12 +225,15 @@ export class WebChannel implements Channel {
     jid: string,
     text: string,
     threadId?: string,
+    explicitSenderName?: string,
   ): Promise<string> {
     const id = randomUUID();
     const timestamp = new Date().toISOString();
 
-    // Use active agent name if set (multi-agent groups), else default
-    const senderName = getActiveAgentName(jid) || ASSISTANT_NAME;
+    // Prefer the explicit param (race-free) — fall back to the active-agent
+    // slot for callers that haven't been updated, then to the default.
+    const senderName =
+      explicitSenderName || getActiveAgentName(jid) || ASSISTANT_NAME;
 
     // Persist agent response so it survives page reloads
     storeMessageDirect({
@@ -1381,8 +1384,7 @@ When a request fits a specialist, **call the tool** — do not narrate what you 
 \`\`\`
 mcp__nanoclaw__delegate_to_agent({
   agent: "${exampleAgent}",
-  message: "Specific instructions for the specialist",
-  completion_policy: "final_response"
+  message: "Specific instructions for the specialist"
 })
 \`\`\`
 
