@@ -8,6 +8,11 @@ import {
   discoverAgents,
 } from './agent-discovery.js';
 import { validateDelegationMessage } from './delegation-validation.js';
+import { formatDelegationResults } from './delegation/coordinator-context.js';
+import { DelegationEventBus } from './delegation/delegation-events.js';
+import { DelegationManager } from './delegation/delegation-manager.js';
+import { DelegationStore } from './delegation/delegation-store.js';
+import type { DelegationCompletionPolicy } from './delegation/types.js';
 import { setActiveAgentName, clearActiveAgentName } from './agent-state.js';
 import { getTriggeredAgentsForMessages } from './agent-routing.js';
 import {
@@ -79,8 +84,6 @@ import {
   getMessagesSince,
   getNewMessages,
   getRouterState,
-  getThread,
-  getThreadMessages,
   initDatabase,
   setRegisteredGroup,
   setRouterState,
@@ -328,10 +331,30 @@ async function deliverAgentMessage(
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+const delegationEvents = new DelegationEventBus();
+const delegationManager = new DelegationManager(
+  new DelegationStore(),
+  delegationEvents,
+  queue,
+);
+delegationEvents.subscribe((event) => {
+  logger.info(
+    {
+      event: event.type,
+      runId: event.run.id,
+      groupJid: event.run.groupJid,
+      targetAgentId: event.run.targetAgentId,
+      status: event.run.status,
+      completionPolicy: event.run.completionPolicy,
+      visibility: event.run.visibility,
+    },
+    'Delegation lifecycle event',
+  );
+});
 const pool = new ContainerPool(POOL_IDLE_TIMEOUT, WARM_POOL_ENABLED);
 pool.setOnCountChange((idleCount) => queue.setIdlePoolCount(idleCount));
 queue.setOnDelegationState(
-  (groupJid, groupFolder, coordinatorAgent, active) => {
+  (_groupJid, groupFolder, coordinatorAgent, active) => {
     const agentId = `${groupFolder}/${coordinatorAgent}`;
     if (active) {
       pool.pauseIdleTimer(agentId);
@@ -339,6 +362,9 @@ queue.setOnDelegationState(
       pool.resumeIdleTimer(agentId);
     }
   },
+);
+queue.setOnDelegationsDrained((event) =>
+  delegationManager.handleDelegationsDrained(event),
 );
 
 function loadState(): void {
@@ -757,14 +783,22 @@ async function executeAutomationActions(
 
           const savedConfig = group.containerConfig;
           const AUTOMATION_TIMEOUT = 120_000;
-          const taskId = `automation-${agent.name}-${Date.now()}`;
           const batchId = `automation-${trace.ruleId}-${randomUUID()}`;
-          queue.enqueueDelegation(
-            chatJid,
-            taskId,
+          delegationManager.delegate(
+            {
+              groupJid: chatJid,
+              groupFolder: group.folder,
+              coordinatorAgentId: `${group.folder}/automation:${trace.ruleId}`,
+              targetAgentId: `${group.folder}/${agent.name}`,
+              message:
+                action.messageTemplate ||
+                `Auto-routed by rule "${trace.ruleId}"`,
+              visibility: 'main_chat',
+              completionPolicy: 'final_response',
+              batchId,
+            },
             async () => {
               const lease = beginDeliveryLease(chatJid, batchId);
-              let deliveredToUser = false;
               group.containerConfig = {
                 ...savedConfig,
                 timeout: Math.min(
@@ -805,34 +839,29 @@ async function executeAutomationActions(
                 prompt: delegationPrompt,
                 chatJid,
                 onOutput: async (result) => {
+                  // textsAlreadyStreamed counts intermediate TEXT markers,
+                  // which #110 made progress-only (not chat deliveries).
+                  // Whenever result.result is non-null, deliver it. The
+                  // Ollama tool path where the agent delivered via
+                  // send_message has result.result === null and is handled
+                  // by the else-if branch.
                   if (result.result) {
-                    if (
-                      result.textsAlreadyStreamed &&
-                      result.textsAlreadyStreamed > 0
-                    ) {
-                      // Text already delivered via onText → sendMessage
-                    } else {
-                      const raw =
-                        typeof result.result === 'string'
-                          ? result.result
-                          : JSON.stringify(result.result);
-                      const text = raw
-                        .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                        .trim();
-                      if (text) {
-                        setActiveAgentName(chatJid, agent.displayName);
-                        if (
-                          await deliverAgentMessage(
-                            channel,
-                            chatJid,
-                            text,
-                            lease,
-                          )
-                        ) {
-                          deliveredToUser = true;
-                        }
-                      }
+                    const raw =
+                      typeof result.result === 'string'
+                        ? result.result
+                        : JSON.stringify(result.result);
+                    const text = raw
+                      .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                      .trim();
+                    if (text) {
+                      setActiveAgentName(chatJid, agent.displayName);
+                      await deliverAgentMessage(channel, chatJid, text, lease);
                     }
+                  } else if (
+                    result.textsAlreadyStreamed &&
+                    result.textsAlreadyStreamed > 0
+                  ) {
+                    // Ollama tool path delivered via send_message.
                   }
                   if (
                     result.status === 'success' ||
@@ -856,21 +885,13 @@ async function executeAutomationActions(
                     .trim();
                   if (!text) return;
                   setActiveAgentName(chatJid, agent.displayName);
-                  if (
-                    await deliverAgentMessage(channel, chatJid, text, lease)
-                  ) {
-                    deliveredToUser = true;
-                  }
+                  await deliverAgentMessage(channel, chatJid, text, lease);
                 },
                 agent,
                 isDelegation: true,
                 sendMessage: async (text) => {
                   setActiveAgentName(chatJid, agent.displayName);
-                  if (
-                    await deliverAgentMessage(channel, chatJid, text, lease)
-                  ) {
-                    deliveredToUser = true;
-                  }
+                  await deliverAgentMessage(channel, chatJid, text, lease);
                 },
                 runBatchId: batchId,
                 systemContext: multiAgentCtx || undefined,
@@ -920,9 +941,15 @@ async function executeAutomationActions(
                 { ruleId: trace.ruleId, agent: agent.name, status },
                 '[automation] delegation complete',
               );
+              return {
+                status,
+                error:
+                  status === 'error'
+                    ? `${agent.displayName} automation delegation failed.`
+                    : undefined,
+              };
             },
             agent.displayName,
-            true, // skipRetrigger — automation handles routing, coordinator not needed
           );
           delegated = true;
           break;
@@ -1030,8 +1057,14 @@ async function processGroupMessages(
     !isThreadReply, // excludeThreaded — but include thread replies when processing a thread agent
     isMultiAgent, // keepPortalThreads — coordinators need delegation output
   );
+  const delegationResultRuns =
+    mode === 'delegation_retrigger'
+      ? delegationManager.getCoordinatorResults(chatJid)
+      : [];
+  const delegationResultsContext =
+    formatDelegationResults(delegationResultRuns);
 
-  if (missedMessages.length === 0) {
+  if (missedMessages.length === 0 && !delegationResultsContext) {
     if (isThreadReply) {
       logger.warn(
         {
@@ -1194,6 +1227,20 @@ async function processGroupMessages(
     prompt = formatMessages(missedMessages, TIMEZONE);
     structuredMessages = toStructuredMessages(missedMessages);
   }
+  if (delegationResultsContext) {
+    prompt = prompt
+      ? `${prompt}\n\n${delegationResultsContext}`
+      : delegationResultsContext;
+    structuredMessages = [
+      ...structuredMessages,
+      {
+        role: 'user',
+        content: delegationResultsContext,
+        sender: 'DelegationManager',
+        timestamp: new Date().toISOString(),
+      },
+    ];
+  }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -1275,13 +1322,22 @@ async function processGroupMessages(
 
       for (const agent of specialists) {
         const savedConfig = group.containerConfig;
-        const taskId = `mention-${agent.name}-${Date.now()}`;
-        queue.enqueueDelegation(
-          chatJid,
-          taskId,
+        delegationManager.delegate(
+          {
+            groupJid: chatJid,
+            groupFolder: group.folder,
+            coordinatorAgentId: `${group.folder}/mention-router`,
+            targetAgentId: `${group.folder}/${agent.name}`,
+            message: prompt,
+            visibility: threadId ? 'portal' : 'main_chat',
+            completionPolicy: 'retrigger_coordinator',
+            batchId,
+            threadId,
+          },
           async () => {
             const lease = beginDeliveryLease(responseJid, batchId);
             let deliveredToUser = false;
+            const deliveredTexts: string[] = [];
             group.containerConfig = {
               ...savedConfig,
               timeout: Math.min(
@@ -1300,35 +1356,38 @@ async function processGroupMessages(
               prompt,
               chatJid,
               onOutput: async (result) => {
+                // See automation handler note above: textsAlreadyStreamed
+                // is now progress-only after #110, so it can't gate
+                // delivery. Always deliver result.result if non-null.
                 if (result.result) {
-                  if (
-                    result.textsAlreadyStreamed &&
-                    result.textsAlreadyStreamed > 0
-                  ) {
-                    // Text already delivered via intermediate markers
-                  } else {
-                    const raw =
-                      typeof result.result === 'string'
-                        ? result.result
-                        : JSON.stringify(result.result);
-                    const text = raw
-                      .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                      .trim();
-                    if (text) {
-                      setActiveAgentName(responseJid, agent.displayName);
-                      if (
-                        await deliverAgentMessage(
-                          responseChannel,
-                          responseJid,
-                          text,
-                          lease,
-                          threadId,
-                        )
-                      ) {
-                        deliveredToUser = true;
-                      }
+                  const raw =
+                    typeof result.result === 'string'
+                      ? result.result
+                      : JSON.stringify(result.result);
+                  const text = raw
+                    .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                    .trim();
+                  if (text) {
+                    setActiveAgentName(responseJid, agent.displayName);
+                    if (
+                      await deliverAgentMessage(
+                        responseChannel,
+                        responseJid,
+                        text,
+                        lease,
+                        threadId,
+                      )
+                    ) {
+                      deliveredToUser = true;
+                      deliveredTexts.push(text);
                     }
                   }
+                } else if (
+                  result.textsAlreadyStreamed &&
+                  result.textsAlreadyStreamed > 0
+                ) {
+                  // Ollama tool path delivered via send_message.
+                  deliveredToUser = true;
                 }
                 if (result.status === 'success' || result.status === 'error') {
                   await responseChannel.setTyping?.(
@@ -1358,6 +1417,7 @@ async function processGroupMessages(
                   )
                 ) {
                   deliveredToUser = true;
+                  deliveredTexts.push(text);
                 }
               },
               agent,
@@ -1374,6 +1434,7 @@ async function processGroupMessages(
                   )
                 ) {
                   deliveredToUser = true;
+                  deliveredTexts.push(text);
                 }
               },
               runBatchId: batchId,
@@ -1430,6 +1491,14 @@ async function processGroupMessages(
               is_from_me: false,
               is_bot_message: false,
             });
+            return {
+              status,
+              result: deliveredTexts.join('\n\n') || resultNote,
+              error:
+                status === 'error'
+                  ? `${agent.displayName} was unable to respond.`
+                  : undefined,
+            };
           },
           agent.displayName,
         );
@@ -1695,6 +1764,9 @@ async function processGroupMessages(
 
   if (anyError) {
     if (anyOutputSent) {
+      if (delegationResultsContext) {
+        delegationManager.clearCoordinatorResults(chatJid);
+      }
       logger.warn(
         { group: group.name },
         'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
@@ -1710,6 +1782,9 @@ async function processGroupMessages(
     return false;
   }
 
+  if (delegationResultsContext) {
+    delegationManager.clearCoordinatorResults(chatJid);
+  }
   return true;
 }
 
@@ -2889,7 +2964,7 @@ async function main(): Promise<void> {
     message: string;
     sourceAgent: string;
     sourceBatchId?: string;
-    completionPolicy?: 'final_response' | 'retrigger_coordinator';
+    completionPolicy?: DelegationCompletionPolicy;
     title?: string;
   }): void => {
     const {
@@ -2963,6 +3038,7 @@ async function main(): Promise<void> {
     ).delegationTimeoutMs;
     const taskId = `delegation-${agent.name}-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const portalThreadId = `portal-${taskId}`;
+    const batchId = sourceBatchId || `delegation-${randomUUID()}`;
     // Derive a short display title so concurrent portals to the same
     // specialist are visually distinct. Prefer an explicit title (action
     // button label, open_portal arg); fall back to the first line of the
@@ -2992,13 +3068,22 @@ async function main(): Promise<void> {
       sourceAgent,
       portalTitle,
     );
-    queue.enqueueDelegation(
-      chatJid,
-      taskId,
+    delegationManager.delegate(
+      {
+        groupJid: chatJid,
+        groupFolder: group.folder,
+        coordinatorAgentId: `${group.folder}/${sourceAgent}`,
+        targetAgentId: `${group.folder}/${agent.name}`,
+        message,
+        visibility: 'portal',
+        completionPolicy: completionPolicy || 'final_response',
+        batchId,
+        threadId: portalThreadId,
+      },
       async () => {
-        const batchId = sourceBatchId || `delegation-${randomUUID()}`;
         const lease = beginDeliveryLease(chatJid, batchId);
         let deliveredToUser = false;
+        const deliveredTexts: string[] = [];
         group.containerConfig = {
           ...savedConfig,
           timeout: Math.min(
@@ -3061,35 +3146,31 @@ async function main(): Promise<void> {
               'Portal delegation onOutput received',
             );
             if (result.result) {
-              if (alreadyStreamed) {
-              } else {
-                const raw =
-                  typeof result.result === 'string'
-                    ? result.result
-                    : JSON.stringify(result.result);
-                const text = raw
-                  .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-                  .trim();
-                if (text) {
-                  setActiveAgentName(chatJid, agent.displayName);
-                  if (
-                    await deliverAgentMessage(
-                      channel,
-                      chatJid,
-                      text,
-                      lease,
-                      portalThreadId,
-                    )
-                  ) {
-                    deliveredToUser = true;
-                  }
+              const raw =
+                typeof result.result === 'string'
+                  ? result.result
+                  : JSON.stringify(result.result);
+              const text = raw
+                .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                .trim();
+              if (text) {
+                setActiveAgentName(chatJid, agent.displayName);
+                if (
+                  await deliverAgentMessage(
+                    channel,
+                    chatJid,
+                    text,
+                    lease,
+                    portalThreadId,
+                  )
+                ) {
+                  deliveredToUser = true;
+                  deliveredTexts.push(text);
                 }
               }
             } else if (alreadyStreamed) {
-              // result is null but the agent did stream via tools (Ollama
-              // tool-capable path). The send_message tool now carries the
-              // portalThreadId in its IPC payload, so output already
-              // routed to the portal — count as delivered.
+              // Ollama tool path delivered via send_message. Output
+              // already routed to the portal — count as delivered.
               deliveredToUser = true;
             }
             if (result.status === 'success') {
@@ -3139,6 +3220,7 @@ async function main(): Promise<void> {
               )
             ) {
               deliveredToUser = true;
+              deliveredTexts.push(text);
             }
           },
           runBatchId: batchId,
@@ -3206,9 +3288,16 @@ async function main(): Promise<void> {
           { group: group.name, target: targetAgent, status },
           'Delegation complete',
         );
+        return {
+          status,
+          result: deliveredTexts.join('\n\n') || resultNote,
+          error:
+            status === 'error'
+              ? `${agent.displayName} was unable to complete the delegated task.`
+              : undefined,
+        };
       },
       agent.displayName,
-      completionPolicy !== 'retrigger_coordinator',
     );
   };
 
@@ -3349,7 +3438,7 @@ async function main(): Promise<void> {
         }
       }
     },
-    onGroupRegistered: (jid) => {
+    onGroupRegistered: (_jid) => {
       // Broadcast to web UI so sidebar updates immediately
       for (const ch of channels) {
         if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {

@@ -31,8 +31,14 @@ function detectProxyBindHost(): string {
   // Check /proc filesystem, not env vars — WSL_DISTRO_NAME isn't set under systemd.
   if (fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')) return '127.0.0.1';
 
-  // Bare-metal Linux: bind to the docker0 bridge IP instead of 0.0.0.0
-  const ifaces = os.networkInterfaces();
+  // Bare-metal Linux: bind to the docker0 bridge IP instead of 0.0.0.0.
+  // Some restricted runtimes deny interface enumeration; fall back below.
+  let ifaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+  try {
+    ifaces = os.networkInterfaces();
+  } catch {
+    return '0.0.0.0';
+  }
   const docker0 = ifaces['docker0'];
   if (docker0) {
     const ipv4 = docker0.find((a) => a.family === 'IPv4');
