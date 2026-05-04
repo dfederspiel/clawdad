@@ -7,13 +7,17 @@ import {
   generateTaskTitle,
   getAllChats,
   getAllRegisteredGroups,
+  getDelegationRun,
   getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
   getTaskById,
+  insertDelegationRun,
+  listDelegationRunsForGroup,
   setRegisteredGroup,
   storeChatMetadata,
   storeMessage,
+  updateDelegationRun,
   updateTask,
 } from './db.js';
 import { formatMessages } from './router.js';
@@ -380,6 +384,35 @@ describe('getNewMessages', () => {
     expect(messages[0].content).toBe('g1 msg2');
   });
 
+  it('excludes system notes from new-message polling but keeps them in history', () => {
+    storeMessage({
+      id: 'sys-1',
+      chat_jid: 'group1@g.us',
+      sender: 'system',
+      sender_name: 'System',
+      content: '[Writer has responded above.]',
+      timestamp: '2024-01-01T00:00:05.000Z',
+      is_from_me: false,
+      is_bot_message: false,
+    });
+
+    const { messages } = getNewMessages(
+      ['group1@g.us'],
+      '2024-01-01T00:00:04.000Z',
+      'Andy',
+    );
+    expect(messages).toHaveLength(0);
+
+    const history = getMessagesSince(
+      'group1@g.us',
+      '2024-01-01T00:00:04.000Z',
+      'Andy',
+      10,
+      true,
+    );
+    expect(history.map((m) => m.id)).toEqual(['sys-1']);
+  });
+
   it('returns empty for no registered groups', () => {
     const { messages, newTimestamp } = getNewMessages([], '', 'Andy');
     expect(messages).toHaveLength(0);
@@ -569,6 +602,40 @@ describe('task CRUD (continued)', () => {
 
     deleteTask('task-3');
     expect(getTaskById('task-3')).toBeUndefined();
+  });
+});
+
+describe('delegation run persistence', () => {
+  it('stores, updates, and lists delegation runs', () => {
+    insertDelegationRun({
+      id: 'delegation-1',
+      groupJid: 'group@g.us',
+      groupFolder: 'ops',
+      coordinatorAgentId: 'ops/coordinator',
+      targetAgentId: 'ops/scout',
+      message: 'Find the failing check',
+      status: 'queued',
+      visibility: 'portal',
+      completionPolicy: 'retrigger_coordinator',
+      batchId: 'batch-1',
+      threadId: 'portal-1',
+      createdAt: '2026-05-04T00:00:00.000Z',
+    });
+
+    updateDelegationRun('delegation-1', {
+      status: 'completed',
+      startedAt: '2026-05-04T00:00:01.000Z',
+      completedAt: '2026-05-04T00:00:02.000Z',
+      result: 'Check passed after retry.',
+    });
+
+    const run = getDelegationRun('delegation-1');
+    expect(run?.status).toBe('completed');
+    expect(run?.completionPolicy).toBe('retrigger_coordinator');
+    expect(run?.threadId).toBe('portal-1');
+    expect(run?.result).toBe('Check passed after retry.');
+
+    expect(listDelegationRunsForGroup('group@g.us')).toEqual([run]);
   });
 });
 

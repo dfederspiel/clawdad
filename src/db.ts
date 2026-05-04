@@ -13,6 +13,7 @@ import {
   TaskRunLog,
   ThreadInfo,
 } from './types.js';
+import type { DelegationRun } from './delegation/types.js';
 
 let db: Database.Database;
 
@@ -327,6 +328,31 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* columns already exist */
   }
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS delegation_runs (
+      id TEXT PRIMARY KEY,
+      parent_run_id TEXT,
+      group_jid TEXT NOT NULL,
+      group_folder TEXT NOT NULL,
+      coordinator_agent_id TEXT NOT NULL,
+      target_agent_id TEXT NOT NULL,
+      message TEXT NOT NULL,
+      status TEXT NOT NULL,
+      visibility TEXT NOT NULL,
+      completion_policy TEXT NOT NULL,
+      batch_id TEXT NOT NULL,
+      thread_id TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      result TEXT,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_delegation_runs_group ON delegation_runs(group_jid, created_at);
+    CREATE INDEX IF NOT EXISTS idx_delegation_runs_batch ON delegation_runs(batch_id);
+    CREATE INDEX IF NOT EXISTS idx_delegation_runs_thread ON delegation_runs(thread_id);
+  `);
 }
 
 export function initDatabase(): void {
@@ -544,6 +570,135 @@ export function updateMessageContent(
   ).run(content, id, chatJid);
 }
 
+interface DelegationRunRow {
+  id: string;
+  parent_run_id: string | null;
+  group_jid: string;
+  group_folder: string;
+  coordinator_agent_id: string;
+  target_agent_id: string;
+  message: string;
+  status: DelegationRun['status'];
+  visibility: DelegationRun['visibility'];
+  completion_policy: DelegationRun['completionPolicy'];
+  batch_id: string;
+  thread_id: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  result: string | null;
+  error: string | null;
+}
+
+function mapDelegationRun(row: DelegationRunRow): DelegationRun {
+  return {
+    id: row.id,
+    parentRunId: row.parent_run_id || undefined,
+    groupJid: row.group_jid,
+    groupFolder: row.group_folder,
+    coordinatorAgentId: row.coordinator_agent_id,
+    targetAgentId: row.target_agent_id,
+    message: row.message,
+    status: row.status,
+    visibility: row.visibility,
+    completionPolicy: row.completion_policy,
+    batchId: row.batch_id,
+    threadId: row.thread_id || undefined,
+    createdAt: row.created_at,
+    startedAt: row.started_at || undefined,
+    completedAt: row.completed_at || undefined,
+    result: row.result || undefined,
+    error: row.error || undefined,
+  };
+}
+
+export function insertDelegationRun(run: DelegationRun): void {
+  db.prepare(
+    `
+    INSERT INTO delegation_runs (
+      id, parent_run_id, group_jid, group_folder, coordinator_agent_id,
+      target_agent_id, message, status, visibility, completion_policy,
+      batch_id, thread_id, created_at, started_at, completed_at, result, error
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+  ).run(
+    run.id,
+    run.parentRunId || null,
+    run.groupJid,
+    run.groupFolder,
+    run.coordinatorAgentId,
+    run.targetAgentId,
+    run.message,
+    run.status,
+    run.visibility,
+    run.completionPolicy,
+    run.batchId,
+    run.threadId || null,
+    run.createdAt,
+    run.startedAt || null,
+    run.completedAt || null,
+    run.result || null,
+    run.error || null,
+  );
+}
+
+export function getDelegationRun(id: string): DelegationRun | undefined {
+  const row = db
+    .prepare(`SELECT * FROM delegation_runs WHERE id = ?`)
+    .get(id) as DelegationRunRow | undefined;
+  return row ? mapDelegationRun(row) : undefined;
+}
+
+export function listDelegationRunsForGroup(
+  groupJid: string,
+  limit: number = 50,
+): DelegationRun[] {
+  return db
+    .prepare(
+      `
+      SELECT * FROM delegation_runs
+      WHERE group_jid = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `,
+    )
+    .all(groupJid, limit)
+    .map((row) => row as DelegationRunRow)
+    .map(mapDelegationRun);
+}
+
+export function updateDelegationRun(
+  id: string,
+  patch: Partial<
+    Pick<
+      DelegationRun,
+      'status' | 'startedAt' | 'completedAt' | 'result' | 'error'
+    >
+  >,
+): void {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  const fieldMap: Record<keyof typeof patch, string> = {
+    status: 'status',
+    startedAt: 'started_at',
+    completedAt: 'completed_at',
+    result: 'result',
+    error: 'error',
+  };
+
+  for (const [key, value] of Object.entries(patch) as Array<
+    [keyof typeof patch, unknown]
+  >) {
+    fields.push(`${fieldMap[key]} = ?`);
+    values.push(value ?? null);
+  }
+  if (fields.length === 0) return;
+
+  db.prepare(
+    `UPDATE delegation_runs SET ${fields.join(', ')} WHERE id = ?`,
+  ).run(...values, id);
+}
+
 export function getNewMessages(
   jids: string[],
   lastTimestamp: string,
@@ -555,6 +710,8 @@ export function getNewMessages(
   const placeholders = jids.map(() => '?').join(',');
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
+  // Exclude host-authored system notes; they are context artifacts, not
+  // inbound work that should wake the message loop.
   // Subquery takes the N most recent, outer query re-sorts chronologically.
   // Exclude thread replies — they are routed via the queue, not the message loop
   const sql = `
@@ -563,6 +720,7 @@ export function getNewMessages(
       FROM messages
       WHERE timestamp > ? AND chat_jid IN (${placeholders})
         AND is_bot_message = 0 AND content NOT LIKE ?
+        AND sender != 'system'
         AND thread_id IS NULL
         AND content != '' AND content IS NOT NULL
       ORDER BY timestamp DESC

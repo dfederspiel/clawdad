@@ -56,7 +56,7 @@ export interface IpcDeps {
     message: string;
     sourceAgent: string;
     sourceBatchId?: string;
-    completionPolicy?: 'final_response' | 'retrigger_coordinator';
+    completionPolicy?: 'final_response' | 'retrigger_coordinator' | 'silent';
   }) => void;
   onPublishMedia?: (request: {
     sourceGroup: string;

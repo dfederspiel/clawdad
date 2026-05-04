@@ -3,6 +3,10 @@ import fs from 'fs';
 import path from 'path';
 
 import { MAX_CONCURRENT_CONTAINERS } from './config.js';
+import type {
+  DelegationCompletionPolicy,
+  DelegationRun,
+} from './delegation/types.js';
 import { resolveAgentIpcInputPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { WorkPhase, WorkStateEvent } from './types.js';
@@ -13,8 +17,17 @@ interface QueuedTask {
   id: string;
   groupJid: string;
   agentName?: string;
-  fn: () => Promise<void>;
-  skipRetrigger?: boolean;
+  fn: () => Promise<unknown>;
+  completionPolicy?: DelegationCompletionPolicy;
+}
+
+export interface QueuedDelegationWork {
+  kind: 'delegation';
+  runId: string;
+  groupJid: string;
+  agentName?: string;
+  completionPolicy: DelegationCompletionPolicy;
+  fn: () => Promise<unknown>;
 }
 
 const MAX_RETRIES = 5;
@@ -376,13 +389,27 @@ export class GroupQueue {
   enqueueDelegation(
     groupJid: string,
     taskId: string,
-    fn: () => Promise<void>,
+    fn: () => Promise<unknown>,
     agentName?: string,
     skipRetrigger?: boolean,
   ): void {
-    if (this.shuttingDown) return;
+    this.enqueueWork({
+      kind: 'delegation',
+      runId: taskId,
+      groupJid,
+      agentName,
+      completionPolicy: skipRetrigger
+        ? 'final_response'
+        : 'retrigger_coordinator',
+      fn,
+    });
+  }
 
-    const state = this.getGroup(groupJid);
+  enqueueWork(work: QueuedDelegationWork): void {
+    if (this.shuttingDown) return;
+    if (work.kind !== 'delegation') return;
+
+    const state = this.getGroup(work.groupJid);
 
     // Eagerly snapshot coordinator identity while it's still available.
     // runForGroup() clears these fields when the coordinator query finishes,
@@ -396,8 +423,11 @@ export class GroupQueue {
     }
 
     // Dedup
-    if (state.pendingDelegations.some((t) => t.id === taskId)) {
-      logger.debug({ groupJid, taskId }, 'Delegation already queued, skipping');
+    if (state.pendingDelegations.some((t) => t.id === work.runId)) {
+      logger.debug(
+        { groupJid: work.groupJid, runId: work.runId },
+        'Delegation already queued, skipping',
+      );
       return;
     }
 
@@ -406,31 +436,50 @@ export class GroupQueue {
       MAX_CONCURRENT_CONTAINERS
     ) {
       state.pendingDelegations.push({
-        id: taskId,
-        groupJid,
-        agentName,
-        fn,
-        skipRetrigger,
+        id: work.runId,
+        groupJid: work.groupJid,
+        agentName: work.agentName,
+        fn: work.fn,
+        completionPolicy: work.completionPolicy,
       });
       logger.debug(
-        { groupJid, taskId, activeCount: this.activeWorkCount },
+        {
+          groupJid: work.groupJid,
+          runId: work.runId,
+          activeCount: this.activeWorkCount,
+        },
         'At concurrency limit, delegation queued',
       );
       return;
     }
 
-    this.runDelegation(groupJid, {
-      id: taskId,
-      groupJid,
-      agentName,
-      fn,
-      skipRetrigger,
+    this.runDelegation(work.groupJid, {
+      id: work.runId,
+      groupJid: work.groupJid,
+      agentName: work.agentName,
+      fn: work.fn,
+      completionPolicy: work.completionPolicy,
     }).catch((err) =>
       logger.error(
-        { groupJid, taskId, err },
+        { groupJid: work.groupJid, runId: work.runId, err },
         'Unhandled error in runDelegation',
       ),
     );
+  }
+
+  scheduleDelegation(
+    run: DelegationRun,
+    fn: () => Promise<unknown>,
+    agentDisplayName?: string,
+  ): void {
+    this.enqueueWork({
+      kind: 'delegation',
+      runId: run.id,
+      groupJid: run.groupJid,
+      agentName: agentDisplayName,
+      completionPolicy: run.completionPolicy,
+      fn,
+    });
   }
 
   private async runDelegation(
@@ -484,7 +533,9 @@ export class GroupQueue {
       this.activeWorkCount--;
 
       // Record whether this delegation needs coordinator re-trigger
-      state.completedDelegationRetriggers.push(!task.skipRetrigger);
+      state.completedDelegationRetriggers.push(
+        task.completionPolicy === 'retrigger_coordinator',
+      );
 
       if (state.activeDelegations > 0) {
         this.emitWorkState(groupJid, 'delegating', {

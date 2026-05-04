@@ -8,6 +8,10 @@ import {
   discoverAgents,
 } from './agent-discovery.js';
 import { validateDelegationMessage } from './delegation-validation.js';
+import { DelegationEventBus } from './delegation/delegation-events.js';
+import { DelegationManager } from './delegation/delegation-manager.js';
+import { DelegationStore } from './delegation/delegation-store.js';
+import type { DelegationCompletionPolicy } from './delegation/types.js';
 import { setActiveAgentName, clearActiveAgentName } from './agent-state.js';
 import { getTriggeredAgentsForMessages } from './agent-routing.js';
 import {
@@ -78,8 +82,6 @@ import {
   getMessagesSince,
   getNewMessages,
   getRouterState,
-  getThread,
-  getThreadMessages,
   initDatabase,
   setRegisteredGroup,
   setRouterState,
@@ -326,10 +328,30 @@ async function deliverAgentMessage(
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+const delegationEvents = new DelegationEventBus();
+const delegationManager = new DelegationManager(
+  new DelegationStore(),
+  delegationEvents,
+  queue,
+);
+delegationEvents.subscribe((event) => {
+  logger.info(
+    {
+      event: event.type,
+      runId: event.run.id,
+      groupJid: event.run.groupJid,
+      targetAgentId: event.run.targetAgentId,
+      status: event.run.status,
+      completionPolicy: event.run.completionPolicy,
+      visibility: event.run.visibility,
+    },
+    'Delegation lifecycle event',
+  );
+});
 const pool = new ContainerPool(POOL_IDLE_TIMEOUT, WARM_POOL_ENABLED);
 pool.setOnCountChange((idleCount) => queue.setIdlePoolCount(idleCount));
 queue.setOnDelegationState(
-  (groupJid, groupFolder, coordinatorAgent, active) => {
+  (_groupJid, groupFolder, coordinatorAgent, active) => {
     const agentId = `${groupFolder}/${coordinatorAgent}`;
     if (active) {
       pool.pauseIdleTimer(agentId);
@@ -755,14 +777,22 @@ async function executeAutomationActions(
 
           const savedConfig = group.containerConfig;
           const AUTOMATION_TIMEOUT = 120_000;
-          const taskId = `automation-${agent.name}-${Date.now()}`;
           const batchId = `automation-${trace.ruleId}-${randomUUID()}`;
-          queue.enqueueDelegation(
-            chatJid,
-            taskId,
+          delegationManager.delegate(
+            {
+              groupJid: chatJid,
+              groupFolder: group.folder,
+              coordinatorAgentId: `${group.folder}/automation:${trace.ruleId}`,
+              targetAgentId: `${group.folder}/${agent.name}`,
+              message:
+                action.messageTemplate ||
+                `Auto-routed by rule "${trace.ruleId}"`,
+              visibility: 'main_chat',
+              completionPolicy: 'final_response',
+              batchId,
+            },
             async () => {
               const lease = beginDeliveryLease(chatJid, batchId);
-              let deliveredToUser = false;
               group.containerConfig = {
                 ...savedConfig,
                 timeout: Math.min(
@@ -819,19 +849,13 @@ async function executeAutomationActions(
                       .trim();
                     if (text) {
                       setActiveAgentName(chatJid, agent.displayName);
-                      if (
-                        await deliverAgentMessage(channel, chatJid, text, lease)
-                      ) {
-                        deliveredToUser = true;
-                      }
+                      await deliverAgentMessage(channel, chatJid, text, lease);
                     }
                   } else if (
                     result.textsAlreadyStreamed &&
                     result.textsAlreadyStreamed > 0
                   ) {
-                    // Ollama tool path delivered via send_message — count
-                    // as delivered so the result-note reflects it.
-                    deliveredToUser = true;
+                    // Ollama tool path delivered via send_message.
                   }
                   if (
                     result.status === 'success' ||
@@ -855,21 +879,13 @@ async function executeAutomationActions(
                     .trim();
                   if (!text) return;
                   setActiveAgentName(chatJid, agent.displayName);
-                  if (
-                    await deliverAgentMessage(channel, chatJid, text, lease)
-                  ) {
-                    deliveredToUser = true;
-                  }
+                  await deliverAgentMessage(channel, chatJid, text, lease);
                 },
                 agent,
                 isDelegation: true,
                 sendMessage: async (text) => {
                   setActiveAgentName(chatJid, agent.displayName);
-                  if (
-                    await deliverAgentMessage(channel, chatJid, text, lease)
-                  ) {
-                    deliveredToUser = true;
-                  }
+                  await deliverAgentMessage(channel, chatJid, text, lease);
                 },
                 runBatchId: batchId,
                 systemContext: multiAgentCtx || undefined,
@@ -919,9 +935,15 @@ async function executeAutomationActions(
                 { ruleId: trace.ruleId, agent: agent.name, status },
                 '[automation] delegation complete',
               );
+              return {
+                status,
+                error:
+                  status === 'error'
+                    ? `${agent.displayName} automation delegation failed.`
+                    : undefined,
+              };
             },
             agent.displayName,
-            true, // skipRetrigger — automation handles routing, coordinator not needed
           );
           delegated = true;
           break;
@@ -1254,10 +1276,18 @@ async function processGroupMessages(
 
       for (const agent of specialists) {
         const savedConfig = group.containerConfig;
-        const taskId = `mention-${agent.name}-${Date.now()}`;
-        queue.enqueueDelegation(
-          chatJid,
-          taskId,
+        delegationManager.delegate(
+          {
+            groupJid: chatJid,
+            groupFolder: group.folder,
+            coordinatorAgentId: `${group.folder}/mention-router`,
+            targetAgentId: `${group.folder}/${agent.name}`,
+            message: prompt,
+            visibility: threadId ? 'portal' : 'main_chat',
+            completionPolicy: 'retrigger_coordinator',
+            batchId,
+            threadId,
+          },
           async () => {
             const lease = beginDeliveryLease(responseJid, batchId);
             let deliveredToUser = false;
@@ -1411,6 +1441,14 @@ async function processGroupMessages(
               is_from_me: false,
               is_bot_message: false,
             });
+            return {
+              status,
+              result: resultNote,
+              error:
+                status === 'error'
+                  ? `${agent.displayName} was unable to respond.`
+                  : undefined,
+            };
           },
           agent.displayName,
         );
@@ -2944,7 +2982,7 @@ async function main(): Promise<void> {
     message: string;
     sourceAgent: string;
     sourceBatchId?: string;
-    completionPolicy?: 'final_response' | 'retrigger_coordinator';
+    completionPolicy?: DelegationCompletionPolicy;
     title?: string;
   }): void => {
     const {
@@ -3018,6 +3056,7 @@ async function main(): Promise<void> {
     ).delegationTimeoutMs;
     const taskId = `delegation-${agent.name}-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const portalThreadId = `portal-${taskId}`;
+    const batchId = sourceBatchId || `delegation-${randomUUID()}`;
     // Derive a short display title so concurrent portals to the same
     // specialist are visually distinct. Prefer an explicit title (action
     // button label, open_portal arg); fall back to the first line of the
@@ -3047,11 +3086,19 @@ async function main(): Promise<void> {
       sourceAgent,
       portalTitle,
     );
-    queue.enqueueDelegation(
-      chatJid,
-      taskId,
+    delegationManager.delegate(
+      {
+        groupJid: chatJid,
+        groupFolder: group.folder,
+        coordinatorAgentId: `${group.folder}/${sourceAgent}`,
+        targetAgentId: `${group.folder}/${agent.name}`,
+        message,
+        visibility: 'portal',
+        completionPolicy: completionPolicy || 'final_response',
+        batchId,
+        threadId: portalThreadId,
+      },
       async () => {
-        const batchId = sourceBatchId || `delegation-${randomUUID()}`;
         const lease = beginDeliveryLease(chatJid, batchId);
         let deliveredToUser = false;
         group.containerConfig = {
@@ -3250,9 +3297,16 @@ async function main(): Promise<void> {
           { group: group.name, target: targetAgent, status },
           'Delegation complete',
         );
+        return {
+          status,
+          result: resultNote,
+          error:
+            status === 'error'
+              ? `${agent.displayName} was unable to complete the delegated task.`
+              : undefined,
+        };
       },
       agent.displayName,
-      completionPolicy !== 'retrigger_coordinator',
     );
   };
 
@@ -3315,7 +3369,7 @@ async function main(): Promise<void> {
         }
       }
     },
-    onGroupRegistered: (jid) => {
+    onGroupRegistered: (_jid) => {
       // Broadcast to web UI so sidebar updates immediately
       for (const ch of channels) {
         if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
