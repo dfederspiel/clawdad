@@ -3,10 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { MAX_CONCURRENT_CONTAINERS } from './config.js';
-import type {
-  DelegationCompletionPolicy,
-  DelegationRun,
-} from './delegation/types.js';
+import type { DelegationRun } from './delegation/types.js';
 import { resolveAgentIpcInputPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { WorkPhase, WorkStateEvent } from './types.js';
@@ -18,7 +15,6 @@ interface QueuedTask {
   groupJid: string;
   agentName?: string;
   fn: () => Promise<unknown>;
-  completionPolicy?: DelegationCompletionPolicy;
 }
 
 export interface QueuedDelegationWork {
@@ -26,8 +22,13 @@ export interface QueuedDelegationWork {
   runId: string;
   groupJid: string;
   agentName?: string;
-  completionPolicy: DelegationCompletionPolicy;
   fn: () => Promise<unknown>;
+}
+
+export interface DelegationDrainEvent {
+  groupJid: string;
+  runIds: string[];
+  hasPendingNormalMessage: boolean;
 }
 
 const MAX_RETRIES = 5;
@@ -52,8 +53,8 @@ interface GroupState {
   activeDelegations: number;
   activeDelegationAgents: string[];
   pendingDelegations: QueuedTask[];
-  completedDelegationRetriggers: boolean[]; // Per-delegation: true = needs retrigger, false = skip
-  suppressNextDelegationRetrigger: boolean;
+  completedDelegationRunIds: string[];
+  freshMessageDuringDelegation: boolean;
   // Snapshotted coordinator identity for idle timer pause/resume.
   // Set when first delegation starts, cleared when all delegations complete.
   // Survives runForGroup() cleanup so resume can find it.
@@ -76,6 +77,9 @@ export class GroupQueue {
         coordinatorAgent: string,
         active: boolean,
       ) => void)
+    | null = null;
+  private onDelegationsDrainedFn:
+    | ((event: DelegationDrainEvent) => void)
     | null = null;
   private shuttingDown = false;
 
@@ -100,8 +104,8 @@ export class GroupQueue {
         activeDelegations: 0,
         activeDelegationAgents: [],
         pendingDelegations: [],
-        completedDelegationRetriggers: [],
-        suppressNextDelegationRetrigger: false,
+        completedDelegationRunIds: [],
+        freshMessageDuringDelegation: false,
         delegationCoordinatorId: null,
       };
       this.groups.set(groupJid, state);
@@ -140,6 +144,14 @@ export class GroupQueue {
     ) => void,
   ): void {
     this.onDelegationStateFn = fn;
+  }
+
+  /**
+   * Called when the scheduler has no active or pending delegation work for a group.
+   * Delegation lifecycle policy lives with the subscriber, not the queue.
+   */
+  setOnDelegationsDrained(fn: (event: DelegationDrainEvent) => void): void {
+    this.onDelegationsDrainedFn = fn;
   }
 
   /** Called by ContainerPool when idle pool count changes. */
@@ -191,7 +203,7 @@ export class GroupQueue {
         mode,
       );
       if (state.activeDelegations > 0 && mode === 'normal') {
-        state.suppressNextDelegationRetrigger = true;
+        state.freshMessageDuringDelegation = true;
       }
       if (state.idleWaiting) {
         this.closeStdin(groupJid);
@@ -213,7 +225,7 @@ export class GroupQueue {
         mode,
       );
       if (state.activeDelegations > 0 && mode === 'normal') {
-        state.suppressNextDelegationRetrigger = true;
+        state.freshMessageDuringDelegation = true;
       }
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
@@ -384,23 +396,19 @@ export class GroupQueue {
    * Enqueue a delegation task. Delegations bypass per-group serialization
    * (they can run alongside the coordinator and other delegations) but
    * still count against the global MAX_CONCURRENT_CONTAINERS limit.
-   * When all delegations for a group complete, the coordinator is re-triggered.
    */
   enqueueDelegation(
     groupJid: string,
     taskId: string,
     fn: () => Promise<unknown>,
     agentName?: string,
-    skipRetrigger?: boolean,
+    _skipRetrigger?: boolean,
   ): void {
     this.enqueueWork({
       kind: 'delegation',
       runId: taskId,
       groupJid,
       agentName,
-      completionPolicy: skipRetrigger
-        ? 'final_response'
-        : 'retrigger_coordinator',
       fn,
     });
   }
@@ -440,7 +448,6 @@ export class GroupQueue {
         groupJid: work.groupJid,
         agentName: work.agentName,
         fn: work.fn,
-        completionPolicy: work.completionPolicy,
       });
       logger.debug(
         {
@@ -458,7 +465,6 @@ export class GroupQueue {
       groupJid: work.groupJid,
       agentName: work.agentName,
       fn: work.fn,
-      completionPolicy: work.completionPolicy,
     }).catch((err) =>
       logger.error(
         { groupJid: work.groupJid, runId: work.runId, err },
@@ -477,7 +483,6 @@ export class GroupQueue {
       runId: run.id,
       groupJid: run.groupJid,
       agentName: agentDisplayName,
-      completionPolicy: run.completionPolicy,
       fn,
     });
   }
@@ -532,10 +537,7 @@ export class GroupQueue {
       }
       this.activeWorkCount--;
 
-      // Record whether this delegation needs coordinator re-trigger
-      state.completedDelegationRetriggers.push(
-        task.completionPolicy === 'retrigger_coordinator',
-      );
+      state.completedDelegationRunIds.push(task.id);
 
       if (state.activeDelegations > 0) {
         this.emitWorkState(groupJid, 'delegating', {
@@ -547,8 +549,6 @@ export class GroupQueue {
         state.activeDelegations === 0 &&
         state.pendingDelegations.length === 0
       ) {
-        // All delegations complete — only re-trigger coordinator if at least
-        // one delegation needs it (i.e., was NOT automation-only)
         // Resume coordinator idle timer using the snapshotted identity
         // (mutable fields may have been cleared by runForGroup())
         if (this.onDelegationStateFn && state.delegationCoordinatorId) {
@@ -558,35 +558,27 @@ export class GroupQueue {
           state.delegationCoordinatorId = null;
         }
 
-        const needsRetrigger = state.completedDelegationRetriggers.some(
-          (r) => r,
-        );
-        state.completedDelegationRetriggers = [];
+        const runIds = state.completedDelegationRunIds;
+        const hasPendingNormalMessage = state.freshMessageDuringDelegation;
+        state.completedDelegationRunIds = [];
+        state.freshMessageDuringDelegation = false;
 
-        if (needsRetrigger && !state.suppressNextDelegationRetrigger) {
-          logger.info(
-            { groupJid },
-            'All delegations complete, re-triggering coordinator',
-          );
-          this.enqueueMessageCheck(groupJid, 'delegation_retrigger');
-        } else if (needsRetrigger && state.suppressNextDelegationRetrigger) {
-          logger.info(
-            { groupJid },
-            'All delegations complete, suppressing stale coordinator retrigger in favor of newer messages',
-          );
-          this.emitWorkState(groupJid, 'completed', {
-            summary: 'Delegation batch superseded by newer messages',
-          });
-        } else {
-          logger.info(
-            { groupJid },
-            'All delegations complete, skipping coordinator re-trigger (automation-only)',
-          );
-          this.emitWorkState(groupJid, 'completed', {
-            summary: 'Automation delegations complete',
+        logger.info(
+          { groupJid, runIds, hasPendingNormalMessage },
+          'All delegation work drained',
+        );
+        this.emitWorkState(groupJid, 'completed', {
+          summary: 'Delegation work complete',
+        });
+
+        if (runIds.length > 0) {
+          this.onDelegationsDrainedFn?.({
+            groupJid,
+            runIds,
+            hasPendingNormalMessage,
           });
         }
-        state.suppressNextDelegationRetrigger = false;
+        this.drainGroup(groupJid);
       } else {
         // More delegations pending — drain them
         this.drainDelegations(groupJid);

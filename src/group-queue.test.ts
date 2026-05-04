@@ -454,7 +454,7 @@ describe('GroupQueue', () => {
     });
 
     queue.setProcessMessagesFn(processMessages);
-    queue.setOnDelegationState((groupJid, groupFolder, coord, active) => {
+    queue.setOnDelegationState((_groupJid, groupFolder, coord, active) => {
       delegationEvents.push({ groupFolder, coord, active });
     });
 
@@ -765,8 +765,9 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(10);
   });
 
-  it('re-triggers delegations in coordinator-only mode', async () => {
+  it('lets subscribers re-trigger after delegation work drains', async () => {
     const modes: string[] = [];
+    const drainedRunIds: string[][] = [];
     let resolveCoordinator: () => void;
     let resolveDelegation: () => void;
 
@@ -781,6 +782,10 @@ describe('GroupQueue', () => {
     });
 
     queue.setProcessMessagesFn(processMessages);
+    queue.setOnDelegationsDrained((event) => {
+      drainedRunIds.push(event.runIds);
+      queue.enqueueMessageCheck(event.groupJid, 'delegation_retrigger');
+    });
     queue.enqueueMessageCheck('group1@g.us');
     await vi.advanceTimersByTimeAsync(10);
     queue.registerProcess(
@@ -810,10 +815,12 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     expect(modes).toEqual(['normal', 'delegation_retrigger']);
+    expect(drainedRunIds).toEqual([['del-1']]);
   });
 
-  it('preserves fresh message work over delegation retrigger work', async () => {
+  it('reports fresh message work when delegation work drains', async () => {
     const modes: string[] = [];
+    const drainEvents: Array<{ runIds: string[]; fresh: boolean }> = [];
     let resolveCoordinator: () => void;
     let resolveDelegation: () => void;
 
@@ -828,6 +835,15 @@ describe('GroupQueue', () => {
     });
 
     queue.setProcessMessagesFn(processMessages);
+    queue.setOnDelegationsDrained((event) => {
+      drainEvents.push({
+        runIds: event.runIds,
+        fresh: event.hasPendingNormalMessage,
+      });
+      if (!event.hasPendingNormalMessage) {
+        queue.enqueueMessageCheck(event.groupJid, 'delegation_retrigger');
+      }
+    });
     queue.enqueueMessageCheck('group1@g.us');
     await vi.advanceTimersByTimeAsync(10);
     queue.registerProcess(
@@ -860,5 +876,6 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     expect(modes).toEqual(['normal', 'normal']);
+    expect(drainEvents).toEqual([{ runIds: ['del-1'], fresh: true }]);
   });
 });

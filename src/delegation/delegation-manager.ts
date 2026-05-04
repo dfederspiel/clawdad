@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 
 import { logger } from '../logger.js';
+import type { DelegationDrainEvent, MessageCheckMode } from '../group-queue.js';
 import { DelegationEventBus } from './delegation-events.js';
 import {
   normalizeCompletionPolicy,
@@ -19,6 +20,7 @@ export interface DelegationScheduler {
     fn: () => Promise<DelegationExecutionResult>,
     agentDisplayName?: string,
   ): void;
+  enqueueMessageCheck(groupJid: string, mode: MessageCheckMode): void;
 }
 
 export class DelegationManager {
@@ -58,6 +60,43 @@ export class DelegationManager {
       agentDisplayName,
     );
     return run;
+  }
+
+  handleDelegationsDrained(event: DelegationDrainEvent): void {
+    const runs = event.runIds
+      .map((runId) => this.store.get(runId))
+      .filter((run): run is DelegationRun => Boolean(run));
+    const coordinatorRuns = runs.filter(
+      (run) => run.completionPolicy === 'retrigger_coordinator',
+    );
+
+    if (coordinatorRuns.length === 0) {
+      logger.info(
+        { groupJid: event.groupJid, runIds: event.runIds },
+        'Delegation drain complete with no coordinator retrigger policy',
+      );
+      return;
+    }
+
+    if (event.hasPendingNormalMessage) {
+      logger.info(
+        { groupJid: event.groupJid, runIds: coordinatorRuns.map((r) => r.id) },
+        'Delegation coordinator retrigger superseded by newer user work',
+      );
+      for (const run of coordinatorRuns) {
+        const superseded = this.store.update(run.id, { status: 'superseded' });
+        if (superseded) {
+          this.events.emit({ type: 'delegation.superseded', run: superseded });
+        }
+      }
+      return;
+    }
+
+    logger.info(
+      { groupJid: event.groupJid, runIds: coordinatorRuns.map((r) => r.id) },
+      'Delegation manager re-triggering coordinator',
+    );
+    this.scheduler.enqueueMessageCheck(event.groupJid, 'delegation_retrigger');
   }
 
   private async execute(

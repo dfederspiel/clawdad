@@ -360,6 +360,9 @@ queue.setOnDelegationState(
     }
   },
 );
+queue.setOnDelegationsDrained((event) =>
+  delegationManager.handleDelegationsDrained(event),
+);
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
