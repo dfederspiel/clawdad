@@ -1,7 +1,11 @@
 import { randomUUID } from 'crypto';
 
 import { logger } from '../logger.js';
-import type { DelegationDrainEvent, MessageCheckMode } from '../group-queue.js';
+import type {
+  DelegationDrainEvent,
+  MessageCheckMode,
+  QueuedDelegationWork,
+} from '../group-queue.js';
 import { DelegationEventBus } from './delegation-events.js';
 import {
   normalizeCompletionPolicy,
@@ -15,11 +19,7 @@ import {
 } from './types.js';
 
 export interface DelegationScheduler {
-  scheduleDelegation(
-    run: DelegationRun,
-    fn: () => Promise<DelegationExecutionResult>,
-    agentDisplayName?: string,
-  ): void;
+  enqueueWork(work: QueuedDelegationWork): void;
   enqueueMessageCheck(groupJid: string, mode: MessageCheckMode): void;
 }
 
@@ -54,11 +54,13 @@ export class DelegationManager {
 
     this.store.create(run);
     this.events.emit({ type: 'delegation.created', run });
-    this.scheduler.scheduleDelegation(
-      run,
-      async () => this.execute(run.id, fn),
-      agentDisplayName,
-    );
+    this.scheduler.enqueueWork({
+      kind: 'delegation',
+      runId: run.id,
+      groupJid: run.groupJid,
+      agentName: agentDisplayName,
+      fn: async () => this.execute(run.id, fn),
+    });
     return run;
   }
 

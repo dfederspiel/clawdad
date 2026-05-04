@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 
 import { MAX_CONCURRENT_CONTAINERS } from './config.js';
-import type { DelegationRun } from './delegation/types.js';
 import { resolveAgentIpcInputPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { WorkPhase, WorkStateEvent } from './types.js';
@@ -392,27 +391,6 @@ export class GroupQueue {
     return state.activeDelegations > 0 || state.pendingDelegations.length > 0;
   }
 
-  /**
-   * Enqueue a delegation task. Delegations bypass per-group serialization
-   * (they can run alongside the coordinator and other delegations) but
-   * still count against the global MAX_CONCURRENT_CONTAINERS limit.
-   */
-  enqueueDelegation(
-    groupJid: string,
-    taskId: string,
-    fn: () => Promise<unknown>,
-    agentName?: string,
-    _skipRetrigger?: boolean,
-  ): void {
-    this.enqueueWork({
-      kind: 'delegation',
-      runId: taskId,
-      groupJid,
-      agentName,
-      fn,
-    });
-  }
-
   enqueueWork(work: QueuedDelegationWork): void {
     if (this.shuttingDown) return;
     if (work.kind !== 'delegation') return;
@@ -471,20 +449,6 @@ export class GroupQueue {
         'Unhandled error in runDelegation',
       ),
     );
-  }
-
-  scheduleDelegation(
-    run: DelegationRun,
-    fn: () => Promise<unknown>,
-    agentDisplayName?: string,
-  ): void {
-    this.enqueueWork({
-      kind: 'delegation',
-      runId: run.id,
-      groupJid: run.groupJid,
-      agentName: agentDisplayName,
-      fn,
-    });
   }
 
   private async runDelegation(

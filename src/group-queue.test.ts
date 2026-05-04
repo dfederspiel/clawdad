@@ -472,16 +472,17 @@ describe('GroupQueue', () => {
     );
 
     // Enqueue a delegation while coordinator is still running
-    queue.enqueueDelegation(
-      'group1@g.us',
-      'del-1',
-      async () => {
+    queue.enqueueWork({
+      kind: 'delegation',
+      groupJid: 'group1@g.us',
+      runId: 'del-1',
+      agentName: 'analyst',
+      fn: async () => {
         await new Promise<void>((resolve) => {
           resolveDelegation = resolve;
         });
       },
-      'analyst',
-    );
+    });
     await vi.advanceTimersByTimeAsync(10);
 
     // Delegation started → pause should have fired with snapshotted identity
@@ -562,16 +563,17 @@ describe('GroupQueue', () => {
 
     // Enqueue delegation for group A — concurrency full (2/2), so it queues.
     // Snapshot is taken HERE at enqueue time.
-    queue.enqueueDelegation(
-      'groupA@g.us',
-      'del-1',
-      async () => {
+    queue.enqueueWork({
+      kind: 'delegation',
+      groupJid: 'groupA@g.us',
+      runId: 'del-1',
+      agentName: 'analyst',
+      fn: async () => {
         await new Promise<void>((resolve) => {
           resolveDelegation = resolve;
         });
       },
-      'analyst',
-    );
+    });
     await vi.advanceTimersByTimeAsync(10);
 
     // Delegation is queued, no events yet
@@ -643,16 +645,17 @@ describe('GroupQueue', () => {
     );
 
     // First delegation — snapshot taken at enqueue
-    queue.enqueueDelegation(
-      'group1@g.us',
-      'del-1',
-      async () => {
+    queue.enqueueWork({
+      kind: 'delegation',
+      groupJid: 'group1@g.us',
+      runId: 'del-1',
+      agentName: 'analyst',
+      fn: async () => {
         await new Promise<void>((resolve) => {
           resolveDel1 = resolve;
         });
       },
-      'analyst',
-    );
+    });
     await vi.advanceTimersByTimeAsync(10);
 
     // pause fired
@@ -686,16 +689,17 @@ describe('GroupQueue', () => {
     );
 
     // Second delegation — new snapshot
-    queue.enqueueDelegation(
-      'group1@g.us',
-      'del-2',
-      async () => {
+    queue.enqueueWork({
+      kind: 'delegation',
+      groupJid: 'group1@g.us',
+      runId: 'del-2',
+      agentName: 'reviewer',
+      fn: async () => {
         await new Promise<void>((resolve) => {
           resolveDel2 = resolve;
         });
       },
-      'reviewer',
-    );
+    });
     await vi.advanceTimersByTimeAsync(10);
 
     expect(delegationEvents).toHaveLength(3);
@@ -796,17 +800,17 @@ describe('GroupQueue', () => {
       'coordinator',
     );
 
-    queue.enqueueDelegation(
-      'group1@g.us',
-      'del-1',
-      async () => {
+    queue.enqueueWork({
+      kind: 'delegation',
+      groupJid: 'group1@g.us',
+      runId: 'del-1',
+      agentName: 'analyst',
+      fn: async () => {
         await new Promise<void>((resolve) => {
           resolveDelegation = resolve;
         });
       },
-      'analyst',
-      false,
-    );
+    });
     await vi.advanceTimersByTimeAsync(10);
 
     resolveCoordinator!();
@@ -854,17 +858,17 @@ describe('GroupQueue', () => {
       'coordinator',
     );
 
-    queue.enqueueDelegation(
-      'group1@g.us',
-      'del-1',
-      async () => {
+    queue.enqueueWork({
+      kind: 'delegation',
+      groupJid: 'group1@g.us',
+      runId: 'del-1',
+      agentName: 'analyst',
+      fn: async () => {
         await new Promise<void>((resolve) => {
           resolveDelegation = resolve;
         });
       },
-      'analyst',
-      false,
-    );
+    });
     await vi.advanceTimersByTimeAsync(10);
 
     // New inbound user work arrives while the delegation is still active.

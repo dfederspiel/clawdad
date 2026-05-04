@@ -44,11 +44,50 @@ function makeStore(initialRuns: DelegationRun[]) {
 }
 
 describe('DelegationManager drain policy', () => {
+  it('schedules created runs through generic queue work', async () => {
+    const store = makeStore([]);
+    const events = new DelegationEventBus();
+    const scheduler = {
+      enqueueWork: vi.fn(),
+      enqueueMessageCheck: vi.fn(),
+    };
+    const manager = new DelegationManager(store, events, scheduler);
+
+    const run = manager.delegate(
+      {
+        groupJid: 'group@g.us',
+        groupFolder: 'team-folder',
+        coordinatorAgentId: 'team-folder/coordinator',
+        targetAgentId: 'team-folder/scout',
+        message: 'Inspect this',
+        completionPolicy: 'final_response',
+      },
+      async () => ({ status: 'success', result: 'done' }),
+      'Scout',
+    );
+
+    expect(scheduler.enqueueWork).toHaveBeenCalledWith({
+      kind: 'delegation',
+      runId: run.id,
+      groupJid: 'group@g.us',
+      agentName: 'Scout',
+      fn: expect.any(Function),
+    });
+
+    const scheduled = scheduler.enqueueWork.mock.calls[0][0];
+    await scheduled.fn();
+    expect(store.update).toHaveBeenCalledWith(run.id, {
+      status: 'completed',
+      completedAt: expect.any(String),
+      result: 'done',
+    });
+  });
+
   it('re-triggers the coordinator when drained runs request it', () => {
     const store = makeStore([makeRun({ id: 'del-1' })]);
     const events = new DelegationEventBus();
     const scheduler = {
-      scheduleDelegation: vi.fn(),
+      enqueueWork: vi.fn(),
       enqueueMessageCheck: vi.fn(),
     };
     const manager = new DelegationManager(store, events, scheduler);
@@ -72,7 +111,7 @@ describe('DelegationManager drain policy', () => {
     ]);
     const events = new DelegationEventBus();
     const scheduler = {
-      scheduleDelegation: vi.fn(),
+      enqueueWork: vi.fn(),
       enqueueMessageCheck: vi.fn(),
     };
     const manager = new DelegationManager(store, events, scheduler);
@@ -93,7 +132,7 @@ describe('DelegationManager drain policy', () => {
     const emitted: DelegationEvent[] = [];
     events.subscribe((event) => emitted.push(event));
     const scheduler = {
-      scheduleDelegation: vi.fn(),
+      enqueueWork: vi.fn(),
       enqueueMessageCheck: vi.fn(),
     };
     const manager = new DelegationManager(store, events, scheduler);
