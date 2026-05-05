@@ -80,7 +80,7 @@ export const TRIGGER_IDLE_TIMEOUT = parseInt(
 ); // 1min default — shorter timeout for triggered agents
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
-  parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
+  parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '7', 10) || 7,
 );
 export const WARM_POOL_ENABLED =
   (process.env.WARM_POOL_ENABLED || envConfig.WARM_POOL_ENABLED) === 'true';
