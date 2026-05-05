@@ -54,7 +54,7 @@ export interface CapabilityProfile {
 const ANTHROPIC_PROFILE: CapabilityProfile = {
   receivesMcpTools: true,
   streaming: 'chunked',
-  delegationTimeoutMs: 120_000, // 2 min — fast cloud API, fail fast on hangs
+  delegationTimeoutMs: 180_000, // 3 min — allows headroom for large prompts
 };
 
 // Ollama streaming is always per-token on the wire (the host buffers in
