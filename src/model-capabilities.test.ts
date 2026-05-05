@@ -30,13 +30,13 @@ describe('getCapabilityProfile', () => {
     const p = getCapabilityProfile(undefined);
     expect(p.receivesMcpTools).toBe(true);
     expect(p.streaming).toBe('chunked');
-    expect(p.delegationTimeoutMs).toBe(120_000);
+    expect(p.delegationTimeoutMs).toBe(180_000);
   });
 
   it('returns the anthropic profile for explicit anthropic', () => {
     const p = getCapabilityProfile({ provider: 'anthropic' });
     expect(p.receivesMcpTools).toBe(true);
-    expect(p.delegationTimeoutMs).toBe(120_000);
+    expect(p.delegationTimeoutMs).toBe(180_000);
   });
 
   it('reports small ollama models as tool-less (not on the allowlist)', () => {
