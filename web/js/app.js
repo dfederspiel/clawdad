@@ -6,6 +6,7 @@ import {
   loadPortalStateFor,
   addLiveThreadForJid,
   setDrawerStateFor,
+  savePortalStateFor,
 } from './portal-persistence.js';
 import { playNotification, TONES, isMuted } from './sounds.js';
 import { App } from './components/App.js';
@@ -547,11 +548,35 @@ api.onSSE('achievement', (data) => {
 });
 
 api.onSSE('messages_cleared', (data) => {
+  // The server has already deleted threads for this jid (clearMessages drops
+  // both trigger and portal rows). Mirror that on the client so portal pills,
+  // tool-activity feeds, and persisted drawer state all disappear without
+  // requiring a page refresh — see #116.
+  const droppedThreadIds = new Set();
+  const remainingPortals = {};
+  for (const [tid, portal] of Object.entries(portalThreads.value)) {
+    if (portal.jid === data.jid) {
+      droppedThreadIds.add(tid);
+    } else {
+      remainingPortals[tid] = portal;
+    }
+  }
+  if (droppedThreadIds.size > 0) {
+    portalThreads.value = remainingPortals;
+    const remainingProgress = {};
+    for (const [tid, prog] of Object.entries(portalProgress.value)) {
+      if (!droppedThreadIds.has(tid)) remainingProgress[tid] = prog;
+    }
+    portalProgress.value = remainingProgress;
+  }
+  savePortalStateFor(data.jid, { liveThreadIds: [], drawer: null });
+
   if (data.jid === selectedJid.value) {
     messages.value = [];
     threadMeta.value = {};
     openThreads.value = {};
     threadTyping.value = {};
+    if (agentPanel.value) agentPanel.value = null;
   }
 });
 
