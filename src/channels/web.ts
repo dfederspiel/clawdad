@@ -350,6 +350,27 @@ export class WebChannel implements Channel {
     this.broadcast('groups_changed', {});
   }
 
+  /** Surface a scheduled-task failure to the notification bell + sidebar. */
+  broadcastTaskFailed(event: {
+    taskId: string;
+    taskTitle: string;
+    groupFolder: string;
+    groupName: string;
+    chatJid: string;
+    error: string;
+    runAt: string;
+  }): void {
+    this.broadcast('task_failed', {
+      task_id: event.taskId,
+      task_title: event.taskTitle,
+      group_folder: event.groupFolder,
+      group_name: event.groupName,
+      jid: event.chatJid,
+      error: event.error,
+      run_at: event.runAt,
+    });
+  }
+
   private sanitizeAgentName(name: string): string {
     return name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
   }
@@ -1805,6 +1826,27 @@ You do not delegate. If something falls outside your role, say so plainly in you
       updateTask(taskId, { status: 'paused' });
       this.broadcastGroupsChanged();
       return this.json(res, 200, { ok: true });
+    }
+
+    // POST /api/tasks/:id/run — manually trigger a task immediately
+    const taskRunMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/run$/);
+    if (method === 'POST' && taskRunMatch) {
+      const taskId = decodeURIComponent(taskRunMatch[1]);
+      const task = getTaskById(taskId);
+      if (!task) return this.json(res, 404, { error: 'Task not found' });
+      if (!this.opts.onRunTaskNow) {
+        return this.json(res, 503, {
+          error: 'Manual task trigger not wired on this channel',
+        });
+      }
+      try {
+        this.opts.onRunTaskNow(taskId);
+      } catch (err) {
+        return this.json(res, 500, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return this.json(res, 202, { ok: true });
     }
 
     // POST /api/tasks/:id/resume — resume a task

@@ -139,7 +139,11 @@ import {
   evaluateAutomationRules,
   AutomationTraceEntry,
 } from './automation-rules.js';
-import { startSchedulerLoop } from './task-scheduler.js';
+import {
+  runTaskNow,
+  startSchedulerLoop,
+  type SchedulerDependencies,
+} from './task-scheduler.js';
 import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import type { MediaArtifact } from './types.js';
 import { logger } from './logger.js';
@@ -2991,8 +2995,7 @@ async function main(): Promise<void> {
     }
   };
 
-  // Start subsystems (independently of connection handler)
-  startSchedulerLoop({
+  const schedulerDeps: SchedulerDependencies = {
     registeredGroups: () => registeredGroups,
     getSessions: () => sessions,
     queue,
@@ -3030,7 +3033,26 @@ async function main(): Promise<void> {
     onProgress: (jid, event) => broadcastProgress(jid, event),
     getMainChatJid,
     onTasksChanged,
-  });
+    onTaskFailed: (event) => {
+      for (const ch of channels) {
+        if (ch.name === 'web' && 'broadcastTaskFailed' in ch) {
+          (
+            ch as { broadcastTaskFailed: (e: typeof event) => void }
+          ).broadcastTaskFailed(event);
+          break;
+        }
+      }
+    },
+  };
+
+  // Wire manual task triggering on the same deps as the scheduler loop —
+  // mirrors the `onUserDelegation` pattern: opts are post-attached because
+  // schedulerDeps depends on `channels`, which is populated above.
+  channelOpts.onRunTaskNow = (taskId: string) =>
+    runTaskNow(taskId, schedulerDeps);
+
+  // Start subsystems (independently of connection handler)
+  startSchedulerLoop(schedulerDeps);
 
   // Delegation handler — invokable from both the IPC MCP tool (coordinator
   // calls delegate_to_agent) and the web channel (action-button click with

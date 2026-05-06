@@ -83,6 +83,7 @@ export function NotificationBell() {
               <div class="max-h-[min(70vh,28rem)] overflow-y-auto">
                 ${entries.map((n) => {
                   const isUnread = !lastRead[n.jid] || n.timestamp > lastRead[n.jid];
+                  const isFailure = n.kind === 'task_failed';
                   return html`
                     <button
                       key=${n.id}
@@ -90,12 +91,15 @@ export function NotificationBell() {
                       onClick=${() => handleEntryClick(n)}
                     >
                       <span
-                        class="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${isUnread ? 'bg-accent' : 'bg-transparent'}"
+                        class="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${isUnread ? (isFailure ? 'bg-err' : 'bg-accent') : 'bg-transparent'}"
                         aria-hidden="true"
                       />
                       <div class="min-w-0 flex-1">
                         <div class="flex items-center gap-2 text-xs">
-                          <span class="font-semibold text-txt truncate">${esc(n.senderName || 'Agent')}</span>
+                          ${isFailure && html`
+                            <span class="text-err font-bold shrink-0" title="Task failed" aria-hidden="true">!</span>
+                          `}
+                          <span class="font-semibold ${isFailure ? 'text-err' : 'text-txt'} truncate">${esc(n.senderName || 'Agent')}</span>
                           <span class="text-txt-muted truncate">${esc(n.groupName)}</span>
                           <span class="text-txt-muted ml-auto shrink-0">${formatRelative(n.timestamp)}</span>
                         </div>

@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
-import { pauseTask, resumeTask, cancelTask, getTaskLogs } from '../app.js';
+import { pauseTask, resumeTask, cancelTask, getTaskLogs, runTaskNow } from '../app.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 
 function relativeTime(iso) {
@@ -37,6 +37,7 @@ function describeCron(expr) {
 // SVG icons as tiny components
 const PauseIcon = () => html`<svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>`;
 const PlayIcon = () => html`<svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"/></svg>`;
+const BoltIcon = () => html`<svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/></svg>`;
 const TrashIcon = () => html`<svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>`;
 const ChevronIcon = ({ open }) => html`<svg class="w-3 h-3 transition-transform ${open ? 'rotate-90' : ''}" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>`;
 
@@ -84,6 +85,16 @@ export function TaskItem({ task, compact }) {
     }
   }
 
+  async function onRunNow(e) {
+    e.stopPropagation();
+    setActing(true);
+    try {
+      await runTaskNow(task.id);
+    } finally {
+      setActing(false);
+    }
+  }
+
   const dotColor = isPaused
     ? 'bg-yellow-400'
     : isCompleted
@@ -107,6 +118,14 @@ export function TaskItem({ task, compact }) {
         <span class="text-[11px] text-txt truncate flex-1 min-w-0">${title}</span>
         <span class="text-[10px] text-txt-muted font-mono shrink-0">${scheduleLabel}</span>
         <div class="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/task:opacity-100 transition-opacity">
+          <button
+            class="p-0.5 rounded text-accent hover:bg-accent/10 transition-colors"
+            onClick=${onRunNow}
+            disabled=${acting}
+            title="Run now"
+          >
+            <${BoltIcon} />
+          </button>
           ${!isCompleted && html`
             <button
               class="p-0.5 rounded ${isPaused ? 'text-green-400 hover:bg-green-400/10' : 'text-yellow-400 hover:bg-yellow-400/10'} transition-colors"
