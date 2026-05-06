@@ -278,7 +278,24 @@ export function startCredentialProxy(
         const isHttps = upstreamUrl.protocol === 'https:';
         const makeRequest = isHttps ? httpsRequest : httpRequest;
 
-        const body = Buffer.concat(chunks);
+        let body = Buffer.concat(chunks);
+
+        // Strip fields the upstream LiteLLM proxy doesn't understand.
+        // The Claude Agent SDK sends "context_management" when the
+        // context-management beta is active; LiteLLM rejects it as
+        // "Extra inputs are not permitted".
+        if (body.length > 0 && req.method === 'POST') {
+          try {
+            const parsed = JSON.parse(body.toString('utf-8'));
+            if (parsed.context_management !== undefined) {
+              delete parsed.context_management;
+              body = Buffer.from(JSON.stringify(parsed));
+            }
+          } catch {
+            // not JSON — forward as-is
+          }
+        }
+
         const headers: Record<string, string | number | string[] | undefined> =
           {
             ...(req.headers as Record<string, string>),
