@@ -3,6 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import { getAchievementsForContainer } from './achievements.js';
+import { buildMultiAgentContext, discoverAgents } from './agent-discovery.js';
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
   ContainerOutput,
@@ -22,6 +23,10 @@ import { evaluateAutomationRules } from './automation-rules.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
+import {
+  resolveEffectiveRuntime,
+  resolveTurnConstraints,
+} from './runtime-resolution.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
@@ -137,6 +142,15 @@ async function runTask(
     return;
   }
 
+  // Resolve agents so scheduled tasks get the same agent-aware container
+  // input as interactive runs (canDelegate, systemContext, runtime, etc.).
+  const agents = discoverAgents(group);
+  const coordinator = agents.find((a) => !a.trigger) || agents[0];
+  const isMultiAgent = agents.length > 1;
+  const multiAgentCtx = isMultiAgent
+    ? buildMultiAgentContext(coordinator, agents)
+    : undefined;
+
   // Update tasks snapshot for container to read (filtered by group)
   const isMain = group.isMain === true;
   const tasks = getAllTasks();
@@ -189,7 +203,13 @@ async function runTask(
         chatJid: task.chat_jid,
         isMain,
         isScheduledTask: true,
-        assistantName: ASSISTANT_NAME,
+        assistantName: coordinator.displayName || ASSISTANT_NAME,
+        agentId: coordinator.id,
+        agentName: coordinator.name,
+        runtime: resolveEffectiveRuntime(coordinator, task.group_folder),
+        constraints: resolveTurnConstraints(coordinator, group),
+        canDelegate: !coordinator.trigger,
+        systemContext: multiAgentCtx,
         mainChatJid: isMain ? undefined : deps.getMainChatJid?.(),
         script: task.script || undefined,
         achievements: getAchievementsForContainer(),
