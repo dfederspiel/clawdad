@@ -66,6 +66,29 @@ export async function ollamaModelSupportsTools(model: string): Promise<boolean> 
 
 const MAX_TOOL_TURNS = 10;
 
+/**
+ * Tools whose execution itself produces a user-visible message in the chat.
+ * After the model invokes one, we exit the tool loop without giving it
+ * another turn — Ollama models trained on tool-use are prone to emit a
+ * conversational summary after a tool ("Hello!" after a `send_message`
+ * that already greeted the user), which lands as a duplicate bubble.
+ *
+ * See #75 for the full analysis. Side-effect tools (set_agent_status,
+ * unlock_achievement, play_sound, etc.) are intentionally absent — they
+ * don't produce visible content, so the model should still get a turn
+ * to author the actual reply afterwards.
+ */
+export const USER_VISIBLE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'mcp__nanoclaw__send_message',
+  'mcp__nanoclaw__publish_media',
+  'mcp__nanoclaw__publish_browser_snapshot',
+  'mcp__nanoclaw__escalate',
+]);
+
+export function isUserVisibleTool(qualifiedName: string): boolean {
+  return USER_VISIBLE_TOOL_NAMES.has(qualifiedName);
+}
+
 interface ContainerInputLike {
   chatJid: string;
   groupFolder: string;
@@ -376,6 +399,7 @@ export class OllamaRuntime {
             content: response.message.content ?? '',
             tool_calls: toolCalls,
           });
+          let userVisibleDelivered = false;
           for (const call of toolCalls) {
             const name = call.function.name;
             const args = call.function.arguments ?? {};
@@ -386,7 +410,18 @@ export class OllamaRuntime {
               content: result.content,
               tool_name: name,
             });
-            if (!result.isError) deliveredViaTools = true;
+            if (!result.isError) {
+              deliveredViaTools = true;
+              if (isUserVisibleTool(name)) userVisibleDelivered = true;
+            }
+          }
+          // If any successful tool call already delivered user-visible
+          // content, end the turn — see USER_VISIBLE_TOOL_NAMES (#75).
+          if (userVisibleDelivered) {
+            log(
+              `Ollama: ${model} delivered user-visible content via tool; ending turn`,
+            );
+            break;
           }
           continue;
         }
