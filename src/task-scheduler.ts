@@ -90,6 +90,7 @@ export interface SchedulerDependencies {
     proc: ChildProcess,
     containerName: string,
     groupFolder: string,
+    agentName: string,
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
   setTyping?: (jid: string, isTyping: boolean) => Promise<void>;
@@ -235,7 +236,13 @@ export async function runTask(
         achievements: getAchievementsForContainer(),
       },
       (proc, containerName) =>
-        deps.onProcess(queueJid, proc, containerName, task.group_folder),
+        deps.onProcess(
+          queueJid,
+          proc,
+          containerName,
+          task.group_folder,
+          coordinator.name,
+        ),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
