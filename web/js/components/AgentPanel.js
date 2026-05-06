@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { agentPanel, portalThreads, portalProgress, selectedJid } from '../app.js';
 import * as api from '../api.js';
 import { MessageBody } from './MessageBody.js';
+import { formatMessageTimestamp } from './Message.js';
 import {
   removeLiveThreadForJid,
   setDrawerStateFor,
@@ -11,7 +12,7 @@ import {
 function formatTime(ts) {
   if (!ts) return '';
   try {
-    return new Date(ts).toLocaleTimeString();
+    return formatMessageTimestamp(ts);
   } catch {
     return '';
   }
