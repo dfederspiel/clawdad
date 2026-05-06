@@ -140,7 +140,11 @@ import {
   evaluateAutomationRules,
   AutomationTraceEntry,
 } from './automation-rules.js';
-import { startSchedulerLoop } from './task-scheduler.js';
+import {
+  runTaskNow,
+  startSchedulerLoop,
+  type SchedulerDependencies,
+} from './task-scheduler.js';
 import { startPolarisSessionKeepalive } from './polaris-session-keepalive.js';
 import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import type { MediaArtifact } from './types.js';
@@ -2983,6 +2987,94 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Shared callback: tasks mutated or a run completed. Refreshes per-group
+  // task snapshots and nudges the web UI to re-sort the sidebar (used when
+  // the user has chosen "upcoming schedule" mode).
+  const onTasksChanged = () => {
+    const tasks = getAllTasks();
+    const taskRows = tasks.map((t) => ({
+      id: t.id,
+      groupFolder: t.group_folder,
+      prompt: t.prompt,
+      script: t.script || undefined,
+      schedule_type: t.schedule_type,
+      schedule_value: t.schedule_value,
+      status: t.status,
+      next_run: t.next_run,
+    }));
+    for (const group of Object.values(registeredGroups)) {
+      writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
+    }
+    for (const ch of channels) {
+      if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
+        (ch as { broadcastGroupsChanged: () => void }).broadcastGroupsChanged();
+        break;
+      }
+    }
+  };
+
+  const schedulerDeps: SchedulerDependencies = {
+    registeredGroups: () => registeredGroups,
+    getSessions: () => sessions,
+    queue,
+    onProcess: (groupJid, proc, containerName, groupFolder) =>
+      queue.registerProcess(groupJid, proc, containerName, groupFolder),
+    sendMessage: async (jid, rawText) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) {
+        logger.warn({ jid }, 'No channel owns JID, cannot send message');
+        return;
+      }
+      // Always strip <internal> tags — agents use these for reasoning
+      const stripped = stripInternalTags(rawText);
+      if (!stripped) {
+        if (rawText.trim().length > 0) {
+          logger.warn(
+            { jid, rawLen: rawText.length },
+            'Scheduler output entirely stripped by <internal> tag removal — message dropped',
+          );
+        }
+        return;
+      }
+      // Web channel renders blocks client-side — formatOutbound would corrupt
+      // :::blocks JSON by transforming markdown inside the fences.
+      const text =
+        channel.name === 'web'
+          ? stripped
+          : formatOutbound(stripped, channel.name as ChannelType);
+      if (text) await channel.sendMessage(jid, text);
+    },
+    setTyping: async (jid, isTyping) => {
+      const channel = findChannel(channels, jid);
+      await channel?.setTyping?.(jid, isTyping);
+    },
+    onProgress: (jid, event) => broadcastProgress(jid, event),
+    getMainChatJid,
+    onTasksChanged,
+    onTaskFailed: (event) => {
+      for (const ch of channels) {
+        if (ch.name === 'web' && 'broadcastTaskFailed' in ch) {
+          (
+            ch as { broadcastTaskFailed: (e: typeof event) => void }
+          ).broadcastTaskFailed(event);
+          break;
+        }
+      }
+    },
+  };
+
+  // Wire manual task triggering on the same deps as the scheduler loop —
+  // mirrors the `onUserDelegation` pattern: opts are post-attached because
+  // schedulerDeps depends on `channels`, which is populated above.
+  channelOpts.onRunTaskNow = (taskId: string) =>
+    runTaskNow(taskId, schedulerDeps);
+
+  // Start subsystems (independently of connection handler)
+  startSchedulerLoop(schedulerDeps);
+
+  // Delegation handler — invokable from both the IPC MCP tool (coordinator
+  // calls delegate_to_agent) and the web channel (action-button click with
+  // target: "thread"). Same primitive, different entry points.
   const delegationHandler = (request: {
     sourceGroup: string;
     chatJid: string;
@@ -3338,72 +3430,6 @@ async function main(): Promise<void> {
     });
   };
 
-  // Shared callback: tasks mutated or a run completed. Refreshes per-group
-  // task snapshots and nudges the web UI to re-sort the sidebar (used when
-  // the user has chosen "upcoming schedule" mode).
-  const onTasksChanged = () => {
-    const tasks = getAllTasks();
-    const taskRows = tasks.map((t) => ({
-      id: t.id,
-      groupFolder: t.group_folder,
-      prompt: t.prompt,
-      script: t.script || undefined,
-      schedule_type: t.schedule_type,
-      schedule_value: t.schedule_value,
-      status: t.status,
-      next_run: t.next_run,
-    }));
-    for (const group of Object.values(registeredGroups)) {
-      writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
-    }
-    for (const ch of channels) {
-      if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
-        (ch as { broadcastGroupsChanged: () => void }).broadcastGroupsChanged();
-        break;
-      }
-    }
-  };
-
-  // Start subsystems (independently of connection handler)
-  startSchedulerLoop({
-    registeredGroups: () => registeredGroups,
-    getSessions: () => sessions,
-    queue,
-    onProcess: (groupJid, proc, containerName, groupFolder) =>
-      queue.registerProcess(groupJid, proc, containerName, groupFolder),
-    sendMessage: async (jid, rawText) => {
-      const channel = findChannel(channels, jid);
-      if (!channel) {
-        logger.warn({ jid }, 'No channel owns JID, cannot send message');
-        return;
-      }
-      // Always strip <internal> tags — agents use these for reasoning
-      const stripped = stripInternalTags(rawText);
-      if (!stripped) {
-        if (rawText.trim().length > 0) {
-          logger.warn(
-            { jid, rawLen: rawText.length },
-            'Scheduler output entirely stripped by <internal> tag removal — message dropped',
-          );
-        }
-        return;
-      }
-      // Web channel renders blocks client-side — formatOutbound would corrupt
-      // :::blocks JSON by transforming markdown inside the fences.
-      const text =
-        channel.name === 'web'
-          ? stripped
-          : formatOutbound(stripped, channel.name as ChannelType);
-      if (text) await channel.sendMessage(jid, text);
-    },
-    setTyping: async (jid, isTyping) => {
-      const channel = findChannel(channels, jid);
-      await channel?.setTyping?.(jid, isTyping);
-    },
-    onProgress: (jid, event) => broadcastProgress(jid, event),
-    getMainChatJid,
-    onTasksChanged,
-  });
   startPolarisSessionKeepalive();
   startIpcWatcher({
     sendMessage: (jid, rawText, threadId) => {

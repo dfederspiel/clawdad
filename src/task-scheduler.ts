@@ -70,6 +70,16 @@ export function computeNextRun(task: ScheduledTask): string | null {
   return null;
 }
 
+export interface TaskFailureEvent {
+  taskId: string;
+  taskTitle: string;
+  groupFolder: string;
+  groupName: string;
+  chatJid: string;
+  error: string;
+  runAt: string;
+}
+
 export interface SchedulerDependencies {
   registeredGroups: () => Record<string, RegisteredGroup>;
   getSessions: () => Record<string, string>;
@@ -85,9 +95,10 @@ export interface SchedulerDependencies {
   onProgress?: (jid: string, event: ProgressEvent) => void;
   getMainChatJid?: () => string | undefined;
   onTasksChanged?: () => void;
+  onTaskFailed?: (event: TaskFailureEvent) => void;
 }
 
-async function runTask(
+export async function runTask(
   task: ScheduledTask,
   deps: SchedulerDependencies,
   queueJid: string,
@@ -272,10 +283,11 @@ async function runTask(
   }
 
   const durationMs = Date.now() - startTime;
+  const runAt = new Date().toISOString();
 
   logTaskRun({
     task_id: task.id,
-    run_at: new Date().toISOString(),
+    run_at: runAt,
     duration_ms: durationMs,
     status: error ? 'error' : 'success',
     result,
@@ -289,9 +301,41 @@ async function runTask(
       ? result.slice(0, 200)
       : 'Completed';
   updateTaskAfterRun(task.id, nextRun, resultSummary);
+
+  if (error) {
+    deps.onTaskFailed?.({
+      taskId: task.id,
+      taskTitle: task.title || task.prompt.split('\n')[0].slice(0, 80),
+      groupFolder: task.group_folder,
+      groupName: group?.name || task.group_folder,
+      chatJid: task.chat_jid,
+      error,
+      runAt,
+    });
+  }
+
   // next_run has advanced — refresh snapshots + broadcast so the web UI
   // re-sorts the sidebar when sorted by upcoming schedule.
   deps.onTasksChanged?.();
+}
+
+/**
+ * Manually trigger a task to run as soon as the group queue is free.
+ * Mirrors the scheduler-loop dispatch logic so the same code path executes.
+ */
+export function runTaskNow(taskId: string, deps: SchedulerDependencies): void {
+  const task = getTaskById(taskId);
+  if (!task) {
+    throw new Error(`Task not found: ${taskId}`);
+  }
+  const groups = deps.registeredGroups();
+  const queueJid =
+    Object.keys(groups).find(
+      (jid) => groups[jid].folder === task.group_folder,
+    ) ?? task.chat_jid;
+  deps.queue.enqueueTask(queueJid, task.id, () =>
+    runTask(task, deps, queueJid),
+  );
 }
 
 let schedulerRunning = false;

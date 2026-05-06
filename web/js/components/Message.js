@@ -4,6 +4,35 @@ import { selectedGroup } from '../app.js';
 import { openAgentPanel } from './AgentPanel.js';
 import { MessageBody } from './MessageBody.js';
 
+// Time-only is ambiguous in long threads spanning multiple days. Lead with the
+// day name + date so consecutive messages are unambiguous; collapse to
+// "Today" / "Yesterday" for the common case.
+export function formatMessageTimestamp(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday =
+    d.getFullYear() === yesterday.getFullYear() &&
+    d.getMonth() === yesterday.getMonth() &&
+    d.getDate() === yesterday.getDate();
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (sameDay) return `Today · ${time}`;
+  if (isYesterday) return `Yesterday · ${time}`;
+  const datePart = d.toLocaleDateString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+  });
+  return `${datePart} · ${time}`;
+}
+
 // Consistent color for each agent name (hash → HSL hue)
 const AGENT_COLORS = {};
 function agentColor(name) {
@@ -101,9 +130,10 @@ function UsageFooter({ usage, toolHistory, expanded, onToggle, runId, groupFolde
 
 export function Message({ id, role, content, timestamp, senderName, isError, compact, usage, toolHistory, runId }) {
   const isAssistant = role === 'assistant';
-  const time = timestamp
-    ? new Date(timestamp).toLocaleTimeString()
-    : new Date().toLocaleTimeString();
+  const time = formatMessageTimestamp(timestamp);
+  const timeTitle = timestamp
+    ? new Date(timestamp).toLocaleString()
+    : new Date().toLocaleString();
   const [expanded, setExpanded] = useState(false);
 
   const group = selectedGroup.value;
@@ -126,7 +156,7 @@ export function Message({ id, role, content, timestamp, senderName, isError, com
         <div class="text-[11px] font-semibold mb-1" style="color: ${nameColor}">${senderName}</div>
       `}
       <${MessageBody} content=${content} messageId=${id} messageTimestamp=${timestamp} />
-      <div class="text-[11px] text-txt-muted mt-1.5">
+      <div class="text-[11px] text-txt-muted mt-1.5" title=${timeTitle}>
         ${senderName && !showAgentBadge ? `${senderName} \u00B7 ${time}` : time}
       </div>
       ${isAssistant && usage && html`

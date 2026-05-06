@@ -1,5 +1,5 @@
 import { html } from 'htm/preact';
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { groups, selectedJid, selectGroup, messages, lastActivityOverride } from '../app.js';
 import { GroupItem } from './GroupItem.js';
 import { GroupSettings } from './GroupSettings.js';
@@ -16,6 +16,12 @@ const SORT_MODES = [
   { id: 'upcoming', label: 'Upcoming schedule' },
 ];
 
+const SIDEBAR_WIDTH_KEY = 'clawdad.sidebar.width';
+const MIN_WIDTH = 200;
+const MAX_WIDTH = 480;
+const DEFAULT_WIDTH = 250;
+const DESKTOP_MQ = '(min-width: 768px)';
+
 function readSortMode() {
   try {
     const v = localStorage.getItem(SORT_STORAGE_KEY);
@@ -26,11 +32,86 @@ function readSortMode() {
   return 'name';
 }
 
+function readSidebarWidth() {
+  try {
+    const v = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY) || '', 10);
+    if (Number.isFinite(v) && v >= MIN_WIDTH && v <= MAX_WIDTH) return v;
+  } catch {
+    // ignore
+  }
+  return DEFAULT_WIDTH;
+}
+
 export function Sidebar({ open, onClose }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
   const [settingsGroup, setSettingsGroup] = useState(null);
   const [sortMode, setSortMode] = useState(readSortMode);
+  const [width, setWidth] = useState(readSidebarWidth);
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window === 'undefined' ? true : window.matchMedia(DESKTOP_MQ).matches,
+  );
+  const widthRef = useRef(width);
+  widthRef.current = width;
+  const dragRef = useRef({ active: false, startX: 0, startWidth: 0, pointerId: -1 });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia(DESKTOP_MQ);
+    const handler = (e) => setIsDesktop(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  function onResizePointerDown(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    dragRef.current = {
+      active: true,
+      startX: e.clientX,
+      startWidth: widthRef.current,
+      pointerId: e.pointerId,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }
+
+  function onResizePointerMove(e) {
+    if (!dragRef.current.active) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const next = Math.max(
+      MIN_WIDTH,
+      Math.min(MAX_WIDTH, dragRef.current.startWidth + dx),
+    );
+    setWidth(next);
+  }
+
+  function onResizePointerUp(e) {
+    if (!dragRef.current.active) return;
+    dragRef.current.active = false;
+    try {
+      e.currentTarget.releasePointerCapture(dragRef.current.pointerId);
+    } catch {
+      // capture may already be released (cancel events)
+    }
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(widthRef.current));
+    } catch {
+      // ignore
+    }
+  }
+
+  function onResizeDoubleClick() {
+    setWidth(DEFAULT_WIDTH);
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(DEFAULT_WIDTH));
+    } catch {
+      // ignore
+    }
+  }
 
   function onSortChange(e) {
     const next = e.target.value;
@@ -66,13 +147,26 @@ export function Sidebar({ open, onClose }) {
     `}
 
     <!-- Sidebar -->
-    <aside class="
-      fixed inset-y-0 left-0 z-40 w-[280px]
-      bg-bg-2 border-r border-border flex flex-col
-      transform transition-transform duration-200 ease-out
-      ${open ? 'translate-x-0' : '-translate-x-full'}
-      md:static md:translate-x-0 md:w-[250px] md:min-w-[250px] md:z-auto
-    ">
+    <aside
+      class="
+        fixed inset-y-0 left-0 z-40 w-[280px]
+        bg-bg-2 border-r border-border flex flex-col
+        transform transition-transform duration-200 ease-out
+        ${open ? 'translate-x-0' : '-translate-x-full'}
+        md:relative md:translate-x-0 md:z-auto md:flex-shrink-0
+      "
+      style=${isDesktop ? `width: ${width}px; min-width: ${width}px` : ''}
+    >
+      <!-- Resize handle (desktop only). Drag to resize, double-click to reset. -->
+      <div
+        class="hidden md:block absolute top-0 right-0 bottom-0 w-1 -mr-0.5 cursor-col-resize hover:bg-accent/40 active:bg-accent/60 transition-colors z-50"
+        onPointerDown=${onResizePointerDown}
+        onPointerMove=${onResizePointerMove}
+        onPointerUp=${onResizePointerUp}
+        onPointerCancel=${onResizePointerUp}
+        onDblClick=${onResizeDoubleClick}
+        title="Drag to resize · double-click to reset"
+      />
       <div class="flex items-center justify-between px-4 py-3 border-b border-border">
         <div>
           <h1 class="text-base font-semibold text-txt leading-tight">ClawDad</h1>

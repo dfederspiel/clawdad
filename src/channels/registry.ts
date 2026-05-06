@@ -92,6 +92,8 @@ export interface ChannelOpts {
   onResetSession?: (groupFolder: string) => Promise<void>;
   /** Get fully discovered agents for a group with runtime metadata */
   getDiscoveredAgents?: (jid: string) => Agent[];
+  /** Manually trigger a scheduled task to run (web UI "run now" button) */
+  onRunTaskNow?: (taskId: string) => void;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

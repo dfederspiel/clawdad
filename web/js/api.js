@@ -122,6 +122,8 @@ export const resumeTask = (taskId) =>
   fetchJson(`/api/tasks/${encodeURIComponent(taskId)}/resume`, { method: 'POST' });
 export const cancelTask = (taskId) =>
   fetchJson(`/api/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+export const runTaskNow = (taskId) =>
+  fetchJson(`/api/tasks/${encodeURIComponent(taskId)}/run`, { method: 'POST' });
 export const getTelemetry = () => fetchJson('/api/telemetry');
 export const getUsage = (hours = 24) => fetchJson(`/api/usage?hours=${hours}`);
 export const updateGroup = (folder, data) =>

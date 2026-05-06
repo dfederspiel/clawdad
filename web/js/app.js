@@ -6,6 +6,7 @@ import {
   loadPortalStateFor,
   addLiveThreadForJid,
   setDrawerStateFor,
+  savePortalStateFor,
 } from './portal-persistence.js';
 import { playNotification, TONES, isMuted } from './sounds.js';
 import { App } from './components/App.js';
@@ -547,16 +548,55 @@ api.onSSE('achievement', (data) => {
 });
 
 api.onSSE('messages_cleared', (data) => {
+  // The server has already deleted threads for this jid (clearMessages drops
+  // both trigger and portal rows). Mirror that on the client so portal pills,
+  // tool-activity feeds, and persisted drawer state all disappear without
+  // requiring a page refresh — see #116.
+  const droppedThreadIds = new Set();
+  const remainingPortals = {};
+  for (const [tid, portal] of Object.entries(portalThreads.value)) {
+    if (portal.jid === data.jid) {
+      droppedThreadIds.add(tid);
+    } else {
+      remainingPortals[tid] = portal;
+    }
+  }
+  if (droppedThreadIds.size > 0) {
+    portalThreads.value = remainingPortals;
+    const remainingProgress = {};
+    for (const [tid, prog] of Object.entries(portalProgress.value)) {
+      if (!droppedThreadIds.has(tid)) remainingProgress[tid] = prog;
+    }
+    portalProgress.value = remainingProgress;
+  }
+  savePortalStateFor(data.jid, { liveThreadIds: [], drawer: null });
+
   if (data.jid === selectedJid.value) {
     messages.value = [];
     threadMeta.value = {};
     openThreads.value = {};
     threadTyping.value = {};
+    if (agentPanel.value) agentPanel.value = null;
   }
 });
 
 api.onSSE('groups_changed', () => {
   loadGroups();
+});
+
+api.onSSE('task_failed', (data) => {
+  // Surface in the notification bell + refresh tasks so the group row
+  // picks up the red "!" badge derived from last_result.
+  pushNotification({
+    id: `task-failed:${data.task_id}:${data.run_at}`,
+    jid: data.jid,
+    kind: 'task_failed',
+    groupName: data.group_name || data.group_folder,
+    senderName: data.task_title || 'Scheduled task',
+    preview: data.error || 'Task failed',
+    timestamp: data.run_at || new Date().toISOString(),
+  });
+  pollTasks();
 });
 
 api.onSSE('credential_request', (data) => {
@@ -970,6 +1010,13 @@ export async function resumeTask(taskId) {
 
 export async function cancelTask(taskId) {
   await api.cancelTask(taskId);
+  await pollTasks();
+}
+
+export async function runTaskNow(taskId) {
+  await api.runTaskNow(taskId);
+  // The actual run is async — pollTasks here just refreshes status.
+  // The SSE-driven update + onTasksChanged broadcast handles the rest.
   await pollTasks();
 }
 
