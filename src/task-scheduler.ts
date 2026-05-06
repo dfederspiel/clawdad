@@ -4,6 +4,7 @@ import fs from 'fs';
 
 import { getAchievementsForContainer } from './achievements.js';
 import { buildMultiAgentContext, discoverAgents } from './agent-discovery.js';
+import { setActiveAgentName } from './agent-state.js';
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
   ContainerOutput,
@@ -203,6 +204,14 @@ export async function runTask(
   };
 
   try {
+    // Mirror the regular message-loop path: in multi-agent groups, declare
+    // the coordinator as the active agent before starting work so the typing
+    // SSE event carries an agent_name (drives the per-agent dot in the
+    // sidebar drawer + "X is thinking" label) and any bot messages emitted
+    // during the run are attributed correctly.
+    if (isMultiAgent && coordinator) {
+      setActiveAgentName(task.chat_jid, coordinator.displayName);
+    }
     await deps.setTyping?.(task.chat_jid, true);
 
     const output = await runContainerAgent(
