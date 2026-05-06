@@ -584,6 +584,21 @@ api.onSSE('groups_changed', () => {
   loadGroups();
 });
 
+api.onSSE('task_failed', (data) => {
+  // Surface in the notification bell + refresh tasks so the group row
+  // picks up the red "!" badge derived from last_result.
+  pushNotification({
+    id: `task-failed:${data.task_id}:${data.run_at}`,
+    jid: data.jid,
+    kind: 'task_failed',
+    groupName: data.group_name || data.group_folder,
+    senderName: data.task_title || 'Scheduled task',
+    preview: data.error || 'Task failed',
+    timestamp: data.run_at || new Date().toISOString(),
+  });
+  pollTasks();
+});
+
 api.onSSE('credential_request', (data) => {
   // Deduplicate — ignore if we already have a request for this service active or queued
   if (credentialRequest.value?.service === data.service) return;
@@ -995,6 +1010,13 @@ export async function resumeTask(taskId) {
 
 export async function cancelTask(taskId) {
   await api.cancelTask(taskId);
+  await pollTasks();
+}
+
+export async function runTaskNow(taskId) {
+  await api.runTaskNow(taskId);
+  // The actual run is async — pollTasks here just refreshes status.
+  // The SSE-driven update + onTasksChanged broadcast handles the rest.
   await pollTasks();
 }
 

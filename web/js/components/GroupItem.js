@@ -74,6 +74,12 @@ export function GroupItem({ group, isActive, onSelect, onSettings }) {
   const pausedTaskCount = groupTasks.filter(t => t.status === 'paused').length;
   const completedTaskCount = groupTasks.filter(t => t.status === 'completed').length;
   const hasTasks = groupTasks.length > 0;
+  // Auto-clears when the next run overwrites last_result with a success summary.
+  const failedTasks = groupTasks.filter(t => typeof t.last_result === 'string' && t.last_result.startsWith('Error:'));
+  const failedTaskCount = failedTasks.length;
+  const failedTaskTooltip = failedTaskCount > 0
+    ? `${failedTaskCount} task${failedTaskCount === 1 ? '' : 's'} failed: ${failedTasks.map(t => (t.title || t.prompt.split('\n')[0]).slice(0, 40)).join(', ')}`
+    : '';
   // Label: lead with whatever's non-zero so paused-only and completed-only
   // groups still surface a badge the user can click.
   const taskBadgeLabel = activeTaskCount > 0
@@ -138,6 +144,20 @@ export function GroupItem({ group, isActive, onSelect, onSettings }) {
         `}
         ${group.isMain && !group.isSystem && html`
           <span class="text-[10px] px-1.5 py-0.5 rounded bg-accent-dim text-accent font-medium shrink-0">main</span>
+        `}
+        ${failedTaskCount > 0 && html`
+          <button
+            class="w-[18px] h-[18px] mt-0.5 flex items-center justify-center text-err shrink-0 hover:brightness-110"
+            title="${failedTaskTooltip} — click to ${tasksExpanded ? 'collapse' : 'expand'}"
+            onClick=${handleTasksExpand}
+            aria-label="Task failed"
+          >
+            <svg class="w-[18px] h-[18px] block" viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="10" cy="10" r="9" fill="currentColor" />
+              <rect x="9" y="4.5" width="2" height="7" rx="1" fill="var(--bg)" />
+              <circle cx="10" cy="14.5" r="1.1" fill="var(--bg)" />
+            </svg>
+          </button>
         `}
         ${hasTasks && !count && html`
           <button
