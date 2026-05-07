@@ -64,7 +64,7 @@ export function NotificationBell() {
 
       ${open && html`
         <div class="absolute right-0 top-full mt-1 z-50 w-80 max-w-[calc(100vw-1.5rem)] rounded-lg border border-border bg-bg-2 shadow-xl overflow-hidden">
-          <div class="flex items-center justify-between px-3 py-2 border-b border-border">
+          <div class="flex items-center justify-between px-3 py-2 border-b border-border/30">
             <span class="text-xs font-semibold text-txt">Notifications</span>
             ${count > 0 && html`
               <button
@@ -87,7 +87,7 @@ export function NotificationBell() {
                   return html`
                     <button
                       key=${n.id}
-                      class="w-full text-left px-3 py-2 border-b border-border/60 last:border-b-0 hover:bg-bg-hover transition-colors flex gap-2"
+                      class="w-full text-left px-3 py-2 border-b border-border/20 last:border-b-0 hover:bg-bg-hover transition-colors flex gap-2"
                       onClick=${() => handleEntryClick(n)}
                     >
                       <span
