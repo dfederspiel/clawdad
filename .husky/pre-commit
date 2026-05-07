@@ -1,1 +1,13 @@
 npx lint-staged
+
+# Type-check the project when staged changes touch TypeScript or tsconfig.
+# lint-staged formats individual files but doesn't catch cross-file type
+# errors (missing exports, mismatched signatures, etc.). Skipped when no TS
+# changed so commits to docs/web/json stay fast.
+if git diff --cached --name-only --diff-filter=ACMR | grep -qE '\.ts$|(^|/)tsconfig.*\.json$'; then
+  echo "→ tsc --noEmit (staged TypeScript detected)"
+  npx tsc --noEmit || {
+    echo "✗ tsc --noEmit failed — commit aborted."
+    exit 1
+  }
+fi
