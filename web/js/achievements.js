@@ -14,8 +14,15 @@ export const achievementData = signal(null); // { definitions, state, progress }
 // --- Computed ---
 
 export const xpTotal = computed(() => achievementData.value?.state?.xp || 0);
-export const level = computed(() => Math.floor(xpTotal.value / 500) + 1);
-export const levelProgress = computed(() => Math.round(((xpTotal.value % 500) / 500) * 100));
+// Server is the source of truth for the level curve (src/xp.ts). Fall back to
+// a flat 100/level only if the API hasn't responded yet, so the HUD doesn't
+// flash with stale numbers on first load.
+export const level = computed(
+  () => achievementData.value?.levelInfo?.level || Math.floor(xpTotal.value / 100) + 1,
+);
+export const levelProgress = computed(() => achievementData.value?.levelInfo?.pct || 0);
+export const xpForNext = computed(() => achievementData.value?.levelInfo?.xpForNext || 100);
+export const xpInLevel = computed(() => achievementData.value?.levelInfo?.xpInLevel || 0);
 
 export const unlockedCount = computed(() => {
   const data = achievementData.value;

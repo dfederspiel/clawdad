@@ -290,3 +290,13 @@ export const NANOCLAW_MCP_TOOLS: ToolDescriptor[] = [
 export function listAvailableTools(): ToolDescriptor[] {
   return [...CLAUDE_SDK_TOOLS, ...NANOCLAW_MCP_TOOLS];
 }
+
+/**
+ * Tool names that ship inside the Anthropic Agent SDK runtime. Non-Anthropic
+ * adapters (Ollama, etc.) don't plumb these through, so allowlisting them on
+ * those agents is a silent no-op. Used by the host PATCH route + UI picker
+ * to keep the contract honest.
+ */
+export const CLAUDE_SDK_TOOL_NAMES: ReadonlySet<string> = new Set(
+  CLAUDE_SDK_TOOLS.map((t) => t.name),
+);

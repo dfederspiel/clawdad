@@ -1166,6 +1166,36 @@ export function getTaskRunLogs(
 
 // --- Telemetry ---
 
+/** Counts of activity events since a given ISO timestamp — backs XP. */
+export function getActivityCounts(sinceIso: string): {
+  userMessages: number;
+  agentReplies: number;
+  taskRuns: number;
+} {
+  const userMessages = (
+    db
+      .prepare(
+        `SELECT COUNT(*) as c FROM messages WHERE is_bot_message = 0 AND timestamp > ?`,
+      )
+      .get(sinceIso) as { c: number }
+  ).c;
+  const agentReplies = (
+    db
+      .prepare(
+        `SELECT COUNT(*) as c FROM messages WHERE is_bot_message = 1 AND timestamp > ?`,
+      )
+      .get(sinceIso) as { c: number }
+  ).c;
+  const taskRuns = (
+    db
+      .prepare(
+        `SELECT COUNT(*) as c FROM task_run_logs WHERE status = 'success' AND run_at > ?`,
+      )
+      .get(sinceIso) as { c: number }
+  ).c;
+  return { userMessages, agentReplies, taskRuns };
+}
+
 export function getTelemetryStats(): {
   messages24h: number;
   messages7d: number;

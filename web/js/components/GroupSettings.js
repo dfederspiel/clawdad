@@ -5,7 +5,16 @@ import * as api from '../api.js';
 import { groups, loadGroups, usage, deleteGroup } from '../app.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 
-export function GroupSettings({ group, open, onClose }) {
+export function GroupSettings({ group: groupProp, open, onClose }) {
+  // The parent caches the group object at gear-click time and passes it as a
+  // prop. After loadGroups() refreshes the `groups` signal (e.g. after saving
+  // an agent's runtime), the prop is stale — its agent.runtime still reflects
+  // pre-save state. Resolve from the live signal each render so post-save
+  // dropdown fallbacks (`agent.runtime?.model ?? ''`) see the freshly persisted
+  // value instead of snapping back to the old one.
+  const group = groupProp
+    ? groups.value.find((g) => g.jid === groupProp.jid) || groupProp
+    : null;
   const [subtitle, setSubtitle] = useState(group?.subtitle || '');
   const [tone, setTone] = useState('chime');
   const [muted, setMutedState] = useState(false);
@@ -32,6 +41,21 @@ export function GroupSettings({ group, open, onClose }) {
   const [toolsExpanded, setToolsExpanded] = useState({});
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // { [key]: true } — keys flagged here render a transient "✓ Saved" indicator
+  // instead of the corresponding save button. Cleared via setTimeout so the
+  // button slot collapses back to empty (assuming dirty-state is also clean).
+  const [savedFlash, setSavedFlash] = useState({});
+
+  function flashSaved(key) {
+    setSavedFlash((prev) => ({ ...prev, [key]: true }));
+    setTimeout(() => {
+      setSavedFlash((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }, 1500);
+  }
 
   useEffect(() => {
     if (!group || !open) return;
@@ -77,6 +101,7 @@ export function GroupSettings({ group, open, onClose }) {
     try {
       await api.updateGroup(folderName, { subtitle });
       await loadGroups();
+      flashSaved('subtitle');
     } catch (err) {
       console.error('Failed to save subtitle:', err);
     } finally {
@@ -182,6 +207,7 @@ export function GroupSettings({ group, open, onClose }) {
         displayName: agentDisplayNames[name] || name,
       });
       await loadGroups();
+      flashSaved(`agent:${name}:displayName`);
     } catch (err) {
       setAgentError(err.message || 'Failed to update agent display name');
     } finally {
@@ -219,11 +245,24 @@ export function GroupSettings({ group, open, onClose }) {
   async function handleSaveAgentTools(name) {
     if (agentBusy) return;
     const edit = getAgentToolsEdit(name);
+    // Strip Claude SDK tools when the agent's runtime is non-Anthropic — those
+    // tools ship with the Anthropic SDK and aren't plumbed through other
+    // adapters. Without this, the backend rejects the save (and rightly so),
+    // but the UI hides those entries so the user has no way to un-check them.
+    const agent = (group.agents || []).find((a) => a.name === name);
+    const provider = agent?.runtime?.provider || 'anthropic';
+    const cleanedSelected =
+      provider === 'anthropic'
+        ? edit.selected
+        : edit.selected.filter((n) => {
+            const tool = toolRegistry.find((t) => t.name === n);
+            return !tool || tool.source !== 'claude-sdk';
+          });
     setAgentBusy(true);
     setAgentError('');
     try {
       await api.updateGroupAgent(folderName, name, {
-        tools: edit.override ? edit.selected : null,
+        tools: edit.override ? cleanedSelected : null,
       });
       await loadGroups();
       setAgentToolEdits((prev) => {
@@ -231,6 +270,7 @@ export function GroupSettings({ group, open, onClose }) {
         delete next[name];
         return next;
       });
+      flashSaved(`agent:${name}:tools`);
     } catch (err) {
       setAgentError(err.message || 'Failed to update agent tools');
     } finally {
@@ -251,10 +291,17 @@ export function GroupSettings({ group, open, onClose }) {
           : { provider: edit.provider, model: edit.model || undefined };
       await api.updateGroupAgent(folderName, name, { runtime });
       await loadGroups();
-      // Don't clear agentRuntimeEdits — the edit state keeps the UI
-      // showing the saved value until the group prop re-renders with
-      // the updated agent data. The Save button hides automatically
-      // when the edit matches the persisted value.
+      // Drop the edit so the dirty check in the render compares the dropdown
+      // values (now bound to the fresh agent.runtime via the ?? fallback)
+      // against the persisted state and finds them equal — without this the
+      // Save button can stick around if the API echoes the runtime back in
+      // a slightly different shape than the edit object.
+      setAgentRuntimeEdits((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      flashSaved(`agent:${name}:runtime`);
     } catch (err) {
       setAgentError(err.message || 'Failed to update agent runtime');
     } finally {
@@ -299,20 +346,24 @@ export function GroupSettings({ group, open, onClose }) {
           <!-- Subtitle -->
           <div>
             <label class="text-[10px] text-txt-muted uppercase tracking-wider block mb-1.5">Status / Subtitle</label>
-            <div class="flex gap-2">
+            <div class="flex gap-2 items-center">
               <input
                 type="text"
                 class="flex-1 bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-txt placeholder-txt-muted focus:outline-none focus:border-accent"
                 placeholder="e.g. Monitoring PRs for review"
                 value=${subtitle}
                 onInput=${(e) => setSubtitle(e.target.value)}
-                onKeyDown=${(e) => e.key === 'Enter' && handleSaveSubtitle()}
+                onKeyDown=${(e) => e.key === 'Enter' && subtitle !== (group.subtitle || '') && handleSaveSubtitle()}
               />
-              <button
-                class="px-3 py-1.5 text-xs bg-accent text-bg rounded-lg hover:opacity-90 disabled:opacity-50"
-                onClick=${handleSaveSubtitle}
-                disabled=${saving}
-              >${saving ? '...' : 'Save'}</button>
+              ${savedFlash.subtitle
+                ? html`<span class="text-xs text-green-400 px-2 whitespace-nowrap">✓ Saved</span>`
+                : subtitle !== (group.subtitle || '') && html`
+                  <button
+                    class="px-3 py-1.5 text-xs bg-accent text-bg rounded-lg hover:opacity-90 disabled:opacity-50"
+                    onClick=${handleSaveSubtitle}
+                    disabled=${saving}
+                  >${saving ? '...' : 'Save'}</button>
+                `}
             </div>
           </div>
 
@@ -393,11 +444,15 @@ export function GroupSettings({ group, open, onClose }) {
                           [agent.name]: e.target.value,
                         }))}
                       />
-                      <button
-                        class="px-2 py-1 text-xs bg-bg-3 border border-border rounded-md text-txt-2 hover:border-accent disabled:opacity-50"
-                        onClick=${() => handleSaveAgentDisplayName(agent.name)}
-                        disabled=${agentBusy || (agentDisplayNames[agent.name] ?? agent.displayName ?? agent.name) === (agent.displayName || agent.name)}
-                      >Save</button>
+                      ${savedFlash[`agent:${agent.name}:displayName`]
+                        ? html`<span class="text-xs text-green-400 px-1 whitespace-nowrap">✓ Saved</span>`
+                        : (agentDisplayNames[agent.name] ?? agent.displayName ?? agent.name) !== (agent.displayName || agent.name) && html`
+                          <button
+                            class="px-2 py-1 text-xs bg-bg-3 border border-border rounded-md text-txt-2 hover:border-accent disabled:opacity-50"
+                            onClick=${() => handleSaveAgentDisplayName(agent.name)}
+                            disabled=${agentBusy}
+                          >Save</button>
+                        `}
                     </div>
                     <div class="text-xs text-txt-muted font-mono mt-1">${agent.name}${agent.trigger ? ` · ${agent.trigger}` : ' · coordinator'}</div>
                     <div class="flex gap-2 items-center mt-1.5">
@@ -444,14 +499,16 @@ export function GroupSettings({ group, open, onClose }) {
                           }))}
                         />`;
                       })()}
-                      ${agentRuntimeEdits[agent.name] && (
-                        agentRuntimeEdits[agent.name].provider !== (agent.runtime?.provider || 'anthropic') ||
-                        agentRuntimeEdits[agent.name].model !== (agent.runtime?.model || '')
-                      ) && html`<button
-                        class="px-1.5 py-0.5 text-xs bg-bg-3 border border-border rounded text-txt-2 hover:border-accent disabled:opacity-50"
-                        onClick=${() => handleSaveAgentRuntime(agent.name)}
-                        disabled=${agentBusy}
-                      >Save</button>`}
+                      ${savedFlash[`agent:${agent.name}:runtime`]
+                        ? html`<span class="text-xs text-green-400 px-1 whitespace-nowrap">✓ Saved</span>`
+                        : agentRuntimeEdits[agent.name] && (
+                            agentRuntimeEdits[agent.name].provider !== (agent.runtime?.provider || 'anthropic') ||
+                            agentRuntimeEdits[agent.name].model !== (agent.runtime?.model || '')
+                          ) && html`<button
+                            class="px-1.5 py-0.5 text-xs bg-bg-3 border border-border rounded text-txt-2 hover:border-accent disabled:opacity-50"
+                            onClick=${() => handleSaveAgentRuntime(agent.name)}
+                            disabled=${agentBusy}
+                          >Save</button>`}
                     </div>
                     ${(() => {
                       if (agent.receivesMcpTools === false) {
@@ -464,15 +521,37 @@ export function GroupSettings({ group, open, onClose }) {
                       const edit = getAgentToolsEdit(agent.name);
                       const expanded = !!toolsExpanded[agent.name];
                       const dirty = agentToolsDirty(agent.name);
-                      const bySource = toolRegistry.reduce((acc, t) => {
+                      // Claude SDK tools (Bash, Read, Web Search, etc.) live inside
+                      // the Anthropic Agent SDK — non-Anthropic adapters don't plumb
+                      // them through, so showing them here would be a lie. Filter by
+                      // the *persisted* runtime so toggling the dropdown doesn't flip
+                      // the picker before the runtime save has been confirmed.
+                      const persistedProvider = agent.runtime?.provider || 'anthropic';
+                      const isAnthropic = persistedProvider === 'anthropic';
+                      const visibleTools = isAnthropic
+                        ? toolRegistry
+                        : toolRegistry.filter((t) => t.source !== 'claude-sdk');
+                      const bySource = visibleTools.reduce((acc, t) => {
                         (acc[t.source] = acc[t.source] || []).push(t);
                         return acc;
                       }, {});
+                      // Selections that the runtime can actually invoke. Stale
+                      // SDK tools (carried over from a previous Anthropic
+                      // runtime) are excluded from the count and from save.
+                      const visibleSelected = edit.selected.filter((n) =>
+                        visibleTools.some((t) => t.name === n),
+                      );
+                      const staleCount = edit.selected.length - visibleSelected.length;
+                      // Treat stale-SDK-tool persistence as dirty so the user
+                      // can click Save to drop them — without this, dirty stays
+                      // false (no user edits) and the disabled Save button
+                      // makes the warning actionless.
+                      const effectiveDirty = dirty || staleCount > 0;
                       const summary = !edit.override
                         ? `Tools: role default`
-                        : edit.selected.length === 0
+                        : visibleSelected.length === 0
                           ? `Tools: none (explicit)`
-                          : `Tools: ${edit.selected.length} selected`;
+                          : `Tools: ${visibleSelected.length} selected`;
                       return html`
                         <div class="mt-1.5">
                           <button
@@ -481,10 +560,21 @@ export function GroupSettings({ group, open, onClose }) {
                           >
                             <span>${expanded ? '\u25BC' : '\u25B6'}</span>
                             <span>${summary}</span>
-                            ${dirty && html`<span class="text-accent">\u2022 unsaved</span>`}
+                            ${effectiveDirty && html`<span class="text-accent">\u2022 unsaved</span>`}
                           </button>
                           ${expanded && html`
                             <div class="mt-2 border border-border rounded-lg p-2 flex flex-col gap-2">
+                              ${!isAnthropic && html`
+                                <div class="text-[10px] text-txt-muted italic">
+                                  Showing tools available on ${persistedProvider}.
+                                  Claude SDK tools (Bash, Read, etc.) ship with the Anthropic runtime only.
+                                </div>
+                              `}
+                              ${staleCount > 0 && html`
+                                <div class="text-[10px] text-yellow-400 italic">
+                                  ${staleCount} previously-saved tool${staleCount === 1 ? '' : 's'} hidden — not available on this runtime. Save tools to drop ${staleCount === 1 ? 'it' : 'them'} from the agent config.
+                                </div>
+                              `}
                               <label class="flex items-center gap-2 text-xs text-txt-2">
                                 <input
                                   type="checkbox"
@@ -492,7 +582,7 @@ export function GroupSettings({ group, open, onClose }) {
                                   onChange=${(e) => setAgentToolsEdit(agent.name, {
                                     override: e.target.checked,
                                     selected: e.target.checked
-                                      ? (edit.selected.length > 0 ? edit.selected : toolRegistry.filter((t) => t.defaultForRole === (agent.trigger ? 'specialist' : 'coordinator')).map((t) => t.name))
+                                      ? (edit.selected.length > 0 ? edit.selected : visibleTools.filter((t) => t.defaultForRole === (agent.trigger ? 'specialist' : 'coordinator')).map((t) => t.name))
                                       : [],
                                   })}
                                 />
@@ -520,11 +610,13 @@ export function GroupSettings({ group, open, onClose }) {
                                   </div>
                                 </div>
                               `)}
-                              <button
-                                class="px-2 py-1 text-xs bg-bg-3 border border-border rounded text-txt-2 hover:border-accent disabled:opacity-50 self-start"
-                                onClick=${() => handleSaveAgentTools(agent.name)}
-                                disabled=${agentBusy || !dirty}
-                              >Save tools</button>
+                              ${savedFlash[`agent:${agent.name}:tools`]
+                                ? html`<span class="text-xs text-green-400 self-start">✓ Saved</span>`
+                                : html`<button
+                                    class="px-2 py-1 text-xs bg-bg-3 border border-border rounded text-txt-2 hover:border-accent disabled:opacity-50 self-start"
+                                    onClick=${() => handleSaveAgentTools(agent.name)}
+                                    disabled=${agentBusy || !effectiveDirty}
+                                  >Save tools</button>`}
                             </div>
                           `}
                         </div>

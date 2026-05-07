@@ -1034,6 +1034,10 @@ setInterval(pollStatus, 5000);
 setInterval(pollTasks, 10000);
 setInterval(pollTelemetry, 30000);
 setInterval(pollUsage, 30000);
+// XP is now activity-driven (src/xp.ts) so the snapshot ages between SSE
+// unlock events. Refresh on the same cadence as telemetry so the HUD
+// reflects ongoing message/task activity without waiting for an unlock.
+setInterval(loadAchievements, 30000);
 
 // --- Theme ---
 

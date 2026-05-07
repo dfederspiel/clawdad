@@ -262,6 +262,11 @@ export function loadPackAchievements(packJsonPath: string): void {
  * Get achievement list for passing to container agents.
  * Excludes meta achievements (telemetry-driven, not agent-triggered).
  */
+/** All registered achievement definitions (built-ins + active pack). */
+export function getAllAchievementDefs(): AchievementDef[] {
+  return allAchievements;
+}
+
 export function getAchievementsForContainer(): {
   id: string;
   name: string;

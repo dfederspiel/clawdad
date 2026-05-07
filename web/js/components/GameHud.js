@@ -1,20 +1,17 @@
 import { html } from 'htm/preact';
 import { computed } from 'preact/signals';
 import { telemetry } from '../app.js';
-import { xpTotal, level, levelProgress, tierProgress } from '../achievements.js';
+import { xpTotal, level, levelProgress, xpInLevel, xpForNext, tierProgress } from '../achievements.js';
 import { showPanel } from './AchievementPanel.js';
 
-export const xpData = computed(() => {
-  const tel = telemetry.value;
-  // Use achievement-based XP if available, fall back to telemetry-based
-  const achXp = xpTotal.value;
-  const total = achXp > 0
-    ? achXp
-    : (tel?.totalMessages || 0) * 10 + (tel?.totalTasksCompleted || 0) * 50;
-  const lv = achXp > 0 ? level.value : Math.floor(total / 500) + 1;
-  const pct = achXp > 0 ? levelProgress.value : Math.round(((total % 500) / 500) * 100);
-  return { total, level: lv, pct, streak: tel?.currentStreak || 0 };
-});
+export const xpData = computed(() => ({
+  total: xpTotal.value,
+  level: level.value,
+  pct: levelProgress.value,
+  inLevel: xpInLevel.value,
+  forNext: xpForNext.value,
+  streak: telemetry.value?.currentStreak || 0,
+}));
 
 export function GameHud() {
   const xp = xpData.value;
@@ -44,7 +41,7 @@ export function GameHud() {
   ` : null;
 
   return html`
-    <div class="game-hud" onClick=${() => { showPanel.value = true; }} style="cursor: pointer;" title="View achievements">
+    <div class="game-hud" onClick=${() => { showPanel.value = true; }} style="cursor: pointer;" title="${xp.inLevel}/${xp.forNext} XP toward Lv.${xp.level + 1} · click for achievements">
       <div class="flex items-center justify-between">
         <span class="game-hud-level">LV.${xp.level}</span>
         <span style="font-size: 10px; color: #5e6275; font-family: monospace;">

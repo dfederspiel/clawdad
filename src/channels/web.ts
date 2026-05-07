@@ -14,7 +14,8 @@ import {
 } from '../runtime-profile.js';
 import { getCapabilityProfile } from '../model-capabilities.js';
 import { resolveEffectiveRuntime } from '../runtime-resolution.js';
-import { listAvailableTools } from '../tool-registry.js';
+import { CLAUDE_SDK_TOOL_NAMES, listAvailableTools } from '../tool-registry.js';
+import { computeXp, levelFromXp } from '../xp.js';
 import type { AgentRuntimeConfig } from '../runtime-types.js';
 import {
   getAchievementResponse,
@@ -880,9 +881,26 @@ export class WebChannel implements Channel {
                 "This agent's runtime does not support tool calling — tool selection has no effect. Clear the field (tools: null) or switch to a tool-capable model.",
             });
           }
-          config.tools = tools.filter(
+          const cleanTools = tools.filter(
             (t: unknown): t is string => typeof t === 'string' && t.length > 0,
           );
+          // Claude SDK tools (Bash, Read, Write, etc.) ship with the Anthropic
+          // Agent SDK and are not plumbed through other adapters. Reject them
+          // here so the contract surfaced in agent.json matches what the
+          // runtime can actually invoke — silent acceptance would have the
+          // tool appear "saved" but never fire.
+          const provider = effectiveRuntime?.provider || 'anthropic';
+          if (provider !== 'anthropic') {
+            const sdkTools = cleanTools.filter((t) =>
+              CLAUDE_SDK_TOOL_NAMES.has(t),
+            );
+            if (sdkTools.length > 0) {
+              return this.json(res, 400, {
+                error: `Claude SDK tools (${sdkTools.join(', ')}) are only available with the Anthropic runtime. Remove them or switch this agent's runtime to Anthropic.`,
+              });
+            }
+          }
+          config.tools = cleanTools;
         } else {
           return this.json(res, 400, {
             error: 'tools must be an array of strings or null',
@@ -2333,9 +2351,19 @@ You do not delegate. If something falls outside your role, say so plainly in you
       return this.json(res, 200, stats);
     }
 
-    // GET /api/achievements — achievement definitions + unlock state
+    // GET /api/achievements — achievement definitions + unlock state +
+    // computed XP / level. State.xp is overridden with the live activity-driven
+    // total so the HUD reflects ongoing usage, not just achievement unlocks.
     if (method === 'GET' && url.pathname === '/api/achievements') {
-      return this.json(res, 200, getAchievementResponse());
+      const base = getAchievementResponse();
+      const xp = computeXp();
+      const levelInfo = levelFromXp(xp.total);
+      return this.json(res, 200, {
+        ...base,
+        state: { ...base.state, xp: xp.total },
+        xpBreakdown: xp,
+        levelInfo,
+      });
     }
 
     // GET /api/health — prerequisite check for first-boot onboarding
