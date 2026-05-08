@@ -287,13 +287,11 @@ export interface AchievementUnlock {
 export interface AchievementState {
   unlocked: Record<string, AchievementUnlock>;
   xp: number;
-  streak: { current: number; lastActive: string };
 }
 
 const EMPTY_STATE: AchievementState = {
   unlocked: {},
   xp: 0,
-  streak: { current: 0, lastActive: '' },
 };
 
 let cachedState: AchievementState | null = null;
@@ -307,29 +305,23 @@ export function loadAchievements(): AchievementState {
 
   const filePath = achievementsPath();
   if (!fs.existsSync(filePath)) {
-    cachedState = {
-      ...EMPTY_STATE,
-      unlocked: {},
-      streak: { current: 0, lastActive: '' },
-    };
+    cachedState = { ...EMPTY_STATE, unlocked: {} };
     return cachedState;
   }
 
   try {
     const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    // raw.streak (if present in legacy files) is intentionally ignored —
+    // the live streak is derived deterministically from message dates in
+    // getTelemetryStats. The orphan field falls out on the next save.
     cachedState = {
       unlocked: raw.unlocked || {},
       xp: raw.xp || 0,
-      streak: raw.streak || { current: 0, lastActive: '' },
     };
     return cachedState;
   } catch (err) {
     logger.warn({ err }, 'Failed to read achievements.json, starting fresh');
-    cachedState = {
-      ...EMPTY_STATE,
-      unlocked: {},
-      streak: { current: 0, lastActive: '' },
-    };
+    cachedState = { ...EMPTY_STATE, unlocked: {} };
     return cachedState;
   }
 }
