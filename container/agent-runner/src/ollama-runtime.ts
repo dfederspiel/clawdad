@@ -140,6 +140,84 @@ function specToOllamaTool(spec: ProviderToolSpec): Tool {
   };
 }
 
+/**
+ * Recover a tool call that the model emitted as JSON in `message.content`
+ * instead of populating the structured `tool_calls` channel. Smaller
+ * tool-capable models (qwen2.5-coder:7b, etc.) hit this often enough that
+ * silently delivering the JSON to the user is a meaningful regression.
+ *
+ * Strict by construction:
+ *  1. Content must be exactly a JSON object (after fence/wrapper stripping)
+ *     — prose around the JSON disqualifies it. Better to miss a recovery
+ *     than to invoke a tool the model was just discussing.
+ *  2. The `name` must be in the live tool-list passed to the model. A
+ *     hallucinated tool name is treated as text.
+ *  3. `arguments` must be an object (or absent — defaults to `{}`).
+ */
+export function parseTextModeToolCall(
+  content: string,
+  knownToolNames: Set<string>,
+): Array<{ name: string; arguments: Record<string, unknown> }> | null {
+  if (!content) return null;
+
+  let cleaned = content.trim();
+  // Some models wrap the call in <tool_call>…</tool_call>.
+  cleaned = cleaned.replace(/^<tool_call>\s*|\s*<\/tool_call>$/g, '').trim();
+  // Markdown fences with or without a language hint.
+  cleaned = cleaned
+    .replace(/^```(?:json)?\s*\n?/, '')
+    .replace(/\n?```$/, '')
+    .trim();
+
+  if (!cleaned.startsWith('{') || !cleaned.endsWith('}')) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const obj = parsed as Record<string, unknown>;
+
+  // Envelope: { tool_calls: [{ function: { name, arguments } }, ...] }
+  if (Array.isArray(obj.tool_calls)) {
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> =
+      [];
+    for (const c of obj.tool_calls) {
+      if (typeof c !== 'object' || c === null) return null;
+      const fn = (c as { function?: unknown }).function;
+      if (typeof fn !== 'object' || fn === null) return null;
+      const fnObj = fn as { name?: unknown; arguments?: unknown };
+      if (typeof fnObj.name !== 'string' || !knownToolNames.has(fnObj.name))
+        return null;
+      const args = fnObj.arguments;
+      calls.push({
+        name: fnObj.name,
+        arguments:
+          typeof args === 'object' && args !== null
+            ? (args as Record<string, unknown>)
+            : {},
+      });
+    }
+    return calls.length > 0 ? calls : null;
+  }
+
+  // Single-call: { name, arguments? }
+  if (typeof obj.name !== 'string' || !knownToolNames.has(obj.name))
+    return null;
+  const args = obj.arguments;
+  return [
+    {
+      name: obj.name,
+      arguments:
+        typeof args === 'object' && args !== null
+          ? (args as Record<string, unknown>)
+          : {},
+    },
+  ];
+}
+
 export class OllamaRuntime {
   constructor(
     private readonly options: {
@@ -420,6 +498,57 @@ export class OllamaRuntime {
           if (userVisibleDelivered) {
             log(
               `Ollama: ${model} delivered user-visible content via tool; ending turn`,
+            );
+            break;
+          }
+          continue;
+        }
+
+        // Recovery: marginal tool-capable models occasionally emit the call
+        // as JSON in message.content instead of populating tool_calls. Strict
+        // parser — content must be exactly a tool-call envelope and the name
+        // must match a real tool — to avoid invoking on prose that just
+        // discusses JSON. See parseTextModeToolCall.
+        const knownToolNames = new Set(
+          toolsForOllama
+            .map((t) => t.function.name)
+            .filter((n): n is string => typeof n === 'string'),
+        );
+        const recovered = parseTextModeToolCall(
+          response.message?.content ?? '',
+          knownToolNames,
+        );
+        if (recovered) {
+          log(
+            `Ollama: recovered ${recovered.length} text-mode tool call(s) from ${model}`,
+          );
+          messages.push({
+            role: 'assistant',
+            content: '',
+            tool_calls: recovered.map((r) => ({
+              function: { name: r.name, arguments: r.arguments },
+            })) as ToolCall[],
+          });
+          let userVisibleDelivered = false;
+          for (const call of recovered) {
+            log(`Ollama tool_call (recovered): ${call.name}`);
+            const result = await bridge.executeToolCall(
+              call.name,
+              call.arguments,
+            );
+            messages.push({
+              role: 'tool',
+              content: result.content,
+              tool_name: call.name,
+            });
+            if (!result.isError) {
+              deliveredViaTools = true;
+              if (isUserVisibleTool(call.name)) userVisibleDelivered = true;
+            }
+          }
+          if (userVisibleDelivered) {
+            log(
+              `Ollama: ${model} delivered user-visible content via recovered tool; ending turn`,
             );
             break;
           }
