@@ -32,6 +32,7 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
   const [agentProvider, setAgentProvider] = useState('anthropic');
   const [agentModel, setAgentModel] = useState('');
   const [ollamaModels, setOllamaModels] = useState([]);
+  const [upstreamModels, setUpstreamModels] = useState([]);
   const [agentRuntimeEdits, setAgentRuntimeEdits] = useState({}); // { [agentName]: { provider, model } }
   const [toolRegistry, setToolRegistry] = useState([]);
   // { [agentName]: { override: boolean, selected: string[] } }
@@ -85,6 +86,9 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
     // Fetch Ollama models (best-effort)
     api.getOllamaModels().then((data) => {
       setOllamaModels(data.models || []);
+    }).catch(() => {});
+    api.getUpstreamModels().then((data) => {
+      setUpstreamModels(data.models || []);
     }).catch(() => {});
     // Fetch available tools catalogue (best-effort)
     api.getTools().then((data) => {
@@ -486,6 +490,19 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
                           >
                             <option value="">Select model...</option>
                             ${ollamaModels.map((m) => html`<option value=${m.name}>${m.name}</option>`)}
+                          </select>`;
+                        }
+                        if (prov === 'anthropic' && upstreamModels.length > 0) {
+                          return html`<select
+                            class="bg-bg border border-border rounded px-1.5 py-0.5 text-xs text-txt focus:outline-none focus:border-accent"
+                            value=${modelVal}
+                            onChange=${(e) => setAgentRuntimeEdits((prev) => ({
+                              ...prev,
+                              [agent.name]: { ...prev[agent.name], provider: prov, model: e.target.value },
+                            }))}
+                          >
+                            <option value="">Default</option>
+                            ${upstreamModels.map((m) => html`<option value=${m.id}>${m.id}</option>`)}
                           </select>`;
                         }
                         return html`<input

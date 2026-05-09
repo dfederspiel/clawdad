@@ -64,6 +64,7 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
   const [provider, setProvider] = useState('anthropic');
   const [model, setModel] = useState('');
   const [ollamaModels, setOllamaModels] = useState([]);
+  const [upstreamModels, setUpstreamModels] = useState([]);
 
   // Team creation state
   const [teamCoordinator, setTeamCoordinator] = useState(DEFAULT_COORDINATOR());
@@ -78,6 +79,7 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
       setError('');
       api.getTemplates().then((data) => setTemplates(data.templates || [])).catch(() => {});
       api.getOllamaModels().then((data) => setOllamaModels(data.models || [])).catch(() => {});
+      api.getUpstreamModels().then((data) => setUpstreamModels(data.models || [])).catch(() => {});
     } else if (dialogRef.current?.open) {
       dialogRef.current.close();
     }
@@ -302,6 +304,15 @@ export function NewGroupDialog({ open, onClose, initialView = 'pick' }) {
             >
               <option value="">Select model...</option>
               ${ollamaModels.map((m) => html`<option value=${m.name}>${m.name}</option>`)}
+            </select>
+          ` : prov === 'anthropic' && upstreamModels.length > 0 ? html`
+            <select
+              class="flex-1 bg-bg-3 border border-border rounded-lg px-3 py-2 text-sm text-txt focus:outline-none focus:border-accent"
+              value=${mod}
+              onChange=${(e) => setMod(e.target.value)}
+            >
+              <option value="">Default (platform pick)</option>
+              ${upstreamModels.map((m) => html`<option value=${m.id}>${m.id}</option>`)}
             </select>
           ` : html`
             <input

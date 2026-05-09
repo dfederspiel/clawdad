@@ -34,6 +34,7 @@ import { getHealthStatus } from '../health.js';
 import {
   getProviderAuthHealth,
   recheckProviderAuth,
+  resolveAnthropicCredentials,
 } from '../provider-auth.js';
 import {
   getAllGroupLastActivity,
@@ -93,6 +94,31 @@ const MIME: Record<string, string> = {
 interface SSEClient {
   res: http.ServerResponse;
   jid?: string; // optionally filter events to a specific group
+}
+
+// Module-level cache for /api/models. The upstream model list rarely
+// changes; a short TTL keeps the picker snappy without hammering the
+// gateway. Errors get a shorter TTL so a fixed config recovers quickly.
+const UPSTREAM_MODELS_TTL_MS = 5 * 60_000;
+let upstreamModelsCache: {
+  payload: Record<string, unknown>;
+  expires: number;
+} | null = null;
+
+function readUpstreamModelsCache(): Record<string, unknown> | null {
+  if (!upstreamModelsCache) return null;
+  if (Date.now() > upstreamModelsCache.expires) {
+    upstreamModelsCache = null;
+    return null;
+  }
+  return upstreamModelsCache.payload;
+}
+
+function writeUpstreamModelsCache(
+  payload: Record<string, unknown>,
+  ttlMs: number = UPSTREAM_MODELS_TTL_MS,
+): void {
+  upstreamModelsCache = { payload, expires: Date.now() + ttlMs };
 }
 
 export class WebChannel implements Channel {
@@ -1077,6 +1103,77 @@ export class WebChannel implements Channel {
           models: [],
           error: `Ollama is not reachable at ${ollamaHost}`,
         });
+      }
+    }
+
+    // GET /api/models — list models advertised by the Anthropic-compatible
+    // upstream (LiteLLM gateway, the official API, etc.). 5 min cache.
+    if (method === 'GET' && url.pathname === '/api/models') {
+      const cached = readUpstreamModelsCache();
+      if (cached) return this.json(res, 200, cached);
+
+      const creds = resolveAnthropicCredentials();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      // Anthropic-style upstreams require anthropic-version for both auth
+      // modes; LiteLLM-style upstreams ignore it harmlessly.
+      headers['anthropic-version'] = '2023-06-01';
+      if (creds.authMode === 'api-key' && creds.apiKey) {
+        headers['x-api-key'] = creds.apiKey;
+      } else if (creds.oauthToken) {
+        headers['Authorization'] = `Bearer ${creds.oauthToken}`;
+      } else {
+        const payload = {
+          models: [],
+          error: 'No Anthropic credentials configured',
+        };
+        writeUpstreamModelsCache(payload);
+        return this.json(res, 200, payload);
+      }
+
+      try {
+        const response = await fetch(`${creds.baseUrl}/v1/models`, {
+          headers,
+        });
+        if (!response.ok) {
+          const payload = {
+            models: [],
+            error: `Upstream returned ${response.status}`,
+            baseUrl: creds.baseUrl,
+          };
+          writeUpstreamModelsCache(payload);
+          return this.json(res, 200, payload);
+        }
+        const data = (await response.json()) as {
+          data?: Array<{ id?: string; owned_by?: string }>;
+          models?: Array<{ id?: string }>;
+        };
+        // OpenAI-compatible: { data: [{ id, owned_by, ... }] }. Some upstreams
+        // wrap as { models: [{ id }] }; tolerate both.
+        const raw = (Array.isArray(data.data) ? data.data : data.models) || [];
+        const models = raw
+          .map((m) => ({
+            id: typeof m.id === 'string' ? m.id : '',
+            owner:
+              typeof (m as { owned_by?: string }).owned_by === 'string'
+                ? (m as { owned_by?: string }).owned_by
+                : undefined,
+          }))
+          .filter((m) => m.id.length > 0);
+        const payload = { models, baseUrl: creds.baseUrl };
+        writeUpstreamModelsCache(payload);
+        return this.json(res, 200, payload);
+      } catch (err) {
+        const payload = {
+          models: [],
+          error: `Upstream not reachable: ${err instanceof Error ? err.message : String(err)}`,
+          baseUrl: creds.baseUrl,
+        };
+        // Don't cache transient network failures — short-circuit to ~30s
+        // so a fix shows up quickly.
+        writeUpstreamModelsCache(payload, 30_000);
+        return this.json(res, 200, payload);
       }
     }
 
