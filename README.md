@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="assets/nanoclaw-logo.png" alt="ClawDad" width="400">
-</p>
-
-<p align="center">
   A container-native platform for building, running, and observing local AI agent teams.
 </p>
 
