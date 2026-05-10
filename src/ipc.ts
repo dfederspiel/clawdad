@@ -3,7 +3,6 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import type { AchievementDef } from './achievements.js';
 import { unlockAchievement } from './achievements.js';
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
@@ -25,7 +24,6 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
-  onAchievement?: (achievement: AchievementDef, group: string) => void;
   onGroupRegistered?: (jid: string) => void;
   storeChatMetadata?: (
     jid: string,
@@ -304,10 +302,9 @@ export function startIpcWatcher(deps: IpcDeps): void {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               fs.unlinkSync(filePath);
               if (data.type === 'achievement' && data.achievementId) {
-                const def = unlockAchievement(data.achievementId, sourceGroup);
-                if (def) {
-                  deps.onAchievement?.(def, sourceGroup);
-                }
+                // unlockAchievement broadcasts via the registered achievement
+                // broadcaster (set up at startup) — no per-caller fan-out.
+                unlockAchievement(data.achievementId, sourceGroup);
               }
             } catch (err) {
               logger.error(

@@ -1287,6 +1287,7 @@ export function getTelemetryStats(): {
   taskAvgDurationMs: number;
   totalTaskRuns: number;
   totalMessages: number;
+  totalAgentReplies: number;
   totalTasksCompleted: number;
   currentStreak: number;
 } {
@@ -1353,6 +1354,12 @@ export function getTelemetryStats(): {
       .get() as { c: number }
   ).c;
 
+  const totalAgentReplies = (
+    db
+      .prepare('SELECT COUNT(*) as c FROM messages WHERE is_bot_message = 1')
+      .get() as { c: number }
+  ).c;
+
   const totalTasksCompleted = (
     db
       .prepare(
@@ -1401,6 +1408,7 @@ export function getTelemetryStats(): {
     taskAvgDurationMs: taskStats.avg_duration || 0,
     totalTaskRuns: taskStats.total || 0,
     totalMessages,
+    totalAgentReplies,
     totalTasksCompleted,
     currentStreak,
   };

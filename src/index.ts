@@ -3526,15 +3526,9 @@ async function main(): Promise<void> {
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
     onTasksChanged,
-    onAchievement: (achievement, group) => {
-      // Broadcast to web UI via any web channel
-      for (const ch of channels) {
-        if (ch.name === 'web' && 'broadcastAchievement' in ch) {
-          (ch as any).broadcastAchievement(achievement, group);
-          break;
-        }
-      }
-    },
+    // onAchievement intentionally omitted: unlockAchievement now broadcasts
+    // via the achievement broadcaster registered at startup, so no per-caller
+    // fan-out is needed.
     storeChatMetadata: (jid, timestamp, name, channel, isGroup) => {
       storeChatMetadata(jid, timestamp, name, channel, isGroup);
     },

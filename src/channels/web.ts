@@ -2432,19 +2432,9 @@ You do not delegate. If something falls outside your role, say so plainly in you
     // GET /api/telemetry — aggregated metrics
     if (method === 'GET' && url.pathname === '/api/telemetry') {
       const stats = getTelemetryStats();
-
-      // Check telemetry-based achievements (centurion, streaks)
-      const newAchievements = checkTelemetryAchievements(stats);
-      for (const ach of newAchievements) {
-        this.broadcast('achievement', {
-          id: ach.id,
-          name: ach.name,
-          description: ach.description,
-          tier: ach.tier,
-          xp: ach.xp,
-        });
-      }
-
+      // Threshold unlocks broadcast via the registered achievement
+      // broadcaster set up at startup — no need to fan out the SSE here.
+      checkTelemetryAchievements(stats);
       return this.json(res, 200, stats);
     }
 

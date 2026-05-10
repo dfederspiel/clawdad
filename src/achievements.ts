@@ -148,12 +148,68 @@ const BUILTIN_ACHIEVEMENTS: AchievementDef[] = [
 
   // Meta achievements (aggregate, checked via telemetry)
   {
+    id: 'messages_10',
+    name: 'Warming Up',
+    description: '10 messages sent',
+    hint: 'Just keep chatting',
+    tier: 'meta',
+    xp: 25,
+  },
+  {
     id: 'centurion',
     name: 'Centurion',
     description: '100 messages sent across all agents',
     hint: "Keep chatting — you're getting close",
     tier: 'meta',
     xp: 100,
+  },
+  {
+    id: 'messages_1000',
+    name: 'Power User',
+    description: '1,000 messages sent',
+    hint: 'A long-running conversation',
+    tier: 'meta',
+    xp: 500,
+  },
+  {
+    id: 'agent_replies_100',
+    name: 'Conversationalist',
+    description: '100 replies received from agents',
+    hint: 'Your agents have been busy',
+    tier: 'meta',
+    xp: 100,
+  },
+  {
+    id: 'agent_replies_1000',
+    name: 'Workforce',
+    description: '1,000 replies received from agents',
+    hint: 'A real working relationship',
+    tier: 'meta',
+    xp: 500,
+  },
+  {
+    id: 'tasks_10',
+    name: 'Routine',
+    description: '10 scheduled tasks completed successfully',
+    hint: 'Build the routine',
+    tier: 'meta',
+    xp: 50,
+  },
+  {
+    id: 'tasks_100',
+    name: 'Autopilot',
+    description: '100 scheduled tasks completed successfully',
+    hint: 'Set it and forget it',
+    tier: 'meta',
+    xp: 200,
+  },
+  {
+    id: 'streak_3',
+    name: 'Hat Trick',
+    description: '3-day activity streak',
+    hint: 'Use ClawDad 3 days in a row',
+    tier: 'meta',
+    xp: 50,
   },
   {
     id: 'streak_7',
@@ -545,42 +601,40 @@ export function checkPlatformAchievements(deps?: {
 }
 
 /**
- * Check telemetry-based meta achievements (centurion, streaks).
- * Called periodically with telemetry data.
- * Returns array of newly unlocked achievements.
+ * Check threshold-based meta achievements (volume + streak counters).
+ * Called periodically with telemetry data. Returns array of newly unlocked.
+ *
+ * Driven by a single table so adding a new threshold is one row, not a new
+ * if-block. Each entry is `[id, threshold, valueFromTelemetry]`.
  */
 export function checkTelemetryAchievements(telemetry: {
   totalMessages?: number;
+  totalAgentReplies?: number;
+  totalTasksCompleted?: number;
   currentStreak?: number;
 }): AchievementDef[] {
   const state = loadAchievements();
   const newlyUnlocked: AchievementDef[] = [];
 
-  if ((telemetry.totalMessages || 0) >= 100 && !state.unlocked['centurion']) {
-    const def = achievementMap.get('centurion')!;
-    state.unlocked['centurion'] = {
-      unlockedAt: new Date().toISOString(),
-      group: 'meta',
-    };
-    state.xp += def.xp;
-    newlyUnlocked.push(def);
-    emitUnlock(def, 'meta');
-  }
+  const thresholds: Array<[string, number, number]> = [
+    ['messages_10', 10, telemetry.totalMessages || 0],
+    ['centurion', 100, telemetry.totalMessages || 0],
+    ['messages_1000', 1000, telemetry.totalMessages || 0],
+    ['agent_replies_100', 100, telemetry.totalAgentReplies || 0],
+    ['agent_replies_1000', 1000, telemetry.totalAgentReplies || 0],
+    ['tasks_10', 10, telemetry.totalTasksCompleted || 0],
+    ['tasks_100', 100, telemetry.totalTasksCompleted || 0],
+    ['streak_3', 3, telemetry.currentStreak || 0],
+    ['streak_7', 7, telemetry.currentStreak || 0],
+    ['streak_30', 30, telemetry.currentStreak || 0],
+  ];
 
-  if ((telemetry.currentStreak || 0) >= 7 && !state.unlocked['streak_7']) {
-    const def = achievementMap.get('streak_7')!;
-    state.unlocked['streak_7'] = {
-      unlockedAt: new Date().toISOString(),
-      group: 'meta',
-    };
-    state.xp += def.xp;
-    newlyUnlocked.push(def);
-    emitUnlock(def, 'meta');
-  }
-
-  if ((telemetry.currentStreak || 0) >= 30 && !state.unlocked['streak_30']) {
-    const def = achievementMap.get('streak_30')!;
-    state.unlocked['streak_30'] = {
+  for (const [id, threshold, value] of thresholds) {
+    if (state.unlocked[id]) continue;
+    if (value < threshold) continue;
+    const def = achievementMap.get(id);
+    if (!def) continue;
+    state.unlocked[id] = {
       unlockedAt: new Date().toISOString(),
       group: 'meta',
     };
