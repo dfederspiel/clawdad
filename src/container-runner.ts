@@ -367,13 +367,15 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    // Compare the newest mtime across every file in src, not just index.ts.
+    // Compare the newest mtime across every file AND directory in src.
     // Sibling-file edits (e.g. ollama-runtime.ts) were otherwise ignored by
     // warm groups, serving stale agent-runner code until something touched
-    // index.ts.
+    // index.ts. Including directory mtimes also catches *pure* deletions
+    // — when a file is removed without any other file touched, the parent
+    // dir's mtime bumps even though no file mtime changed.
     const latestMtime = (dir: string): number => {
-      let newest = 0;
-      if (!fs.existsSync(dir)) return newest;
+      if (!fs.existsSync(dir)) return 0;
+      let newest = fs.statSync(dir).mtimeMs;
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
@@ -389,6 +391,15 @@ function buildVolumeMounts(
     const needsCopy =
       !fs.existsSync(groupAgentRunnerDir) || srcMtime > cachedMtime;
     if (needsCopy) {
+      // Wipe the cache before re-copying. fs.cpSync is additive — it
+      // overwrites files present in source but never deletes destination
+      // files that aren't. After a branch switch (or any source-side
+      // deletion) the cache would otherwise carry orphan files that
+      // compile against incompatible siblings, exiting the container with
+      // tsc errors. See #120.
+      if (fs.existsSync(groupAgentRunnerDir)) {
+        fs.rmSync(groupAgentRunnerDir, { recursive: true, force: true });
+      }
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
   }

@@ -154,7 +154,7 @@ import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import type { MediaArtifact } from './types.js';
 import { logger } from './logger.js';
 import { getCapabilityProfile } from './model-capabilities.js';
-import { scheduleOllamaCapabilityRefresh } from './ollama-capabilities.js';
+import { refreshOllamaCapabilities } from './ollama-capabilities.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -807,7 +807,13 @@ async function executeAutomationActions(
           }
 
           const savedConfig = group.containerConfig;
-          const AUTOMATION_TIMEOUT = 120_000;
+          // Pull the timeout from the target agent's capability profile so
+          // CPU-bound runtimes (Ollama tool-capable: 600s) get headroom and
+          // fast cloud APIs (Anthropic: 180s) still fail fast. The hardcoded
+          // 120s used to SIGKILL Ollama tool loops mid-turn (#118).
+          const automationTimeoutMs = getCapabilityProfile(
+            agent.runtime,
+          ).delegationTimeoutMs;
           const batchId = `automation-${trace.ruleId}-${randomUUID()}`;
           delegationManager.delegate(
             {
@@ -828,7 +834,7 @@ async function executeAutomationActions(
                 ...savedConfig,
                 timeout: Math.min(
                   savedConfig?.timeout || Infinity,
-                  AUTOMATION_TIMEOUT,
+                  automationTimeoutMs,
                 ),
               };
               const multiAgentCtx = buildMultiAgentContext(agent, agents);
@@ -2727,10 +2733,15 @@ async function main(): Promise<void> {
   loadState();
 
   // Warm the Ollama capability cache so getCapabilityProfile() can return
-  // API-derived answers synchronously on the hot path. Best-effort — if
-  // Ollama isn't running or isn't installed, callers fall back to the
-  // safe default (text-only) and a later on-demand refresh will fill in.
-  scheduleOllamaCapabilityRefresh();
+  // API-derived answers synchronously on the hot path. Awaited (with a
+  // 3s ceiling) instead of fire-and-forget so the very first delegation
+  // doesn't race the cache and run with the full toolset (#119). Falls
+  // through gracefully if Ollama is unreachable, slow, or not installed —
+  // the original best-effort semantics still hold.
+  await Promise.race([
+    refreshOllamaCapabilities(),
+    new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+  ]);
 
   // Load pack-defined achievements (merged with built-ins)
   const clawdoodlesDir = path.resolve(process.cwd(), 'clawdoodles');
