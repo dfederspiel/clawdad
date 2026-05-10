@@ -148,6 +148,7 @@ import {
   startSchedulerLoop,
   type SchedulerDependencies,
 } from './task-scheduler.js';
+import { XP_WEIGHTS } from './xp.js';
 import { startPolarisSessionKeepalive } from './polaris-session-keepalive.js';
 import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import type { MediaArtifact } from './types.js';
@@ -219,6 +220,22 @@ function broadcastWorkState(event: import('./types.js').WorkStateEvent): void {
   for (const ch of channels) {
     if (ch.name === 'web' && 'broadcastWorkState' in ch) {
       (ch as any).broadcastWorkState(event);
+      break;
+    }
+  }
+}
+
+/** Surface a transient "+N XP" floater to the HUD. */
+function broadcastXpGain(event: {
+  delta: number;
+  source: 'user_message' | 'agent_reply' | 'task_run';
+  jid?: string;
+}): void {
+  for (const ch of channels) {
+    if (ch.name === 'web' && 'broadcastXpGain' in ch) {
+      (ch as { broadcastXpGain: (e: typeof event) => void }).broadcastXpGain(
+        event,
+      );
       break;
     }
   }
@@ -2926,6 +2943,22 @@ async function main(): Promise<void> {
         registeredGroupCount: Object.keys(registeredGroups).length,
         groupFolders: Object.values(registeredGroups).map((g) => g.folder),
       });
+      // Float a transient +XP indicator at the moment the activity is
+      // recorded. The 30s /api/achievements poll still reconciles the
+      // total — this is the dopamine signal, not the source of truth.
+      if (msg.is_bot_message) {
+        broadcastXpGain({
+          delta: XP_WEIGHTS.agentReply,
+          source: 'agent_reply',
+          jid: chatJid,
+        });
+      } else {
+        broadcastXpGain({
+          delta: XP_WEIGHTS.userMessage,
+          source: 'user_message',
+          jid: chatJid,
+        });
+      }
     },
     onChatMetadata: (
       chatJid: string,
@@ -3116,6 +3149,13 @@ async function main(): Promise<void> {
           break;
         }
       }
+    },
+    onTaskRunSucceeded: (event) => {
+      broadcastXpGain({
+        delta: XP_WEIGHTS.taskRun,
+        source: 'task_run',
+        jid: event.chatJid,
+      });
     },
   };
 

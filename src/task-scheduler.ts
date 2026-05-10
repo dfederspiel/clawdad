@@ -98,6 +98,7 @@ export interface SchedulerDependencies {
   getMainChatJid?: () => string | undefined;
   onTasksChanged?: () => void;
   onTaskFailed?: (event: TaskFailureEvent) => void;
+  onTaskRunSucceeded?: (event: { taskId: string; chatJid: string }) => void;
 }
 
 export async function runTask(
@@ -327,6 +328,11 @@ export async function runTask(
       chatJid: task.chat_jid,
       error,
       runAt,
+    });
+  } else {
+    deps.onTaskRunSucceeded?.({
+      taskId: task.id,
+      chatJid: task.chat_jid,
     });
   }
 

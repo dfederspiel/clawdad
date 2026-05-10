@@ -377,6 +377,25 @@ export class WebChannel implements Channel {
     this.broadcast('groups_changed', {});
   }
 
+  /**
+   * Surface a small XP gain so the HUD can float a "+N XP" indicator at
+   * the moment of the action that earned it. Idle-loop refreshes still
+   * reconcile the total — this is the dopamine signal, not the source
+   * of truth.
+   */
+  broadcastXpGain(event: {
+    delta: number;
+    source: 'user_message' | 'agent_reply' | 'task_run';
+    jid?: string;
+  }): void {
+    this.broadcast('xp_gain', {
+      delta: event.delta,
+      source: event.source,
+      jid: event.jid,
+      ts: Date.now(),
+    });
+  }
+
   /** Surface a scheduled-task failure to the notification bell + sidebar. */
   broadcastTaskFailed(event: {
     taskId: string;

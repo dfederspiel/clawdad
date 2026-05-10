@@ -1,6 +1,6 @@
 import { html } from 'htm/preact';
 import { computed } from 'preact/signals';
-import { telemetry } from '../app.js';
+import { telemetry, xpGains } from '../app.js';
 import { xpTotal, level, levelProgress, xpInLevel, xpForNext, tierProgress } from '../achievements.js';
 import { showPanel } from './AchievementPanel.js';
 
@@ -40,8 +40,10 @@ export function GameHud() {
     </div>
   ` : null;
 
+  const gains = xpGains.value;
+
   return html`
-    <div class="game-hud" onClick=${() => { showPanel.value = true; }} style="cursor: pointer;" title="${xp.inLevel}/${xp.forNext} XP toward Lv.${xp.level + 1} · click for achievements">
+    <div class="game-hud" onClick=${() => { showPanel.value = true; }} style="cursor: pointer; position: relative;" title="${xp.inLevel}/${xp.forNext} XP toward Lv.${xp.level + 1} · click for achievements">
       <div class="flex items-center justify-between">
         <span class="game-hud-level">LV.${xp.level}</span>
         <span style="font-size: 10px; color: #5e6275; font-family: monospace;">
@@ -57,6 +59,11 @@ export function GameHud() {
         `}
         ${tierDots}
       </div>
+      ${gains.length > 0 && html`
+        <div class="xp-gain-stack">
+          ${gains.map((g) => html`<span key=${g.id} class="xp-gain">+${g.delta} XP</span>`)}
+        </div>
+      `}
     </div>
   `;
 }

@@ -11,7 +11,7 @@ import {
 import { playNotification, TONES, isMuted } from './sounds.js';
 import { App } from './components/App.js';
 import { showAchievementToast } from './components/blocks/AchievementToast.js';
-import { loadAchievements, handleAchievementSSE } from './achievements.js';
+import { achievementData, loadAchievements, handleAchievementSSE } from './achievements.js';
 import {
   THEMES, applyTheme, getThemeByName, validateThemeJson,
   buildExportJson, getCurrentColors,
@@ -582,6 +582,34 @@ api.onSSE('messages_cleared', (data) => {
 
 api.onSSE('groups_changed', () => {
   loadGroups();
+});
+
+// Transient +XP floaters at the moment of activity. The 30s achievements
+// poll still reconciles state.xp; this just lets the HUD react instantly.
+export const xpGains = signal([]); // { id, delta, source, ts }
+let xpGainSeq = 0;
+
+api.onSSE('xp_gain', (data) => {
+  if (typeof data.delta !== 'number' || data.delta <= 0) return;
+  const entry = {
+    id: ++xpGainSeq,
+    delta: data.delta,
+    source: data.source || 'message',
+    ts: Date.now(),
+  };
+  xpGains.value = [...xpGains.value, entry].slice(-5); // cap at 5 in flight
+  // Optimistically bump the cached xp total so the HUD reflects the gain
+  // before the next /api/achievements poll. The poll will reconcile.
+  const cur = achievementData.value;
+  if (cur) {
+    achievementData.value = {
+      ...cur,
+      state: { ...cur.state, xp: (cur.state?.xp || 0) + data.delta },
+    };
+  }
+  setTimeout(() => {
+    xpGains.value = xpGains.value.filter((g) => g.id !== entry.id);
+  }, 1500);
 });
 
 api.onSSE('task_failed', (data) => {

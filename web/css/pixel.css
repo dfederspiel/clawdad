@@ -104,6 +104,37 @@
   color: var(--pixel-orange);
 }
 
+/* Transient +XP floaters that float up + fade when activity earns XP. */
+.xp-gain-stack {
+  position: absolute;
+  right: 6px;
+  top: -4px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.xp-gain {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  color: var(--pixel-green, #6cd06c);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(108, 208, 108, 0.4);
+  padding: 2px 4px;
+  border-radius: 2px;
+  animation: xp-gain-float 1500ms ease-out forwards;
+}
+
+@keyframes xp-gain-float {
+  0%   { opacity: 0; transform: translateY(4px); }
+  15%  { opacity: 1; transform: translateY(0); }
+  70%  { opacity: 1; transform: translateY(-12px); }
+  100% { opacity: 0; transform: translateY(-20px); }
+}
+
 /* Tier dots in game HUD */
 .game-hud-tiers {
   display: flex;
