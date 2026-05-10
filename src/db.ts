@@ -1166,6 +1166,88 @@ export function getTaskRunLogs(
 
 // --- Telemetry ---
 
+/**
+ * Cheap predicates that back deterministic achievement detection. Each
+ * returns a boolean derived from a single COUNT/EXISTS query on indexed
+ * columns — running them on every state-changing event is microseconds.
+ */
+export function platformAchievementPredicates(): {
+  hasUserMessage: boolean;
+  hasScheduledTask: boolean;
+  hasGroupWithThreeOrMoreTasks: boolean;
+  hasUserThreadReply: boolean;
+  hasNightShiftTaskRun: boolean;
+} {
+  const hasUserMessage =
+    (
+      db
+        .prepare(
+          'SELECT EXISTS(SELECT 1 FROM messages WHERE is_bot_message = 0) as e',
+        )
+        .get() as { e: number }
+    ).e === 1;
+
+  const hasScheduledTask =
+    (
+      db.prepare('SELECT EXISTS(SELECT 1 FROM scheduled_tasks) as e').get() as {
+        e: number;
+      }
+    ).e === 1;
+
+  const hasGroupWithThreeOrMoreTasks =
+    (
+      db
+        .prepare(
+          `SELECT EXISTS(
+             SELECT 1 FROM scheduled_tasks
+             GROUP BY group_folder
+             HAVING COUNT(*) >= 3
+           ) as e`,
+        )
+        .get() as { e: number }
+    ).e === 1;
+
+  const hasUserThreadReply =
+    (
+      db
+        .prepare(
+          `SELECT EXISTS(
+             SELECT 1 FROM messages
+             WHERE thread_id IS NOT NULL AND is_bot_message = 0
+           ) as e`,
+        )
+        .get() as { e: number }
+    ).e === 1;
+
+  // night_shift: at least one task run with no user message in the prior
+  // hour. "Away" is approximated globally — a real-world user pattern is
+  // good enough; we don't need per-group activity windows.
+  const hasNightShiftTaskRun =
+    (
+      db
+        .prepare(
+          `SELECT EXISTS(
+             SELECT 1 FROM task_run_logs t
+             WHERE NOT EXISTS (
+               SELECT 1 FROM messages m
+               WHERE m.is_bot_message = 0
+                 AND m.timestamp >= datetime(t.run_at, '-1 hour')
+                 AND m.timestamp <= t.run_at
+             )
+           ) as e`,
+        )
+        .get() as { e: number }
+    ).e === 1;
+
+  return {
+    hasUserMessage,
+    hasScheduledTask,
+    hasGroupWithThreeOrMoreTasks,
+    hasUserThreadReply,
+    hasNightShiftTaskRun,
+  };
+}
+
 /** Counts of activity events since a given ISO timestamp — backs XP. */
 export function getActivityCounts(sinceIso: string): {
   userMessages: number;

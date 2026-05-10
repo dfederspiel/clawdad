@@ -133,8 +133,11 @@ import {
   isSessionCommandAllowed,
 } from './session-commands.js';
 import {
-  loadPackAchievements,
+  checkPlatformAchievements,
   getAchievementsForContainer,
+  loadPackAchievements,
+  setAchievementBroadcaster,
+  unlockAchievement,
 } from './achievements.js';
 import {
   evaluateAutomationRules,
@@ -1214,6 +1217,11 @@ async function processGroupMessages(
   // so the agent understands what's being discussed.
   let prompt: string;
   let structuredMessages: StructuredMessage[];
+  // cross_talk: user @-mentioned a globally-triggered agent from a chat
+  // that doesn't own it. Idempotent — only the first unlock takes effect.
+  if (originJid && originJid !== chatJid && group.triggerScope === 'web-all') {
+    unlockAchievement('cross_talk', group.folder);
+  }
   if (originJid && group.triggerScope === 'web-all') {
     const originContext = getMessagesSince(
       originJid,
@@ -2824,6 +2832,12 @@ async function main(): Promise<void> {
   const channelOpts: ChannelOpts = {
     onRegisterGroup: (jid: string, group: RegisteredGroup) => {
       registerGroup(jid, group);
+      // architect (≥3 groups) + team_player (multi-agent group) become
+      // reachable here. Cheap short-circuit once unlocked.
+      checkPlatformAchievements({
+        registeredGroupCount: Object.keys(registeredGroups).length,
+        groupFolders: Object.values(registeredGroups).map((g) => g.folder),
+      });
     },
     onDeleteGroup: (jid: string, group: RegisteredGroup) => {
       unregisterGroup(jid, group);
@@ -2905,6 +2919,13 @@ async function main(): Promise<void> {
         noteVisibleMessage(chatJid, null);
       }
       storeMessage(msg);
+      // Cheap, short-circuits once everything detectable is unlocked.
+      // Covers first_contact, thread_weaver, and (when group state is fresh)
+      // the few that depend on number-of-groups / agent-folder layout.
+      checkPlatformAchievements({
+        registeredGroupCount: Object.keys(registeredGroups).length,
+        groupFolders: Object.values(registeredGroups).map((g) => g.folder),
+      });
     },
     onChatMetadata: (
       chatJid: string,
@@ -2987,6 +3008,28 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Wire achievement-unlock SSE broadcasts at a single point so any unlock
+  // site (deterministic platform checks, IPC tool calls, telemetry) fires
+  // identically without each caller plumbing the channel.
+  setAchievementBroadcaster((def, group) => {
+    for (const ch of channels) {
+      if (ch.name === 'web' && 'broadcastAchievement' in ch) {
+        (
+          ch as { broadcastAchievement: (d: typeof def, g: string) => void }
+        ).broadcastAchievement(def, group);
+        break;
+      }
+    }
+  });
+
+  // One-shot pass on startup so users with existing activity (messages,
+  // tasks, multi-agent groups, etc.) get credit immediately rather than
+  // waiting for the next event hook to fire. Cheap and idempotent.
+  checkPlatformAchievements({
+    registeredGroupCount: Object.keys(registeredGroups).length,
+    groupFolders: Object.values(registeredGroups).map((g) => g.folder),
+  });
+
   // Shared callback: tasks mutated or a run completed. Refreshes per-group
   // task snapshots and nudges the web UI to re-sort the sidebar (used when
   // the user has chosen "upcoming schedule" mode).
@@ -3005,6 +3048,13 @@ async function main(): Promise<void> {
     for (const group of Object.values(registeredGroups)) {
       writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
     }
+    // clockwork (≥1 task created), assembly_line (≥3 tasks in one group),
+    // night_shift (task ran while user was away) all become reachable when
+    // tasks are created or completed.
+    checkPlatformAchievements({
+      registeredGroupCount: Object.keys(registeredGroups).length,
+      groupFolders: Object.values(registeredGroups).map((g) => g.folder),
+    });
     for (const ch of channels) {
       if (ch.name === 'web' && 'broadcastGroupsChanged' in ch) {
         (ch as { broadcastGroupsChanged: () => void }).broadcastGroupsChanged();

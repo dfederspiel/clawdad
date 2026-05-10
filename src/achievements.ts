@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { GROUPS_DIR } from './config.js';
+import { platformAchievementPredicates } from './db.js';
 import { logger } from './logger.js';
 
 // --- Achievement Definitions ---
@@ -295,6 +296,7 @@ const EMPTY_STATE: AchievementState = {
 };
 
 let cachedState: AchievementState | null = null;
+let testMode = false;
 
 function achievementsPath(): string {
   return path.join(GROUPS_DIR, 'global', 'achievements.json');
@@ -327,6 +329,11 @@ export function loadAchievements(): AchievementState {
 }
 
 function saveState(state: AchievementState): void {
+  if (testMode) {
+    // Test isolation: never touch the user's real achievements.json.
+    cachedState = state;
+    return;
+  }
   const dir = path.dirname(achievementsPath());
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(achievementsPath(), JSON.stringify(state, null, 2) + '\n');
@@ -337,6 +344,46 @@ function saveState(state: AchievementState): void {
  * Attempt to unlock an achievement. Returns the definition if newly unlocked,
  * or null if already unlocked or invalid.
  */
+/**
+ * Broadcast hook for newly-unlocked achievements. Set once at startup by
+ * index.ts so any unlock site (deterministic checks, IPC, telemetry) fires
+ * the SSE event without each caller having to plumb the channel.
+ */
+let broadcaster: ((def: AchievementDef, group: string) => void) | null = null;
+
+export function setAchievementBroadcaster(
+  fn: (def: AchievementDef, group: string) => void,
+): void {
+  broadcaster = fn;
+}
+
+/** @internal - for tests only. */
+export function _clearAchievementBroadcaster(): void {
+  broadcaster = null;
+}
+
+/**
+ * @internal - for tests only. Installs an empty state in cache and enables
+ * test mode so subsequent saves don't touch the real achievements.json.
+ */
+export function _resetAchievementCacheForTests(): void {
+  testMode = true;
+  cachedState = { unlocked: {}, xp: 0 };
+}
+
+function emitUnlock(def: AchievementDef, group: string): void {
+  if (broadcaster) {
+    try {
+      broadcaster(def, group);
+    } catch (err) {
+      logger.warn(
+        { id: def.id, err },
+        'Achievement broadcaster threw — unlock recorded but SSE event lost',
+      );
+    }
+  }
+}
+
 export function unlockAchievement(
   id: string,
   group: string,
@@ -360,6 +407,7 @@ export function unlockAchievement(
 
   saveState(state);
   logger.info({ achievement: id, xp: def.xp, group }, 'Achievement unlocked');
+  emitUnlock(def, group);
 
   // Check if this completes all non-meta achievements (pack_complete)
   checkMetaAchievements(state);
@@ -386,11 +434,111 @@ function checkMetaAchievements(state: AchievementState): AchievementDef[] {
       };
       state.xp += def.xp;
       newlyUnlocked.push(def);
+      emitUnlock(def, 'meta');
     }
   }
 
   if (newlyUnlocked.length > 0) {
     saveState(state);
+  }
+
+  return newlyUnlocked;
+}
+
+/**
+ * Deterministically detect platform achievements that are observable from
+ * orchestrator state (DB rows, registered groups, agent.json files). Cheap —
+ * each check short-circuits on already-unlocked, and the underlying queries
+ * are EXISTS on indexed columns. Safe to call on every state-changing event.
+ *
+ * Replaces the old contract where most platform unlocks required the agent
+ * to call mcp__nanoclaw__unlock_achievement (unreliable: LLMs forget,
+ * smaller Ollama models can't reliably call MCP, descriptions are vague).
+ *
+ * The genuinely-semantic ones (good_memory, apprentice, commander) remain
+ * reachable only via the agent-driven IPC path — they live in the def list
+ * but no deterministic check fires them.
+ */
+export function checkPlatformAchievements(deps?: {
+  registeredGroupCount?: number;
+  groupFolders?: string[];
+}): AchievementDef[] {
+  const state = loadAchievements();
+  const newlyUnlocked: AchievementDef[] = [];
+
+  // Short-circuit: all platform achievements we deterministically detect
+  // are already unlocked, no point running predicates.
+  const detectableIds = [
+    'first_contact',
+    'clockwork',
+    'assembly_line',
+    'architect',
+    'team_player',
+    'specialist',
+    'thread_weaver',
+    'night_shift',
+  ];
+  if (detectableIds.every((id) => state.unlocked[id])) {
+    return newlyUnlocked;
+  }
+
+  const fire = (id: string, group = 'platform'): void => {
+    if (state.unlocked[id]) return;
+    if (!achievementIds.has(id)) return;
+    const def = achievementMap.get(id)!;
+    state.unlocked[id] = { unlockedAt: new Date().toISOString(), group };
+    state.xp += def.xp;
+    newlyUnlocked.push(def);
+    emitUnlock(def, group);
+  };
+
+  const preds = platformAchievementPredicates();
+
+  if (preds.hasUserMessage) fire('first_contact');
+  if (preds.hasScheduledTask) fire('clockwork');
+  if (preds.hasGroupWithThreeOrMoreTasks) fire('assembly_line');
+  if (preds.hasUserThreadReply) fire('thread_weaver');
+  if (preds.hasNightShiftTaskRun) fire('night_shift');
+
+  if ((deps?.registeredGroupCount ?? 0) >= 3) fire('architect');
+
+  // team_player + specialist need an on-disk scan: any group folder with
+  // an agents/ subdirectory containing ≥1 agent.json wired up. The caller
+  // passes the candidate folder list so we don't re-resolve registered
+  // groups in the achievements module.
+  if (deps?.groupFolders && deps.groupFolders.length > 0) {
+    let multiAgent = false;
+    let specialist = false;
+    for (const folder of deps.groupFolders) {
+      const agentsDir = path.join(GROUPS_DIR, folder, 'agents');
+      if (!fs.existsSync(agentsDir) || !fs.statSync(agentsDir).isDirectory())
+        continue;
+      const entries = fs.readdirSync(agentsDir);
+      let count = 0;
+      for (const entry of entries) {
+        const cfgPath = path.join(agentsDir, entry, 'agent.json');
+        if (!fs.existsSync(cfgPath)) continue;
+        count++;
+        try {
+          const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+          if (typeof cfg.trigger === 'string' && cfg.trigger.length > 0) {
+            specialist = true;
+          }
+        } catch {
+          /* malformed agent.json — skip */
+        }
+      }
+      if (count >= 2) multiAgent = true;
+      if (specialist && multiAgent) break;
+    }
+    if (multiAgent) fire('team_player');
+    if (specialist) fire('specialist');
+  }
+
+  if (newlyUnlocked.length > 0) {
+    saveState(state);
+    // pack_complete may now be reachable
+    checkMetaAchievements(state);
   }
 
   return newlyUnlocked;
@@ -416,6 +564,7 @@ export function checkTelemetryAchievements(telemetry: {
     };
     state.xp += def.xp;
     newlyUnlocked.push(def);
+    emitUnlock(def, 'meta');
   }
 
   if ((telemetry.currentStreak || 0) >= 7 && !state.unlocked['streak_7']) {
@@ -426,6 +575,7 @@ export function checkTelemetryAchievements(telemetry: {
     };
     state.xp += def.xp;
     newlyUnlocked.push(def);
+    emitUnlock(def, 'meta');
   }
 
   if ((telemetry.currentStreak || 0) >= 30 && !state.unlocked['streak_30']) {
@@ -436,6 +586,7 @@ export function checkTelemetryAchievements(telemetry: {
     };
     state.xp += def.xp;
     newlyUnlocked.push(def);
+    emitUnlock(def, 'meta');
   }
 
   if (newlyUnlocked.length > 0) {
