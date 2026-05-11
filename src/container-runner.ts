@@ -880,6 +880,12 @@ export async function spawnContainer(
   let stderr = '';
   let stdoutTruncated = false;
   let stderrTruncated = false;
+  let lastOutputStatus: 'success' | 'error' | null = null;
+  let lastOutputError: string | undefined;
+  parser.on('output', (output: ContainerOutput) => {
+    lastOutputStatus = output.status;
+    lastOutputError = output.error;
+  });
 
   container.stdout.on('data', (data) => {
     const chunk = data.toString();
@@ -932,7 +938,9 @@ export async function spawnContainer(
       const logFile = path.join(logsDir, `container-${timestamp}.log`);
       const isVerbose =
         process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
-      const isError = code !== 0;
+      const isExitError = code !== 0;
+      const isParsedError = lastOutputStatus === 'error';
+      const isError = isExitError || isParsedError;
 
       const logLines = [
         `=== Container Run Log ===`,
@@ -940,6 +948,10 @@ export async function spawnContainer(
         `Group: ${group.name}`,
         `IsMain: ${input.isMain}`,
         `Exit Code: ${code}`,
+        `Parsed OUTPUT Status: ${lastOutputStatus ?? 'none'}`,
+        ...(isParsedError && lastOutputError
+          ? [`Parsed OUTPUT Error: ${lastOutputError}`]
+          : []),
         `Stdout Truncated: ${stdoutTruncated}`,
         `Stderr Truncated: ${stderrTruncated}`,
         ``,
@@ -981,8 +993,18 @@ export async function spawnContainer(
 
       if (isError) {
         logger.error(
-          { group: group.name, code, stderr, stdout, logFile },
-          'Container exited with error',
+          {
+            group: group.name,
+            code,
+            parsedStatus: lastOutputStatus,
+            parsedError: lastOutputError,
+            stderr,
+            stdout,
+            logFile,
+          },
+          isExitError
+            ? 'Container exited with error'
+            : 'Container reported parsed output error',
         );
       }
 

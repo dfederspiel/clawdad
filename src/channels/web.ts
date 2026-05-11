@@ -14,9 +14,9 @@ import {
 } from '../runtime-profile.js';
 import { getCapabilityProfile } from '../model-capabilities.js';
 import { resolveEffectiveRuntime } from '../runtime-resolution.js';
-import { CLAUDE_SDK_TOOL_NAMES, listAvailableTools } from '../tool-registry.js';
+import { listAvailableTools, listToolsForRuntime } from '../tool-registry.js';
 import { computeXp, levelFromXp } from '../xp.js';
-import type { AgentRuntimeConfig } from '../runtime-types.js';
+import type { AgentRuntimeConfig, RuntimeProvider } from '../runtime-types.js';
 import {
   getAchievementResponse,
   checkTelemetryAchievements,
@@ -929,21 +929,20 @@ export class WebChannel implements Channel {
           const cleanTools = tools.filter(
             (t: unknown): t is string => typeof t === 'string' && t.length > 0,
           );
-          // Claude SDK tools (Bash, Read, Write, etc.) ship with the Anthropic
-          // Agent SDK and are not plumbed through other adapters. Reject them
-          // here so the contract surfaced in agent.json matches what the
-          // runtime can actually invoke — silent acceptance would have the
-          // tool appear "saved" but never fire.
-          const provider = effectiveRuntime?.provider || 'anthropic';
-          if (provider !== 'anthropic') {
-            const sdkTools = cleanTools.filter((t) =>
-              CLAUDE_SDK_TOOL_NAMES.has(t),
-            );
-            if (sdkTools.length > 0) {
-              return this.json(res, 400, {
-                error: `Claude SDK tools (${sdkTools.join(', ')}) are only available with the Anthropic runtime. Remove them or switch this agent's runtime to Anthropic.`,
-              });
-            }
+          // Verify every requested tool is supported by the agent's runtime.
+          // Single source of truth: the capability profile (via
+          // listToolsForRuntime) decides what's invokable. Silent acceptance
+          // of unsupported tools would persist a tool the adapter can't plumb,
+          // so the saved agent.json would drift from runtime behavior.
+          const supportedNames = new Set(
+            listToolsForRuntime(effectiveRuntime).map((t) => t.name),
+          );
+          const unsupported = cleanTools.filter((t) => !supportedNames.has(t));
+          if (unsupported.length > 0) {
+            const provider = effectiveRuntime?.provider || 'anthropic';
+            return this.json(res, 400, {
+              error: `Tools (${unsupported.join(', ')}) are not available on the ${provider} runtime. Remove them or switch this agent's runtime.`,
+            });
           }
           config.tools = cleanTools;
         } else {
@@ -1084,11 +1083,39 @@ export class WebChannel implements Channel {
       return this.refreshAgentsAndRespond(res, jid);
     }
 
-    // GET /api/tools — list tools available for per-agent allowlists (#74 Phase 2b).
-    // Static catalogue: Claude SDK built-ins + nanoclaw MCP tools. Kept
-    // in sync with container/agent-runner/src/claude-runtime.ts and
+    // GET /api/tools[?provider=&model=] — list tools available for per-agent
+    // allowlists (#74 Phase 2b). Static catalogue: Claude SDK built-ins +
+    // nanoclaw MCP tools. Kept in sync with
+    // container/agent-runner/src/claude-runtime.ts and
     // container/agent-runner/src/ipc-mcp-stdio.ts.
+    // When provider/model are supplied, the list is filtered to only the
+    // tools that runtime can actually invoke (#124 — capability profile is
+    // the source of truth, no separate UI heuristic).
     if (method === 'GET' && url.pathname === '/api/tools') {
+      const providerParam = url.searchParams.get('provider');
+      const model = url.searchParams.get('model');
+      const VALID_PROVIDERS: RuntimeProvider[] = [
+        'anthropic',
+        'ollama',
+        'openai',
+        'github-copilot',
+        'azure-openai',
+        'openrouter',
+        'litellm',
+      ];
+      if (
+        providerParam &&
+        (VALID_PROVIDERS as string[]).includes(providerParam)
+      ) {
+        const runtime: AgentRuntimeConfig = {
+          provider: providerParam as RuntimeProvider,
+        };
+        if (model) runtime.model = model;
+        return this.json(res, 200, {
+          tools: listToolsForRuntime(runtime),
+          runtime,
+        });
+      }
       return this.json(res, 200, { tools: listAvailableTools() });
     }
 
@@ -2079,13 +2106,30 @@ You do not delegate. If something falls outside your role, say so plainly in you
         if (!run) {
           return this.json(res, 404, { error: 'run not found' });
         }
+        // Reject cross-group requests: the URL's ?group= must match the
+        // run's recorded group_folder. Otherwise a stale runId paired with
+        // a different selected group would open the wrong session tree.
+        if (run.group_folder !== folder) {
+          return this.json(res, 400, {
+            error: 'run does not belong to this group',
+          });
+        }
+        // Require a session_id on the run. Without it, the prior code path
+        // fell back to getSession(folder) — the group's *current* session,
+        // which may be a different agent's. That fallback is exactly the
+        // cross-run / cross-agent context bleed #132 reported.
+        if (!run.session_id) {
+          return this.json(res, 404, {
+            error: 'run has no session — transcript unavailable',
+          });
+        }
         const end = new Date(run.timestamp).getTime();
         const start = end - (run.duration_ms || 0);
         // Pad by 2s on the leading edge — the SDK timestamps the `result`
         // message when the run ends, and earlier tool_use entries may have
         // slightly earlier clock readings than duration_ms alone captures.
         runWindow = { start: start - 2000, end: end + 500 };
-        runSessionId = run.session_id || null;
+        runSessionId = run.session_id;
         runMeta = {
           id: run.id,
           timestamp: run.timestamp,

@@ -1958,6 +1958,18 @@ async function runAgent(opts: RunAgentOptions): Promise<'success' | 'error'> {
   // Wrap onOutput to track session ID and usage from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
+        if (output.status === 'error') {
+          logger.warn(
+            {
+              agent: agentId,
+              chatJid,
+              provider: runtimeProvider,
+              error: output.error ?? null,
+              hasResult: output.result != null,
+            },
+            'Agent run reported error',
+          );
+        }
         const authFailureText =
           typeof output.error === 'string'
             ? output.error
@@ -3356,6 +3368,10 @@ async function main(): Promise<void> {
                     ).length
                   : 0,
                 textsAlreadyStreamed: result.textsAlreadyStreamed ?? 0,
+                error:
+                  result.status === 'error'
+                    ? (result.error ?? null)
+                    : undefined,
               },
               'Portal delegation onOutput received',
             );

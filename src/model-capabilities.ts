@@ -23,6 +23,17 @@ import {
   scheduleOllamaCapabilityRefresh,
 } from './ollama-capabilities.js';
 
+/**
+ * Per-runtime tool availability. Replaces the prior coarse heuristic
+ * (provider==='anthropic' → all tools, otherwise → mcp-nanoclaw only).
+ * Sources are evaluated against ToolDescriptor.source so this stays a
+ * single source of truth that backend validation and the UI both read.
+ */
+export type ToolAvailability =
+  | { kind: 'all' }
+  | { kind: 'none' }
+  | { kind: 'sources'; sources: ReadonlyArray<'claude-sdk' | 'mcp-nanoclaw'> };
+
 export interface CapabilityProfile {
   /**
    * True iff the runtime adapter actually passes MCP tools to the model.
@@ -31,6 +42,13 @@ export interface CapabilityProfile {
    * delivers that text as the user-visible message.
    */
   receivesMcpTools: boolean;
+
+  /**
+   * Which tools this runtime can actually invoke. Used by
+   * tool-registry.listToolsForRuntime to filter the static catalog so
+   * the UI picker and the PATCH validator agree by construction.
+   */
+  tools: ToolAvailability;
 
   /**
    * Shape of streamed content emitted to the host. `per-token` means the
@@ -53,6 +71,7 @@ export interface CapabilityProfile {
 
 const ANTHROPIC_PROFILE: CapabilityProfile = {
   receivesMcpTools: true,
+  tools: { kind: 'all' },
   streaming: 'chunked',
   delegationTimeoutMs: 180_000, // 3 min — allows headroom for large prompts
 };
@@ -61,12 +80,16 @@ const ANTHROPIC_PROFILE: CapabilityProfile = {
 // the runtime adapter).
 const OLLAMA_TEXT_ONLY_PROFILE: CapabilityProfile = {
   receivesMcpTools: false,
+  tools: { kind: 'none' },
   streaming: 'per-token',
   delegationTimeoutMs: 300_000, // 5 min — CPU-only text generation, no tool loop
 };
 
 const OLLAMA_TOOL_CAPABLE_PROFILE: CapabilityProfile = {
   receivesMcpTools: true,
+  // Non-Anthropic adapters don't plumb Claude SDK tools (Bash, Read, etc.)
+  // — only the MCP surface the orchestrator registers reaches the model.
+  tools: { kind: 'sources', sources: ['mcp-nanoclaw'] },
   // Tool loop runs non-streaming turns (we need the full response to read
   // tool_calls); the final assistant message is delivered whole.
   streaming: 'whole',
@@ -77,6 +100,7 @@ const OLLAMA_TOOL_CAPABLE_PROFILE: CapabilityProfile = {
 // platform context doesn't lie about tools that aren't plumbed.
 const UNSUPPORTED_PROFILE: CapabilityProfile = {
   receivesMcpTools: false,
+  tools: { kind: 'none' },
   streaming: 'whole',
   delegationTimeoutMs: 120_000, // 2 min — conservative default until wired
 };

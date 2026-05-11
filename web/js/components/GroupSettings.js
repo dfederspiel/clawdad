@@ -35,6 +35,10 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
   const [upstreamModels, setUpstreamModels] = useState([]);
   const [agentRuntimeEdits, setAgentRuntimeEdits] = useState({}); // { [agentName]: { provider, model } }
   const [toolRegistry, setToolRegistry] = useState([]);
+  // Cache of runtime-filtered tool lists, keyed by `${provider}:${model||''}`.
+  // The backend's listToolsForRuntime is the source of truth; the UI reads
+  // through this cache so the picker and the PATCH validator agree (#124).
+  const [toolsByRuntimeKey, setToolsByRuntimeKey] = useState({});
   // { [agentName]: { override: boolean, selected: string[] } }
   //   override=false → use role default (no agent.tools persisted)
   //   override=true + selected=[] → explicit "no tools" opt-out
@@ -83,6 +87,7 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
     setAgentModel('');
     setAgentToolEdits({});
     setToolsExpanded({});
+    setToolsByRuntimeKey({});
     // Fetch Ollama models (best-effort)
     api.getOllamaModels().then((data) => {
       setOllamaModels(data.models || []);
@@ -90,10 +95,28 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
     api.getUpstreamModels().then((data) => {
       setUpstreamModels(data.models || []);
     }).catch(() => {});
-    // Fetch available tools catalogue (best-effort)
+    // Fetch the full catalog (used for metadata + the "new agent" form,
+    // which can't know the future runtime).
     api.getTools().then((data) => {
       setToolRegistry(data.tools || []);
     }).catch(() => setToolRegistry([]));
+    // Prefetch a runtime-filtered list per distinct agent runtime in the
+    // group. Lets the picker drop the parallel source-based heuristic and
+    // ask the backend authoritatively which tools each agent can invoke.
+    const distinctRuntimes = new Map();
+    for (const a of group.agents || []) {
+      const provider = a.runtime?.provider || 'anthropic';
+      const model = a.runtime?.model || '';
+      const key = `${provider}:${model}`;
+      if (!distinctRuntimes.has(key)) {
+        distinctRuntimes.set(key, { provider, model: a.runtime?.model });
+      }
+    }
+    for (const [key, runtime] of distinctRuntimes) {
+      api.getTools(runtime).then((data) => {
+        setToolsByRuntimeKey((prev) => ({ ...prev, [key]: data.tools || [] }));
+      }).catch(() => {});
+    }
   }, [group?.jid, open]);
 
   if (!open || !group) return null;
@@ -229,6 +252,16 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
     };
   }
 
+  // Tools the agent's runtime can actually invoke (per the backend's
+  // capability profile). Returns null when the cache hasn't loaded yet so
+  // callers can fall back to permissive behaviour rather than over-stripping.
+  function supportedToolsFor(agent) {
+    if (!agent) return null;
+    const provider = agent.runtime?.provider || 'anthropic';
+    const model = agent.runtime?.model || '';
+    return toolsByRuntimeKey[`${provider}:${model}`] || null;
+  }
+
   function setAgentToolsEdit(name, next) {
     setAgentToolEdits((prev) => ({ ...prev, [name]: next }));
   }
@@ -249,19 +282,16 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
   async function handleSaveAgentTools(name) {
     if (agentBusy) return;
     const edit = getAgentToolsEdit(name);
-    // Strip Claude SDK tools when the agent's runtime is non-Anthropic — those
-    // tools ship with the Anthropic SDK and aren't plumbed through other
-    // adapters. Without this, the backend rejects the save (and rightly so),
-    // but the UI hides those entries so the user has no way to un-check them.
+    // Strip tools the agent's runtime can't actually invoke. The UI hides
+    // those entries so a user can't un-check them; without this filter the
+    // save would carry stale carryover (e.g. SDK tools selected before the
+    // runtime was switched to Ollama) and the backend would reject — but
+    // the user would have no way to clear them from this form.
     const agent = (group.agents || []).find((a) => a.name === name);
-    const provider = agent?.runtime?.provider || 'anthropic';
-    const cleanedSelected =
-      provider === 'anthropic'
-        ? edit.selected
-        : edit.selected.filter((n) => {
-            const tool = toolRegistry.find((t) => t.name === n);
-            return !tool || tool.source !== 'claude-sdk';
-          });
+    const supported = supportedToolsFor(agent);
+    const cleanedSelected = supported
+      ? edit.selected.filter((n) => supported.some((t) => t.name === n))
+      : edit.selected;
     setAgentBusy(true);
     setAgentError('');
     try {
@@ -538,16 +568,13 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
                       const edit = getAgentToolsEdit(agent.name);
                       const expanded = !!toolsExpanded[agent.name];
                       const dirty = agentToolsDirty(agent.name);
-                      // Claude SDK tools (Bash, Read, Web Search, etc.) live inside
-                      // the Anthropic Agent SDK — non-Anthropic adapters don't plumb
-                      // them through, so showing them here would be a lie. Filter by
-                      // the *persisted* runtime so toggling the dropdown doesn't flip
-                      // the picker before the runtime save has been confirmed.
+                      // Filter against the backend's capability profile (#124).
+                      // Until the per-runtime fetch resolves, fall back to the
+                      // full catalog so the picker isn't blank on first paint.
                       const persistedProvider = agent.runtime?.provider || 'anthropic';
                       const isAnthropic = persistedProvider === 'anthropic';
-                      const visibleTools = isAnthropic
-                        ? toolRegistry
-                        : toolRegistry.filter((t) => t.source !== 'claude-sdk');
+                      const runtimeFiltered = supportedToolsFor(agent);
+                      const visibleTools = runtimeFiltered || toolRegistry;
                       const bySource = visibleTools.reduce((acc, t) => {
                         (acc[t.source] = acc[t.source] || []).push(t);
                         return acc;

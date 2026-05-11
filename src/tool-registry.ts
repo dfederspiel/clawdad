@@ -16,6 +16,9 @@
  * Changes to either list should be mirrored here.
  */
 
+import { getCapabilityProfile } from './model-capabilities.js';
+import type { AgentRuntimeConfig } from './runtime-types.js';
+
 export interface ToolDescriptor {
   /** Canonical tool name. SDK tools are bare (e.g. "WebSearch"); MCP tools are prefixed (e.g. "mcp__nanoclaw__send_message"). */
   name: string;
@@ -294,9 +297,27 @@ export function listAvailableTools(): ToolDescriptor[] {
 /**
  * Tool names that ship inside the Anthropic Agent SDK runtime. Non-Anthropic
  * adapters (Ollama, etc.) don't plumb these through, so allowlisting them on
- * those agents is a silent no-op. Used by the host PATCH route + UI picker
- * to keep the contract honest.
+ * those agents is a silent no-op. Retained for legacy callers; new code
+ * should use {@link listToolsForRuntime} which derives availability from the
+ * capability profile.
  */
 export const CLAUDE_SDK_TOOL_NAMES: ReadonlySet<string> = new Set(
   CLAUDE_SDK_TOOLS.map((t) => t.name),
 );
+
+/**
+ * Filter the static catalog to the tools a given runtime can actually
+ * invoke. Single source of truth — the PATCH validator and the UI picker
+ * both read through this so saved tool selections always match what the
+ * runtime adapter will plumb through.
+ */
+export function listToolsForRuntime(
+  runtime: AgentRuntimeConfig | undefined,
+): ToolDescriptor[] {
+  const { tools } = getCapabilityProfile(runtime);
+  const all = listAvailableTools();
+  if (tools.kind === 'all') return all;
+  if (tools.kind === 'none') return [];
+  const allowedSources = new Set(tools.sources);
+  return all.filter((t) => allowedSources.has(t.source));
+}
