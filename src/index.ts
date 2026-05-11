@@ -1340,33 +1340,18 @@ async function processGroupMessages(
     ? findChannel(channels, originJid) || channel
     : channel;
 
-  // When specialist agents are @-mentioned alongside the coordinator, handle
-  // routing carefully to avoid double-execution. Two cases:
+  // When specialist agents are @-mentioned, route directly to them and skip
+  // the coordinator turn. The user named who they want; the coordinator's
+  // "X is on it" preamble adds an LLM turn and a portal-thread side panel
+  // for no benefit. Direct mentions land in main chat with no coordinator
+  // wrap-up afterwards.
   //
-  // 1) Multiple specialists triggered → run them in parallel via delegation
-  //    queue. Coordinator excluded from fan-out, re-triggers after completion.
-  // 2) Single specialist + coordinator → run ONLY the coordinator. It will see
-  //    the @-mention and can delegate if appropriate. Running both would cause
-  //    the specialist to execute twice (once directly, once via delegation).
+  // Multi-agent only — single-agent groups have nothing to route around.
   if (triggeredAgents.length > 1 && isMultiAgent) {
     const specialists = triggeredAgents.filter((a) => a.trigger);
     const coordinator = triggeredAgents.find((a) => !a.trigger);
 
-    if (specialists.length === 1 && coordinator) {
-      // Single @-mention: suppress direct specialist run, let coordinator handle.
-      // The coordinator sees the full message (including the @-mention) and can
-      // delegate to the specialist with proper context.
-      logger.info(
-        {
-          group: group.name,
-          specialist: specialists[0].name,
-          coordinator: coordinator.name,
-        },
-        'Single specialist @-mentioned alongside coordinator — routing to coordinator only to avoid dual execution',
-      );
-      triggeredAgents.length = 0;
-      triggeredAgents.push(coordinator);
-    } else if (specialists.length > 1) {
+    if (specialists.length >= 1) {
       const MENTION_TIMEOUT = 120_000; // 2 minutes, same as coordinator delegations
       const batchId = `fanout-${randomUUID()}`;
       logger.info(
@@ -1375,7 +1360,7 @@ async function processGroupMessages(
           agents: specialists.map((a) => a.name),
           hasCoordinator: !!coordinator,
         },
-        'Multi-agent: running @-mentioned specialists in parallel',
+        'Multi-agent: routing @-mention(s) directly to specialist(s)',
       );
 
       for (const agent of specialists) {
@@ -1388,7 +1373,7 @@ async function processGroupMessages(
             targetAgentId: `${group.folder}/${agent.name}`,
             message: prompt,
             visibility: threadId ? 'portal' : 'main_chat',
-            completionPolicy: 'retrigger_coordinator',
+            completionPolicy: 'final_response',
             batchId,
             threadId,
           },
@@ -1462,25 +1447,29 @@ async function processGroupMessages(
               },
               onProgress: (event) => broadcastProgress(responseJid, event),
               onText: async (rawText) => {
-                // Deliver intermediate text as a chat message; the typing
-                // indicator's tool history is reserved for actual tool calls.
+                // Liveness signal only — drives the typing indicator and
+                // resets the host watchdog. Final delivery happens via
+                // onOutput's result.result so we don't double-post when
+                // streaming runtimes (e.g. Ollama text-only) emit
+                // intermediate text whose content is also in the final
+                // result. Consistent with the coordinator-portal and
+                // main-loop onText handlers.
                 const text = rawText
                   .replace(/<internal>[\s\S]*?<\/internal>/g, '')
                   .trim();
                 if (!text) return;
-                if (
-                  await deliverAgentMessage(
-                    responseChannel,
-                    responseJid,
-                    text,
-                    lease,
-                    threadId,
-                    agent.displayName,
-                  )
-                ) {
-                  deliveredToUser = true;
-                  deliveredTexts.push(text);
-                }
+                setActiveAgentName(responseJid, agent.displayName);
+                const summary =
+                  text.length > 120 ? text.slice(0, 117) + '...' : text;
+                broadcastProgress(
+                  responseJid,
+                  {
+                    tool: 'text',
+                    summary,
+                    timestamp: new Date().toISOString(),
+                  },
+                  threadId,
+                );
               },
               agent,
               isDelegation: true,

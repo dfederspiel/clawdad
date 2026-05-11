@@ -17,17 +17,55 @@ async function fetchJson(path, opts = {}) {
 let eventSource = null;
 const listeners = new Map();
 
-export function connectSSE(clientId) {
-  if (eventSource) eventSource.close();
-  eventSource = new EventSource(`/api/events?clientId=${clientId}`);
-  eventSource.onerror = () => console.warn('SSE reconnecting...');
+const SSE_RECONNECT_INITIAL_MS = 1000;
+const SSE_RECONNECT_MAX_MS = 30000;
 
-  for (const [event, cbs] of listeners) {
-    eventSource.addEventListener(event, (e) => {
-      const data = JSON.parse(e.data);
-      for (const cb of cbs) cb(data);
-    });
+export function connectSSE(clientId) {
+  let reconnectDelay = SSE_RECONNECT_INITIAL_MS;
+  let reconnectTimer = null;
+
+  function attachListeners(es) {
+    for (const [event, cbs] of listeners) {
+      es.addEventListener(event, (e) => {
+        const data = JSON.parse(e.data);
+        for (const cb of cbs) cb(data);
+      });
+    }
   }
+
+  function open() {
+    if (eventSource) eventSource.close();
+    // Rotate the connection-scoped suffix on each reconnect so the server
+    // never sees two live connections claiming the same identity. The
+    // server keys by an internal UUID anyway, but this keeps logs clean.
+    const url = `/api/events?clientId=${clientId}-${Date.now()}`;
+    const es = new EventSource(url);
+    eventSource = es;
+
+    es.onopen = () => {
+      reconnectDelay = SSE_RECONNECT_INITIAL_MS;
+    };
+
+    es.onerror = () => {
+      // Browsers auto-reconnect EventSource only when readyState transitions
+      // through CONNECTING. After a hard close (server restart, proxy idle
+      // timeout, sleep/wake), readyState lands on CLOSED and the browser
+      // gives up. Restart manually with backoff.
+      if (es.readyState === EventSource.CLOSED && eventSource === es) {
+        if (reconnectTimer) return;
+        console.warn(`SSE closed; reconnecting in ${reconnectDelay}ms`);
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          open();
+          reconnectDelay = Math.min(reconnectDelay * 2, SSE_RECONNECT_MAX_MS);
+        }, reconnectDelay);
+      }
+    };
+
+    attachListeners(es);
+  }
+
+  open();
 }
 
 export function onSSE(event, cb) {

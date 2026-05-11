@@ -66,6 +66,38 @@ export async function ollamaModelSupportsTools(model: string): Promise<boolean> 
 
 const MAX_TOOL_TURNS = 10;
 
+// Streaming-text liveness cadence. Each yielded `text` event resets the
+// host's idle watchdog and updates the typing indicator. Smaller values
+// = more responsive UI but noisier event stream; we batch by char count
+// OR elapsed time, whichever fires first.
+const TEXT_CHUNK_FLUSH_CHARS = 200;
+const TEXT_CHUNK_FLUSH_INTERVAL_MS = 1500;
+
+/** Compact human-readable summary of a tool invocation for progress display. */
+function summarizeOllamaToolCall(
+  name: string,
+  args: Record<string, unknown> | undefined,
+): string {
+  if (!args) return name;
+  // Strip MCP qualified-name prefix (mcp__server__tool → tool) for display.
+  const display = name.replace(/^mcp__[^_]+__/, '');
+  // Pick one short value to surface; prefer common identifying fields.
+  const candidate =
+    (args.message as string | undefined) ||
+    (args.text as string | undefined) ||
+    (args.summary as string | undefined) ||
+    (args.title as string | undefined) ||
+    (args.path as string | undefined) ||
+    (args.file_path as string | undefined) ||
+    (args.url as string | undefined) ||
+    (args.query as string | undefined);
+  if (typeof candidate === 'string' && candidate.length > 0) {
+    const trimmed = candidate.split('\n')[0].slice(0, 60);
+    return `${display}: ${trimmed}`;
+  }
+  return display;
+}
+
 /**
  * Tools whose execution itself produces a user-visible message in the chat.
  * After the model invokes one, we exit the tool loop without giving it
@@ -334,6 +366,16 @@ export class OllamaRuntime {
     log: (m: string) => void,
   ): AsyncIterable<RuntimeEvent> {
     const client = getOllamaClient();
+
+    // Liveness event before the stream starts — resets the host's idle
+    // watchdog immediately so a slow first-token doesn't trip the timeout
+    // before any chunk arrives.
+    yield {
+      type: 'progress',
+      summary: `Thinking (${model})...`,
+      timestamp: new Date().toISOString(),
+    };
+
     let stream;
     try {
       stream = await client.chat({ model, messages, stream: true, options });
@@ -350,6 +392,8 @@ export class OllamaRuntime {
     log(`Ollama: calling ${model} with ${messages.length} messages (text-only)`);
 
     let fullText = '';
+    let pendingChunk = '';
+    let lastFlush = Date.now();
     let finalChunk:
       | {
           total_duration?: number;
@@ -360,10 +404,35 @@ export class OllamaRuntime {
 
     try {
       for await (const chunk of stream) {
-        if (chunk.message?.content) fullText += chunk.message.content;
+        if (chunk.message?.content) {
+          fullText += chunk.message.content;
+          pendingChunk += chunk.message.content;
+          const now = Date.now();
+          if (
+            pendingChunk.length >= TEXT_CHUNK_FLUSH_CHARS ||
+            now - lastFlush >= TEXT_CHUNK_FLUSH_INTERVAL_MS
+          ) {
+            yield {
+              type: 'text',
+              text: pendingChunk,
+              timestamp: new Date().toISOString(),
+            };
+            pendingChunk = '';
+            lastFlush = now;
+          }
+        }
         if (chunk.done) finalChunk = chunk;
       }
     } catch (err) {
+      // Flush whatever we have — gives the host one last liveness signal
+      // and surfaces partial output in logs/debug instead of vanishing.
+      if (pendingChunk) {
+        yield {
+          type: 'text',
+          text: pendingChunk,
+          timestamp: new Date().toISOString(),
+        };
+      }
       yield {
         type: 'result',
         status: 'error',
@@ -371,6 +440,14 @@ export class OllamaRuntime {
         error: `Ollama stream error: ${err instanceof Error ? err.message : String(err)}`,
       };
       return;
+    }
+
+    if (pendingChunk) {
+      yield {
+        type: 'text',
+        text: pendingChunk,
+        timestamp: new Date().toISOString(),
+      };
     }
 
     yield buildResultEvent({
@@ -454,6 +531,18 @@ export class OllamaRuntime {
 
     try {
       for (turns = 0; turns < MAX_TOOL_TURNS; turns++) {
+        // Liveness signal before each (potentially long) inference call.
+        // Resets the host's idle watchdog and tells the UI which turn the
+        // model is on so a multi-turn tool loop doesn't look frozen.
+        yield {
+          type: 'progress',
+          summary:
+            turns === 0
+              ? `Thinking (${model})...`
+              : `Thinking (${model}, turn ${turns + 1}/${MAX_TOOL_TURNS})...`,
+          timestamp: new Date().toISOString(),
+        };
+
         // Tool loop doesn't stream — the response object exposes
         // tool_calls directly and we need the full message before we can
         // decide whether to keep looping.
@@ -482,6 +571,12 @@ export class OllamaRuntime {
             const name = call.function.name;
             const args = call.function.arguments ?? {};
             log(`Ollama tool_call: ${name}`);
+            yield {
+              type: 'progress',
+              tool: name,
+              summary: summarizeOllamaToolCall(name, args),
+              timestamp: new Date().toISOString(),
+            };
             const result = await bridge.executeToolCall(name, args);
             messages.push({
               role: 'tool',
@@ -532,6 +627,12 @@ export class OllamaRuntime {
           let userVisibleDelivered = false;
           for (const call of recovered) {
             log(`Ollama tool_call (recovered): ${call.name}`);
+            yield {
+              type: 'progress',
+              tool: call.name,
+              summary: summarizeOllamaToolCall(call.name, call.arguments),
+              timestamp: new Date().toISOString(),
+            };
             const result = await bridge.executeToolCall(
               call.name,
               call.arguments,
@@ -555,8 +656,18 @@ export class OllamaRuntime {
           continue;
         }
 
-        // No tool calls → the model produced a final response.
-        if (response.message?.content) fullText = response.message.content;
+        // No tool calls → the model produced a final response. Emit a
+        // text event so the host's typing indicator reflects what just
+        // arrived; the same content is also returned in the result event
+        // for actual message delivery.
+        if (response.message?.content) {
+          fullText = response.message.content;
+          yield {
+            type: 'text',
+            text: fullText,
+            timestamp: new Date().toISOString(),
+          };
+        }
         break;
       }
 

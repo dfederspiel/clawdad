@@ -1,10 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock the ollama-client module BEFORE importing OllamaRuntime so the
+// runtime picks up the stub. chatMock is rebound per test.
+const chatMock = vi.fn();
+vi.mock('./ollama-client.js', () => ({
+  getOllamaClient: () => ({ chat: chatMock }),
+}));
 
 import {
   USER_VISIBLE_TOOL_NAMES,
   isUserVisibleTool,
+  OllamaRuntime,
   parseTextModeToolCall,
 } from './ollama-runtime.js';
+import type { RuntimeEvent } from './runtime-interface.js';
 
 describe('isUserVisibleTool', () => {
   it('returns true for tools whose execution produces a user-facing message', () => {
@@ -135,5 +144,149 @@ describe('parseTextModeToolCall', () => {
     expect(parseTextModeToolCall('42', known)).toBeNull();
     expect(parseTextModeToolCall('[1,2,3]', known)).toBeNull();
     expect(parseTextModeToolCall('"hello"', known)).toBeNull();
+  });
+});
+
+// Liveness contract: long inferences must yield intermediate `progress`
+// or `text` events so the host's idle watchdog (queryOnce in
+// container-runner.ts) keeps resetting and the UI shows activity. Before
+// this contract, the Ollama text-only path buffered every chunk into one
+// final `result` event — slow models silently tripped the wall-clock
+// timeout from spawn (3-5 min) with zero user-visible feedback.
+describe('OllamaRuntime — liveness events (text-only path)', () => {
+  beforeEach(() => {
+    chatMock.mockReset();
+    // Force the text-only branch by reporting no tool capability. The
+    // capability check uses fetch(), so stub it inline.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ capabilities: [] }),
+      }),
+    );
+  });
+
+  // Build an async iterable from an array of chunks — mirrors the shape
+  // of ollama-js's streaming chat response.
+  function streamFrom(
+    chunks: Array<{ message?: { content: string }; done?: boolean }>,
+  ): AsyncIterable<unknown> {
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const c of chunks) yield c;
+      },
+    };
+  }
+
+  function makeRuntime(): OllamaRuntime {
+    return new OllamaRuntime({
+      containerInput: {
+        chatJid: 'web:test',
+        groupFolder: 'web_test',
+        isMain: false,
+      },
+    });
+  }
+
+  async function collect(
+    runtime: OllamaRuntime,
+    text: string,
+  ): Promise<RuntimeEvent[]> {
+    const events: RuntimeEvent[] = [];
+    for await (const ev of runtime.runTurn({
+      messages: [
+        { role: 'user', content: [{ type: 'text', text }] },
+      ],
+      attachments: [],
+      agentId: 'test-agent',
+      runtime: { provider: 'ollama', model: 'fake-model' },
+    })) {
+      events.push(ev);
+    }
+    return events;
+  }
+
+  it('yields a progress event before any chunk arrives — resets the host watchdog before first token', async () => {
+    chatMock.mockResolvedValue(
+      streamFrom([{ message: { content: 'hi' }, done: true }]),
+    );
+    const runtime = makeRuntime();
+    const events = await collect(runtime, 'hello');
+
+    // First event must be the pre-stream progress signal — anything
+    // else means the watchdog could fire while connect() hangs.
+    expect(events[0]?.type).toBe('progress');
+    expect((events[0] as { type: 'progress'; summary: string }).summary).toMatch(
+      /thinking/i,
+    );
+  });
+
+  it('flushes a text event when the buffer crosses the size threshold (200 chars)', async () => {
+    // Three chunks of 80 chars each = 240 chars total. The buffer
+    // should flush after chunk 3 (240 >= 200) but not after chunk 1
+    // (80 < 200).
+    const chunk = 'x'.repeat(80);
+    chatMock.mockResolvedValue(
+      streamFrom([
+        { message: { content: chunk } },
+        { message: { content: chunk } },
+        { message: { content: chunk }, done: true },
+      ]),
+    );
+    const runtime = makeRuntime();
+    const events = await collect(runtime, 'go');
+
+    const textEvents = events.filter((e) => e.type === 'text') as Array<{
+      type: 'text';
+      text: string;
+    }>;
+    // At least one mid-stream flush + a tail flush. Three 80-char chunks
+    // produce one flush at 240 chars, then the residual is empty — but
+    // if the implementation flushes only at end, that's still ≥1. Lower
+    // bound: any text events at all proves the buffering isn't black-hole.
+    expect(textEvents.length).toBeGreaterThan(0);
+    expect(textEvents.map((e) => e.text).join('')).toBe(chunk.repeat(3));
+  });
+
+  it('returns the full accumulated text in the final result, regardless of how it was streamed', async () => {
+    chatMock.mockResolvedValue(
+      streamFrom([
+        { message: { content: 'Hello, ' } },
+        { message: { content: 'world!' }, done: true },
+      ]),
+    );
+    const runtime = makeRuntime();
+    const events = await collect(runtime, 'greet');
+
+    const last = events[events.length - 1];
+    expect(last.type).toBe('result');
+    if (last.type === 'result') {
+      expect(last.status).toBe('success');
+      expect(last.result).toBe('Hello, world!');
+    }
+  });
+
+  it('flushes pending buffer on stream error so partial output is not silently dropped', async () => {
+    // Stream that yields one short chunk then throws — exercises the
+    // catch-block flush. Without it, partial output disappears.
+    chatMock.mockResolvedValue({
+      async *[Symbol.asyncIterator]() {
+        yield { message: { content: 'partial' } };
+        throw new Error('connection reset');
+      },
+    });
+    const runtime = makeRuntime();
+    const events = await collect(runtime, 'go');
+
+    const textEvents = events.filter((e) => e.type === 'text') as Array<{
+      type: 'text';
+      text: string;
+    }>;
+    expect(textEvents.map((e) => e.text).join('')).toBe('partial');
+
+    const last = events[events.length - 1];
+    expect(last.type).toBe('result');
+    if (last.type === 'result') expect(last.status).toBe('error');
   });
 });

@@ -2606,7 +2606,12 @@ You do not delegate. If something falls outside your role, say so plainly in you
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): void {
-    const clientId = url.searchParams.get('clientId') || randomUUID();
+    // The user-supplied clientId is informational only (logging/debug). The
+    // map key is an internal per-connection UUID so two connections that
+    // happen to share a clientId — common during reconnect races, multi-tab,
+    // or proxy retries — can coexist without one's close handler evicting
+    // the other from the broadcast set.
+    const connId = randomUUID();
     const jidFilter = url.searchParams.get('jid') || undefined;
 
     res.writeHead(200, {
@@ -2616,14 +2621,14 @@ You do not delegate. If something falls outside your role, say so plainly in you
     });
     res.write(': connected\n\n');
 
-    this.sseClients.set(clientId, { res, jid: jidFilter });
+    this.sseClients.set(connId, { res, jid: jidFilter });
 
     // Keepalive
     const keepalive = setInterval(() => res.write(': keepalive\n\n'), 30000);
 
     req.on('close', () => {
       clearInterval(keepalive);
-      this.sseClients.delete(clientId);
+      this.sseClients.delete(connId);
     });
   }
 
