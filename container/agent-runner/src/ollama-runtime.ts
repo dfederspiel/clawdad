@@ -66,6 +66,34 @@ export async function ollamaModelSupportsTools(model: string): Promise<boolean> 
 
 const MAX_TOOL_TURNS = 10;
 
+/**
+ * Emit a structured per-tool-call event to stderr. The `[OLLAMA tool_call]`
+ * prefix is recognised by the host's stderr filter (src/container-runner.ts)
+ * and promoted to logger.info — so these events are visible at default log
+ * level. Body is JSON so downstream tooling can parse without regex.
+ *
+ * Closes the diagnostic gap surfaced in #135: when an Ollama tool loop
+ * stalls or errors mid-turn, the surviving record now identifies which
+ * call failed, on which model, and how long it took.
+ */
+function emitToolCallEvent(
+  log: (m: string) => void,
+  fields: {
+    provider: string;
+    model: string;
+    tool: string;
+    outcome: 'success' | 'error';
+    durationMs: number;
+    mode: 'structured' | 'recovered';
+    errorPreview?: string;
+  },
+): void {
+  // [OLLAMA] prefix matches the existing convention (host promotes lines
+  // containing this substring to logger.info; see container-runner.ts).
+  // `tool_call` follows the prefix as a fixed event tag for easy grep.
+  log(`[OLLAMA] tool_call ${JSON.stringify(fields)}`);
+}
+
 // Streaming-text liveness cadence. Each yielded `text` event resets the
 // host's idle watchdog and updates the typing indicator. Smaller values
 // = more responsive UI but noisier event stream; we batch by char count
@@ -570,7 +598,6 @@ export class OllamaRuntime {
           for (const call of toolCalls) {
             const name = call.function.name;
             const args = call.function.arguments ?? {};
-            log(`Ollama tool_call: ${name}`);
             yield {
               type: 'progress',
               tool: name,
@@ -578,6 +605,17 @@ export class OllamaRuntime {
               timestamp: new Date().toISOString(),
             };
             const result = await bridge.executeToolCall(name, args);
+            emitToolCallEvent(log, {
+              provider: 'ollama',
+              model,
+              tool: name,
+              outcome: result.isError ? 'error' : 'success',
+              durationMs: result.durationMs,
+              mode: 'structured',
+              errorPreview: result.isError
+                ? result.content.slice(0, 200)
+                : undefined,
+            });
             messages.push({
               role: 'tool',
               content: result.content,
@@ -626,7 +664,6 @@ export class OllamaRuntime {
           });
           let userVisibleDelivered = false;
           for (const call of recovered) {
-            log(`Ollama tool_call (recovered): ${call.name}`);
             yield {
               type: 'progress',
               tool: call.name,
@@ -637,6 +674,17 @@ export class OllamaRuntime {
               call.name,
               call.arguments,
             );
+            emitToolCallEvent(log, {
+              provider: 'ollama',
+              model,
+              tool: call.name,
+              outcome: result.isError ? 'error' : 'success',
+              durationMs: result.durationMs,
+              mode: 'recovered',
+              errorPreview: result.isError
+                ? result.content.slice(0, 200)
+                : undefined,
+            });
             messages.push({
               role: 'tool',
               content: result.content,
