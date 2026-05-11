@@ -351,6 +351,7 @@ export class WebChannel implements Channel {
     isTyping: boolean,
     threadId?: string,
     agentName?: string,
+    instanceId?: string,
   ): Promise<void> {
     const name = agentName || getActiveAgentName(jid);
     this.broadcast('typing', {
@@ -358,6 +359,7 @@ export class WebChannel implements Channel {
       isTyping,
       thread_id: threadId,
       agent_name: name,
+      instance_id: instanceId,
     });
   }
 
@@ -489,13 +491,18 @@ export class WebChannel implements Channel {
     chatJid: string,
     event: { tool?: string; summary: string; timestamp: string },
     threadId?: string,
+    agentName?: string,
+    instanceId?: string,
   ): void {
-    const agentName = getActiveAgentName(chatJid);
+    // Prefer the explicit per-call agentName; falling back to the global
+    // slot races across parallel instances of the same agent (#130).
+    const name = agentName || getActiveAgentName(chatJid);
     this.broadcast('agent_progress', {
       jid: chatJid,
       ...event,
-      agent_name: agentName,
+      agent_name: name,
       thread_id: threadId,
+      instance_id: instanceId,
     });
   }
 

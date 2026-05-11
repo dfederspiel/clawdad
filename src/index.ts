@@ -284,10 +284,18 @@ function broadcastProgress(
   chatJid: string,
   event: ProgressEvent,
   threadId?: string,
+  agentName?: string,
+  instanceId?: string,
 ): void {
   for (const ch of channels) {
     if (ch.name === 'web' && 'broadcastAgentProgress' in ch) {
-      (ch as any).broadcastAgentProgress(chatJid, event, threadId);
+      (ch as any).broadcastAgentProgress(
+        chatJid,
+        event,
+        threadId,
+        agentName,
+        instanceId,
+      );
       break;
     }
   }
@@ -828,7 +836,7 @@ async function executeAutomationActions(
               completionPolicy: 'final_response',
               batchId,
             },
-            async () => {
+            async (runId) => {
               const lease = beginDeliveryLease(chatJid, batchId);
               group.containerConfig = {
                 ...savedConfig,
@@ -867,6 +875,7 @@ async function executeAutomationActions(
                 true,
                 undefined,
                 agent.displayName,
+                runId,
               );
 
               const status = await runAgent({
@@ -913,10 +922,18 @@ async function executeAutomationActions(
                       false,
                       undefined,
                       agent.displayName,
+                      runId,
                     );
                   }
                 },
-                onProgress: (event) => broadcastProgress(chatJid, event),
+                onProgress: (event) =>
+                  broadcastProgress(
+                    chatJid,
+                    event,
+                    undefined,
+                    agent.displayName,
+                    runId,
+                  ),
                 onText: async (rawText) => {
                   // TEXT markers deliver the actual message content as a chat
                   // message — no extra progress broadcast (would duplicate into
@@ -958,6 +975,7 @@ async function executeAutomationActions(
                 false,
                 undefined,
                 agent.displayName,
+                runId,
               );
               if (persistExplicitAgentStatus(chatJid, agent.name, '')) {
                 logger.info(
@@ -1377,7 +1395,7 @@ async function processGroupMessages(
             batchId,
             threadId,
           },
-          async () => {
+          async (runId) => {
             const lease = beginDeliveryLease(responseJid, batchId);
             let deliveredToUser = false;
             const deliveredTexts: string[] = [];
@@ -1395,6 +1413,7 @@ async function processGroupMessages(
               true,
               threadId,
               agent.displayName,
+              runId,
             );
             // Intermediate TEXT blocks are shown as status in the typing indicator
 
@@ -1442,10 +1461,18 @@ async function processGroupMessages(
                     false,
                     threadId,
                     agent.displayName,
+                    runId,
                   );
                 }
               },
-              onProgress: (event) => broadcastProgress(responseJid, event),
+              onProgress: (event) =>
+                broadcastProgress(
+                  responseJid,
+                  event,
+                  threadId,
+                  agent.displayName,
+                  runId,
+                ),
               onText: async (rawText) => {
                 // Liveness signal only — drives the typing indicator and
                 // resets the host watchdog. Final delivery happens via
@@ -1469,6 +1496,8 @@ async function processGroupMessages(
                     timestamp: new Date().toISOString(),
                   },
                   threadId,
+                  agent.displayName,
+                  runId,
                 );
               },
               agent,
@@ -1500,6 +1529,7 @@ async function processGroupMessages(
               false,
               threadId,
               agent.displayName,
+              runId,
             );
 
             // Evaluate and execute automation rules on agent result
@@ -3306,7 +3336,7 @@ async function main(): Promise<void> {
         batchId,
         threadId: portalThreadId,
       },
-      async () => {
+      async (runId) => {
         const lease = beginDeliveryLease(chatJid, batchId);
         let deliveredToUser = false;
         const deliveredTexts: string[] = [];
@@ -3345,6 +3375,7 @@ async function main(): Promise<void> {
           true,
           portalThreadId,
           agent.displayName,
+          runId,
         );
 
         const status = await runAgent({
@@ -3409,6 +3440,7 @@ async function main(): Promise<void> {
                 false,
                 portalThreadId,
                 agent.displayName,
+                runId,
               );
             }
             if (result.status === 'error') {
@@ -3417,11 +3449,18 @@ async function main(): Promise<void> {
                 false,
                 portalThreadId,
                 agent.displayName,
+                runId,
               );
             }
           },
           onProgress: (event) =>
-            broadcastProgress(chatJid, event, portalThreadId),
+            broadcastProgress(
+              chatJid,
+              event,
+              portalThreadId,
+              agent.displayName,
+              runId,
+            ),
           onText: async (rawText) => {
             const text = rawText
               .replace(/<internal>[\s\S]*?<\/internal>/g, '')
@@ -3434,6 +3473,8 @@ async function main(): Promise<void> {
               chatJid,
               { tool: 'text', summary, timestamp: new Date().toISOString() },
               portalThreadId,
+              agent.displayName,
+              runId,
             );
           },
           agent,
@@ -3466,6 +3507,7 @@ async function main(): Promise<void> {
           false,
           portalThreadId,
           agent.displayName,
+          runId,
         );
         broadcastThreadClosed?.(chatJid, portalThreadId);
         if (persistExplicitAgentStatus(chatJid, agent.name, '')) {

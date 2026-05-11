@@ -51,7 +51,11 @@ export const agentProgress = signal({}); // { [jid]: { tool, summary, history[] 
 // tool activity. Also tracks lastEventAt for stall detection.
 // { [thread_id]: { tool, summary, history[], lastEventAt } }
 export const portalProgress = signal({});
-export const activeAgents = signal({}); // { [jid]: string[] } — agent names currently working
+// { [jid]: Array<{name, instanceId?}> } — one entry per running instance.
+// Same agent appearing N times means N parallel runs (#130). instanceId is
+// present when the backend has minted one (delegation taskId); the poll-
+// based reconciliation in pollGroups adds name-only entries as a fallback.
+export const activeAgents = signal({});
 export const workState = signal({}); // { [jid]: WorkStateEvent }
 export const currentWorkState = computed(() => workState.value[selectedJid.value] || null);
 export const contextPressure = signal({}); // { [jid]: PressureEvent }
@@ -290,38 +294,67 @@ api.onSSE('message_update', (data) => {
 });
 
 api.onSSE('typing', (data) => {
+  // Portal-delegation typing events route to threadTyping (per-thread
+  // panel) and to activeAgents (sidebar parallel-instance count — #130).
+  // Chat-level typing state (typingGroups/typingStartTime/typingAgentName)
+  // only fires for non-portal events.
   if (data.thread_id) {
     threadTyping.value = { ...threadTyping.value, [data.thread_id]: data.isTyping };
-    return;
+  } else {
+    typingGroups.value = { ...typingGroups.value, [data.jid]: data.isTyping };
   }
-  typingGroups.value = { ...typingGroups.value, [data.jid]: data.isTyping };
-  // Track when typing started for elapsed time display
+  // Track when typing started for elapsed time display (chat-level only)
   if (data.isTyping) {
-    if (!typingStartTime.value[data.jid]) {
+    if (!data.thread_id && !typingStartTime.value[data.jid]) {
       typingStartTime.value = { ...typingStartTime.value, [data.jid]: Date.now() };
     }
     if (data.agent_name) {
-      typingAgentName.value = { ...typingAgentName.value, [data.jid]: data.agent_name };
-      // Track per-agent activity for multi-agent groups
+      if (!data.thread_id) {
+        typingAgentName.value = { ...typingAgentName.value, [data.jid]: data.agent_name };
+      }
+      // Per-instance tracking fires for BOTH portal and non-portal flows
+      // so the sidebar can count parallel same-agent runs (#130).
       const current = activeAgents.value[data.jid] || [];
-      if (!current.includes(data.agent_name)) {
-        activeAgents.value = { ...activeAgents.value, [data.jid]: [...current, data.agent_name] };
+      const alreadyTracked = data.instance_id
+        ? current.some((a) => a.instanceId === data.instance_id)
+        : false;
+      if (!alreadyTracked) {
+        activeAgents.value = {
+          ...activeAgents.value,
+          [data.jid]: [
+            ...current,
+            { name: data.agent_name, instanceId: data.instance_id },
+          ],
+        };
       }
     }
   } else {
-    const next = { ...typingStartTime.value };
-    delete next[data.jid];
-    typingStartTime.value = next;
-    // Clear agent name when agent stops typing.
-    // Keep recent progress history so the UI can stay informative during
-    // work-state gaps between visible text turns.
-    const names = { ...typingAgentName.value };
-    delete names[data.jid];
-    typingAgentName.value = names;
-    // Remove specific agent from active set, or clear all if no name
+    if (!data.thread_id) {
+      const next = { ...typingStartTime.value };
+      delete next[data.jid];
+      typingStartTime.value = next;
+      const names = { ...typingAgentName.value };
+      delete names[data.jid];
+      typingAgentName.value = names;
+    }
+    // Remove specific instance from active set. If instance_id is present
+    // use it exclusively (no name fallback) — duplicate stop events for the
+    // same instance are common (one in onOutput, one in the trailing
+    // cleanup) and a fallback-to-name would over-remove another instance.
+    // Without instance_id (legacy events), remove first occurrence by name.
     if (data.agent_name) {
       const current = activeAgents.value[data.jid] || [];
-      const filtered = current.filter(n => n !== data.agent_name);
+      let idx;
+      if (data.instance_id) {
+        idx = current.findIndex((a) => a.instanceId === data.instance_id);
+      } else {
+        idx = current.findIndex((a) => a.name === data.agent_name && !a.instanceId);
+        if (idx === -1) idx = current.findIndex((a) => a.name === data.agent_name);
+      }
+      const filtered =
+        idx === -1
+          ? current
+          : [...current.slice(0, idx), ...current.slice(idx + 1)];
       activeAgents.value = { ...activeAgents.value, [data.jid]: filtered };
     } else {
       activeAgents.value = { ...activeAgents.value, [data.jid]: [] };
@@ -995,8 +1028,39 @@ async function pollStatus() {
           ...(g.activeDelegationAgents || []),
         ];
         if (agentsWorking.length > 0) {
-          const current = newActiveAgentMap[g.jid] || [];
-          const merged = [...new Set([...current, ...agentsWorking])];
+          // Poll-based reconciliation. Server reports `agentsWorking` as a
+          // list with repeats — e.g. ["Greeter","Greeter","Greeter"] for 3
+          // parallel runs. We need to match THAT count per name in
+          // activeAgents (#130). Preserve instance-tracked entries from
+          // live SSE events first; add name-only entries only to fill the
+          // remaining count. This prevents the poll from collapsing the
+          // live multi-instance state down to one-per-name.
+          const liveEntries = activeAgents.value[g.jid] || [];
+          const serverCounts = new Map();
+          for (const name of agentsWorking) {
+            serverCounts.set(name, (serverCounts.get(name) || 0) + 1);
+          }
+          const merged = [];
+          const liveCountsByName = new Map();
+          // Keep all live instance-tracked entries (they are the source of
+          // truth for parallel runs).
+          for (const entry of liveEntries) {
+            if (entry.instanceId) {
+              merged.push(entry);
+              liveCountsByName.set(
+                entry.name,
+                (liveCountsByName.get(entry.name) || 0) + 1,
+              );
+            }
+          }
+          // Fill in name-only entries up to the server-reported count.
+          for (const [name, serverCount] of serverCounts) {
+            const haveLive = liveCountsByName.get(name) || 0;
+            const needed = Math.max(0, serverCount - haveLive);
+            for (let i = 0; i < needed; i++) {
+              merged.push({ name });
+            }
+          }
           newActiveAgentMap[g.jid] = merged;
         }
       }

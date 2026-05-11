@@ -195,6 +195,7 @@ export interface Channel {
     isTyping: boolean,
     threadId?: string,
     agentName?: string,
+    instanceId?: string,
   ): Promise<void>;
   // Optional: update a previously sent message in-place.
   updateMessage?(

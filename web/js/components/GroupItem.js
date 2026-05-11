@@ -23,7 +23,12 @@ function saveTaskDrawerState(jid, open) {
 }
 
 function AgentRow({ agent, jid }) {
-  const isWorking = (activeAgents.value[jid] || []).includes(agent.displayName);
+  // Per-instance shape (#130): activeAgents[jid] is Array<{name, instanceId?}>.
+  const instances = (activeAgents.value[jid] || []).filter(
+    (a) => a.name === agent.displayName,
+  );
+  const runningCount = instances.length;
+  const isWorking = runningCount > 0;
   const isCoordinator = !agent.trigger;
   const triggerLabel = agent.trigger
     ? agent.trigger.replace(/[\\^$.*+?()[\]{}|]/g, '').trim()
@@ -39,6 +44,9 @@ function AgentRow({ agent, jid }) {
       <div class="min-w-0 flex-1">
         <div class="flex items-start gap-2">
           <span class="truncate flex-1">${esc(agent.displayName)}</span>
+          ${runningCount > 1 && html`
+            <span class="text-[9px] leading-none px-1.5 py-1 rounded bg-green-400/20 text-green-400 font-medium shrink-0 mt-0.5" title="${runningCount} instances running in parallel">×${runningCount}</span>
+          `}
           ${isCoordinator && html`
             <span class="text-[9px] leading-none px-1.5 py-1 rounded bg-accent-dim text-accent font-medium shrink-0 mt-0.5">coord</span>
           `}

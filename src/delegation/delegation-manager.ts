@@ -34,7 +34,7 @@ export class DelegationManager {
 
   delegate(
     request: DelegationRequest,
-    fn: () => Promise<DelegationExecutionResult>,
+    fn: (runId: string) => Promise<DelegationExecutionResult>,
     agentDisplayName?: string,
   ): DelegationRun {
     const now = new Date().toISOString();
@@ -135,7 +135,7 @@ export class DelegationManager {
 
   private async execute(
     runId: string,
-    fn: () => Promise<DelegationExecutionResult>,
+    fn: (runId: string) => Promise<DelegationExecutionResult>,
   ): Promise<DelegationExecutionResult> {
     const started = this.store.update(runId, {
       status: 'running',
@@ -146,7 +146,7 @@ export class DelegationManager {
     }
 
     try {
-      const result = await fn();
+      const result = await fn(runId);
       const completedAt = new Date().toISOString();
       if (result.status === 'success') {
         const completed = this.store.update(runId, {
