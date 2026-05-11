@@ -7,14 +7,6 @@ export type RuntimeProvider =
   | 'openrouter'
   | 'litellm';
 
-export type RuntimeSupportLevel =
-  | 'native'
-  | 'adapter-managed'
-  | 'model-dependent'
-  | 'proxy-dependent'
-  | 'sdk-dependent'
-  | 'unsupported';
-
 export interface AgentRuntimeConfig {
   provider: RuntimeProvider;
   model?: string;
@@ -97,21 +89,14 @@ export type RuntimeEvent =
       resumeAt?: string;
     };
 
-export interface RuntimeCapabilityProfile {
-  provider: RuntimeProvider;
-  textInput: RuntimeSupportLevel;
-  imageInput: RuntimeSupportLevel;
-  localImageFileInput: RuntimeSupportLevel;
-  remoteImageUrlInput: RuntimeSupportLevel;
-  base64ImageInput: RuntimeSupportLevel;
-  toolUse: RuntimeSupportLevel;
-  streamingText: RuntimeSupportLevel;
-  sessionResume: RuntimeSupportLevel;
-  notes?: string[];
-}
-
+/**
+ * Adapter contract inside the container. Capability metadata lives on the
+ * host (`src/model-capabilities.ts` `CapabilityProfile`) — the host decides
+ * what to allow per (provider, model) and passes constraints through
+ * `RuntimeTurnInput`. Adapters don't need their own parallel capability
+ * type; they just consume the contract.
+ */
 export interface RuntimeSession {
   provider: RuntimeProvider;
-  capabilities: RuntimeCapabilityProfile;
   runTurn(input: RuntimeTurnInput): AsyncIterable<RuntimeEvent>;
 }

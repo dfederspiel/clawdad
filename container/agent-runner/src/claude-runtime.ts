@@ -9,7 +9,6 @@ import {
 
 import {
   AgentRuntimeConfig,
-  RuntimeCapabilityProfile,
   RuntimeEvent,
   RuntimeSession,
   RuntimeTurnInput,
@@ -276,22 +275,6 @@ function summarizeTool(name: string, input?: Record<string, unknown>): string {
 
 export class ClaudeCodeRuntime implements RuntimeSession {
   provider = 'anthropic' as const;
-
-  capabilities: RuntimeCapabilityProfile = {
-    provider: 'anthropic',
-    textInput: 'native',
-    imageInput: 'native',
-    localImageFileInput: 'sdk-dependent',
-    remoteImageUrlInput: 'native',
-    base64ImageInput: 'native',
-    toolUse: 'native',
-    streamingText: 'native',
-    sessionResume: 'native',
-    notes: [
-      'Runs through the Claude Code SDK.',
-      'This is the current production adapter boundary for Anthropic-backed execution.',
-    ],
-  };
 
   constructor(
     private readonly options: {
