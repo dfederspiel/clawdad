@@ -282,6 +282,17 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // #142 — Pinning columns. A 'pin' thread is a persistent reference to a
+  // (message_id, block_id?) tuple that renders in the side drawer alongside
+  // portals. pin_message_id is required for pin rows; pin_block_id is
+  // optional (null = pin the whole message rather than a specific block).
+  try {
+    database.exec(`ALTER TABLE threads ADD COLUMN pin_message_id TEXT`);
+    database.exec(`ALTER TABLE threads ADD COLUMN pin_block_id TEXT`);
+  } catch {
+    /* columns already exist */
+  }
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS media_artifacts (
       id TEXT PRIMARY KEY,
@@ -841,7 +852,7 @@ export function createThread(
   agentJid: string,
   originJid: string,
   agentName?: string,
-  kind: 'trigger' | 'portal' = 'trigger',
+  kind: 'trigger' | 'portal' | 'pin' = 'trigger',
   title?: string,
 ): void {
   db.prepare(
@@ -1074,6 +1085,76 @@ export function getPortalThreadsForChat(chatJid: string): ThreadInfo[] {
        ORDER BY t.created_at DESC`,
     )
     .all(chatJid, chatJid, chatJid, chatJid) as ThreadInfo[];
+}
+
+// --- Pin threads (#142) ---
+
+export interface PinThread {
+  thread_id: string;
+  origin_jid: string;
+  pin_message_id: string;
+  pin_block_id: string | null;
+  title: string | null;
+  created_at: string;
+}
+
+/**
+ * Create a 'pin' thread anchored to a (message_id, block_id?) tuple in
+ * the given chat. Pins are persistent references that render in the
+ * side drawer alongside portals.
+ */
+export function createPinThread(
+  threadId: string,
+  chatJid: string,
+  messageId: string,
+  blockId: string | null,
+  title: string | null,
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO threads (thread_id, agent_jid, origin_jid, agent_name, created_at, kind, title, pin_message_id, pin_block_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    threadId,
+    chatJid, // agent_jid is NOT NULL; reuse chatJid (pins aren't routed to an agent)
+    chatJid,
+    null,
+    new Date().toISOString(),
+    'pin',
+    title,
+    messageId,
+    blockId,
+  );
+}
+
+export function getPinsForChat(chatJid: string): PinThread[] {
+  return db
+    .prepare(
+      `SELECT thread_id, origin_jid, pin_message_id, pin_block_id, title, created_at
+       FROM threads
+       WHERE origin_jid = ? AND kind = 'pin'
+       ORDER BY created_at ASC`,
+    )
+    .all(chatJid) as PinThread[];
+}
+
+export function getPinByThreadId(threadId: string): PinThread | undefined {
+  return db
+    .prepare(
+      `SELECT thread_id, origin_jid, pin_message_id, pin_block_id, title, created_at
+       FROM threads WHERE thread_id = ? AND kind = 'pin'`,
+    )
+    .get(threadId) as PinThread | undefined;
+}
+
+/**
+ * Delete a pin thread. Returns true if a row was removed (used by the
+ * API to choose 404 vs. 200). Idempotent: deleting a missing pin is OK.
+ */
+export function deletePinThread(threadId: string): boolean {
+  const result = db
+    .prepare(`DELETE FROM threads WHERE thread_id = ? AND kind = 'pin'`)
+    .run(threadId);
+  return result.changes > 0;
 }
 
 export function storeMediaArtifact(artifact: MediaArtifact): void {

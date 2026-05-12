@@ -105,6 +105,7 @@ import {
   resolveGroupFolderPath,
 } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { renderPinnedSurfaces } from './pin-context.js';
 import { attachQuotedContext } from './quote-reply.js';
 import {
   findChannel,
@@ -1339,6 +1340,22 @@ async function processGroupMessages(
         sender: 'DelegationManager',
         timestamp: new Date().toISOString(),
       },
+    ];
+  }
+
+  // #142 — Prepend the "Pinned surfaces" block so the agent is nudged
+  // toward update_block on persistent surfaces. Empty when no pins exist.
+  const pinContext = renderPinnedSurfaces(chatJid);
+  if (pinContext) {
+    prompt = `${pinContext}\n\n${prompt}`;
+    structuredMessages = [
+      {
+        role: 'user',
+        content: pinContext,
+        sender: 'system',
+        timestamp: new Date().toISOString(),
+      },
+      ...structuredMessages,
     ];
   }
 

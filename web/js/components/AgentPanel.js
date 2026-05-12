@@ -1,6 +1,15 @@
 import { html } from 'htm/preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { agentPanel, portalThreads, portalProgress, selectedJid } from '../app.js';
+import {
+  agentPanel,
+  messages,
+  pins,
+  portalThreads,
+  portalProgress,
+  removePin,
+  selectedGroup,
+  selectedJid,
+} from '../app.js';
 import * as api from '../api.js';
 import { MessageBody } from './MessageBody.js';
 import { formatMessageTimestamp } from './Message.js';
@@ -402,6 +411,92 @@ function CloseButton() {
   `;
 }
 
+// #142 — A single pinned surface in the drawer. Renders the live message
+// body (or one specific block within it) so block_state_update events
+// flow through to the displayed content without additional plumbing.
+function PinSection({ pin }) {
+  const allMessages = messages.value;
+  const target = allMessages.find((m) => m.id === pin.message_id);
+
+  // Drop the pin client-side if the source message was cleared. The
+  // server row will eventually be reaped on chat clear; this avoids a
+  // stale ghost in the drawer until then.
+  if (!target) {
+    return html`
+      <div class="border border-border rounded-lg p-3 bg-bg-2 flex items-center justify-between gap-2">
+        <div class="text-xs text-txt-muted italic">Source message no longer in this chat.</div>
+        <button
+          class="text-[10px] px-2 py-0.5 rounded border border-border text-txt-muted hover:text-err hover:border-err transition-colors"
+          onClick=${() => removePin(pin.thread_id)}
+        >
+          Dismiss
+        </button>
+      </div>
+    `;
+  }
+
+  return html`
+    <div class="border border-border rounded-lg bg-bg-2 overflow-hidden">
+      <header class="flex items-center justify-between px-3 py-2 bg-bg-3/40 border-b border-border">
+        <div class="flex flex-col gap-0 min-w-0">
+          <div class="text-xs font-semibold text-txt truncate">
+            ${pin.title || (pin.block_id ? `Pinned block · ${pin.block_id}` : 'Pinned message')}
+          </div>
+          <div class="text-[10px] text-txt-muted font-mono truncate">
+            ${target.senderName || 'agent'} · ${formatTime(target.timestamp)}
+          </div>
+        </div>
+        <button
+          class="text-[10px] px-2 py-0.5 rounded border border-border text-txt-muted hover:text-err hover:border-err transition-colors shrink-0"
+          onClick=${() => removePin(pin.thread_id)}
+          title="Unpin"
+        >
+          unpin
+        </button>
+      </header>
+      <div class="p-3 text-sm">
+        <${MessageBody}
+          content=${target.content}
+          messageId=${target.id}
+          messageTimestamp=${target.timestamp}
+          blockState=${target.blockState}
+          singleBlockId=${pin.block_id || undefined}
+        />
+      </div>
+    </div>
+  `;
+}
+
+function PinsPanel({ state }) {
+  const allPins = Object.values(pins.value)
+    .filter((p) => p.jid === selectedJid.value)
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+
+  return html`
+    <div class="flex flex-col h-full min-h-0">
+      <header class="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <h3 class="text-sm font-semibold truncate">
+            ${allPins.length > 1 ? `${allPins.length} pinned surfaces` : 'Pinned surface'}
+          </h3>
+          <div class="text-[11px] text-txt-muted font-mono truncate">
+            persistent · agents may update these in place
+          </div>
+        </div>
+        <${CloseButton} />
+      </header>
+      <div class="portal-scroll flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
+        ${allPins.length === 0 && html`
+          <div class="text-xs text-txt-muted p-4 text-center">
+            No pinned surfaces in this chat.
+          </div>
+        `}
+        ${allPins.map((pin) => html`<${PinSection} key=${pin.thread_id} pin=${pin} />`)}
+      </div>
+    </div>
+  `;
+}
+
 export function AgentPanel() {
   const state = agentPanel.value;
 
@@ -423,6 +518,8 @@ export function AgentPanel() {
     body = html`<${PortalsPanel} state=${state} />`;
   } else if (state.mode === 'portal-single') {
     body = html`<${PortalSinglePanel} state=${state} />`;
+  } else if (state.mode === 'pins') {
+    body = html`<${PinsPanel} state=${state} />`;
   } else {
     body = html`<${RetroactivePanel} state=${state} />`;
   }
@@ -441,4 +538,13 @@ export function AgentPanel() {
 
 export function openAgentPanel(runId, groupFolder) {
   agentPanel.value = { runId, groupFolder };
+}
+
+// #142 — Switch the drawer into pins mode for the current chat.
+export function openPinsInDrawer() {
+  const group = selectedGroup.value;
+  if (!group) return;
+  const next = { mode: 'pins', groupFolder: group.folder };
+  agentPanel.value = next;
+  setDrawerStateFor(selectedJid.value, next);
 }

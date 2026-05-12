@@ -43,6 +43,10 @@ import {
   getMessagesSince,
   getMessageById,
   getMediaArtifact,
+  createPinThread,
+  getPinsForChat,
+  getPinByThreadId,
+  deletePinThread,
   storeMediaArtifact,
   storeMessageDirect,
   updateMessageContent,
@@ -522,6 +526,24 @@ export class WebChannel implements Channel {
     updated_by?: string | null;
   }): void {
     this.broadcast('block_state_update', payload);
+  }
+
+  // #142 — Pinned surfaces lifecycle. Dedicated events keep pins out of
+  // the existing thread_created/thread_closed pipeline (which is wired
+  // for portal auto-open behavior we don't want for pins).
+  broadcastPinCreated(payload: {
+    jid: string;
+    thread_id: string;
+    message_id: string;
+    block_id: string | null;
+    title: string | null;
+    created_at: string;
+  }): void {
+    this.broadcast('pin_created', payload);
+  }
+
+  broadcastPinRemoved(payload: { jid: string; thread_id: string }): void {
+    this.broadcast('pin_removed', payload);
   }
 
   broadcastUsageUpdate(
@@ -1946,6 +1968,87 @@ You do not delegate. If something falls outside your role, say so plainly in you
         { jid, target_agent, label },
         'Portal action invoked from web UI',
       );
+      return this.json(res, 200, { ok: true });
+    }
+
+    // #142 — Pin endpoints. Pins are persistent references to a message
+    // (and optionally a specific block within it) that render in the
+    // side drawer. Created from the UI (POST), listed on group switch
+    // (GET ?jid=...), and dismissed by the user (DELETE /:thread_id).
+    //
+    // GET /api/pins?jid=... — list all pins for a chat
+    if (method === 'GET' && url.pathname === '/api/pins') {
+      const jid = url.searchParams.get('jid');
+      if (!jid) {
+        return this.json(res, 400, { error: 'jid query param is required' });
+      }
+      const pins = getPinsForChat(jid);
+      return this.json(res, 200, { pins });
+    }
+
+    // POST /api/pins — create a pin
+    if (method === 'POST' && url.pathname === '/api/pins') {
+      const body = await this.readBody(req);
+      const { jid, message_id, block_id, title } = body;
+      if (!jid || !message_id) {
+        return this.json(res, 400, {
+          error: 'jid and message_id are required',
+        });
+      }
+      if (!jid.startsWith('web:')) {
+        return this.json(res, 400, { error: 'jid must start with web:' });
+      }
+      // Validate the message exists in this chat (mirrors quote-reply check)
+      const msg = getMessageById(message_id, jid);
+      if (!msg) {
+        return this.json(res, 404, {
+          error: 'message_id does not reference a message in this chat',
+        });
+      }
+      const threadId = `pin-${randomUUID()}`;
+      const cleanBlockId =
+        typeof block_id === 'string' && block_id ? block_id : null;
+      const cleanTitle =
+        typeof title === 'string' && title.trim()
+          ? title.trim().slice(0, 200)
+          : null;
+      createPinThread(threadId, jid, message_id, cleanBlockId, cleanTitle);
+      const created_at = new Date().toISOString();
+      this.broadcastPinCreated({
+        jid,
+        thread_id: threadId,
+        message_id,
+        block_id: cleanBlockId,
+        title: cleanTitle,
+        created_at,
+      });
+      logger.info(
+        { jid, thread_id: threadId, message_id, block_id: cleanBlockId },
+        'Pin created',
+      );
+      return this.json(res, 200, {
+        ok: true,
+        thread_id: threadId,
+        created_at,
+      });
+    }
+
+    // DELETE /api/pins/:thread_id — remove a pin
+    const pinDeleteMatch = url.pathname.match(/^\/api\/pins\/(.+)$/);
+    if (method === 'DELETE' && pinDeleteMatch) {
+      const threadId = decodeURIComponent(pinDeleteMatch[1]);
+      // Look up the pin BEFORE deleting so we know which jid to scope
+      // the broadcast to. Clients filter their local state by jid.
+      const pin = getPinByThreadId(threadId);
+      const removed = deletePinThread(threadId);
+      if (!removed) {
+        return this.json(res, 404, { error: 'pin not found' });
+      }
+      this.broadcastPinRemoved({
+        jid: pin?.origin_jid || '',
+        thread_id: threadId,
+      });
+      logger.info({ thread_id: threadId }, 'Pin removed');
       return this.json(res, 200, { ok: true });
     }
 

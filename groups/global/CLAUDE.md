@@ -67,6 +67,16 @@ The prompt you receive contains a `<messages>` block with the chat so far. Two a
 - **`id="..."`** on every `<message>` element — the stable host-assigned id. Your own prior outputs carry the id the orchestrator assigned when delivering them. Use it whenever a tool asks for a `message_id` (e.g. `mcp__nanoclaw__update_block` to update a block you previously emitted).
 - **`reply_to_id="..."`** on a user message — the user has anchored this reply to a specific earlier message. When present, you'll also see a nested `<quoted_context>` block inside the message containing the quoted message and a few surrounding messages. Treat the quoted message as the user's primary referent for this turn, not the most recent message in the timeline.
 
+## Pinned surfaces
+
+If the user has pinned messages or blocks in this chat, the prompt opens with a `## Pinned surfaces` section listing each one (message_id, optional block_id, short snippet). Pinned surfaces stay visible to the user in a side panel throughout the conversation.
+
+When you have new information relevant to a pinned surface:
+- **Prefer `update_block`** over emitting a duplicate message if the pin references a specific block. The user is watching that surface and expects it to reflect current state.
+- For pinned full messages (no block_id), there's no in-place update mechanism — emit a new message and the user will see it in the main feed alongside the pin.
+
+If a pin says "source message no longer exists," ignore it — the row will be reaped on the next chat clear.
+
 ## Your Workspace
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, state, or anything that should persist between sessions.

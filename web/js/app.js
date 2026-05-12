@@ -59,6 +59,29 @@ export function setReplyTo(message) {
 export function clearReplyTo() {
   replyTo.value = null;
 }
+
+// #142 — Pin actions. Optimistically wait for the API response (which
+// includes the canonical thread_id) before updating local state; the
+// pin_created SSE broadcast handles the merge so we don't double-add.
+export async function addPin({ messageId, blockId, title }) {
+  const jid = selectedJid.value;
+  if (!jid || !messageId) return null;
+  try {
+    return await api.createPin(jid, messageId, blockId || null, title || null);
+  } catch (err) {
+    console.error('Failed to create pin', err);
+    return null;
+  }
+}
+
+export async function removePin(threadId) {
+  if (!threadId) return;
+  try {
+    await api.deletePin(threadId);
+  } catch (err) {
+    console.error('Failed to remove pin', err);
+  }
+}
 export const usage = signal(null); // latest usage stats
 export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group latest run
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
@@ -117,6 +140,10 @@ export const agentPanel = signal(null);
 // `message` events route here instead of the inline ThreadView feed.
 // Shape: { [thread_id]: { kind, agentName, jid, messages: [], sourceAgent, openedAt } }
 export const portalThreads = signal({});
+// #142 — Pinned surfaces keyed by thread_id. Populated on group switch
+// via GET /api/pins and live-updated by pin_created / pin_removed SSE.
+// Shape: { [thread_id]: { jid, message_id, block_id, title, created_at } }
+export const pins = signal({});
 export const unreadNotifCount = computed(() => {
   const lastRead = notifLastReadAt.value;
   return notifications.value.filter(
@@ -333,6 +360,35 @@ api.onSSE('block_state_update', (data) => {
     };
   });
   if (touched) messages.value = next;
+});
+
+// #142 — Pin lifecycle SSE handlers. Only merge into local state if the
+// event is for the currently-selected chat; pins are per-jid and refreshed
+// on group switch, so we don't need to track every group's pins live.
+api.onSSE('pin_created', (data) => {
+  if (!data?.thread_id) return;
+  if (data.jid && data.jid !== selectedJid.value) return;
+  pins.value = {
+    ...pins.value,
+    [data.thread_id]: {
+      thread_id: data.thread_id,
+      jid: data.jid,
+      message_id: data.message_id,
+      block_id: data.block_id || null,
+      title: data.title || null,
+      created_at: data.created_at,
+    },
+  };
+});
+
+api.onSSE('pin_removed', (data) => {
+  if (!data?.thread_id) return;
+  // jid may be empty on remove (the row's gone by the time we broadcast);
+  // since thread_id is globally unique, drop the entry unconditionally.
+  if (!pins.value[data.thread_id]) return;
+  const next = { ...pins.value };
+  delete next[data.thread_id];
+  pins.value = next;
 });
 
 api.onSSE('typing', (data) => {
@@ -832,10 +888,11 @@ export async function selectGroup(jid) {
   // are appended to a clean slate (selectedJid is already set above).
   messages.value = [];
 
-  const [msgData, threadData, portalData] = await Promise.all([
+  const [msgData, threadData, portalData, pinData] = await Promise.all([
     api.getMessages(jid),
     api.getThreads(jid),
     api.getPortalThreads(jid),
+    api.listPins(jid),
   ]);
 
   // Build the DB message list, then merge any SSE messages that arrived
@@ -914,6 +971,22 @@ export async function selectGroup(jid) {
     }
   }
   portalThreads.value = portalsByThread;
+
+  // #142 — Pins for this chat, replacing whatever was loaded for the
+  // previous group. SSE updates merge into this map as the user adds
+  // or dismisses pins.
+  const pinsByThread = {};
+  for (const p of pinData.pins || []) {
+    pinsByThread[p.thread_id] = {
+      thread_id: p.thread_id,
+      jid: p.origin_jid,
+      message_id: p.pin_message_id,
+      block_id: p.pin_block_id || null,
+      title: p.title || null,
+      created_at: p.created_at,
+    };
+  }
+  pins.value = pinsByThread;
 
   // Restore the drawer state for this jid (open + mode + focus). If this
   // group had a drawer open last time you were in it, reopen to the same

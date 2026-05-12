@@ -110,6 +110,19 @@ export const sendMessage = (jid, content, sender, threadId, replyToMessageId) =>
     },
   });
 
+// #142 — Pin endpoints
+export const listPins = (jid) =>
+  fetchJson(`/api/pins?jid=${encodeURIComponent(jid)}`);
+
+export const createPin = (jid, messageId, blockId, title) =>
+  fetchJson('/api/pins', {
+    method: 'POST',
+    body: { jid, message_id: messageId, block_id: blockId, title },
+  });
+
+export const deletePin = (threadId) =>
+  fetchJson(`/api/pins/${encodeURIComponent(threadId)}`, { method: 'DELETE' });
+
 export async function uploadMedia(jid, file, { threadId, caption } = {}) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = '';
