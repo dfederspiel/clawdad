@@ -299,10 +299,13 @@
 .progress-purple { color: var(--pixel-purple); }
 
 /* ─── Action Block ─── */
+/* Column layout so the optional result text lands on its own row below the
+   button + status badge cluster. The inner row uses utility classes from
+   the component (flex items-center gap-2). */
 .action-block {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   padding: 4px 0;
 }
 

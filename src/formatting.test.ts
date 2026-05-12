@@ -71,7 +71,7 @@ describe('formatMessages', () => {
   it('formats a single message as XML with context header', () => {
     const result = formatMessages([makeMsg()], TZ);
     expect(result).toContain('<context timezone="UTC" />');
-    expect(result).toContain('<message sender="Alice"');
+    expect(result).toContain('sender="Alice"');
     expect(result).toContain('>hello</message>');
     expect(result).toContain('Jan 1, 2024');
   });
@@ -153,6 +153,21 @@ describe('formatMessages', () => {
     const result = formatMessages([makeMsg()], TZ);
     expect(result).not.toContain('<quoted_context>');
     expect(result).not.toContain('reply_to_id=');
+  });
+
+  // #141 — message id is exposed as an attribute so agents can reference
+  // prior messages (e.g. their own outputs) in update_block calls.
+  it('emits the host-assigned id attribute on every message', () => {
+    const result = formatMessages(
+      [makeMsg({ id: 'msg-abc-123', content: 'hello' })],
+      TZ,
+    );
+    expect(result).toContain('id="msg-abc-123"');
+  });
+
+  it('escapes the id attribute', () => {
+    const result = formatMessages([makeMsg({ id: 'evil"id<x' })], TZ);
+    expect(result).toContain('id="evil&quot;id&lt;x"');
   });
 });
 

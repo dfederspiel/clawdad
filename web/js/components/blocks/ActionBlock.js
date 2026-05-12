@@ -22,10 +22,21 @@ async function invokePortalAction(btn, jid) {
   }
 }
 
-// #141 — status badge colors track the per-block-type state contract:
-// idle/pending/done/failed are the canonical lifecycle states for an
-// action block. Anything else falls through to a neutral chip.
-const STATUS_CLASS = {
+// #141 — Lucide-style inline SVGs (stroke-based, 24x24). Inlining the
+// paths keeps the bundle dependency-free; the project doesn't currently
+// pull in a Lucide package and a single block isn't worth the weight.
+// Paths sourced from lucide.dev (ISC-licensed). The animate-spin class
+// on Loader gives the pending state a live cue.
+const ICON = {
+  done: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
+  failed: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`,
+  pending: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3 animate-spin" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`,
+  idle: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3" aria-hidden="true"><circle cx="12" cy="12" r="10"/></svg>`,
+};
+
+// Per-state visual treatment. Keep colors aligned with other surfaces
+// (green for success, red for failure, yellow for in-flight, muted idle).
+const STATUS_STYLE = {
   idle: 'bg-bg-3 text-txt-muted',
   pending: 'bg-yellow-500/20 text-yellow-300',
   done: 'bg-green-500/20 text-green-300',
@@ -47,28 +58,33 @@ export function ActionBlock({ buttons, status, result, clicked_button_id }) {
     handleSend(`[action: ${btn.id}]`);
   };
 
-  const statusClass = status && (STATUS_CLASS[status] || 'bg-bg-3 text-txt-muted');
+  const statusKey = status && STATUS_STYLE[status] ? status : null;
+  const statusStyle = statusKey ? STATUS_STYLE[statusKey] : 'bg-bg-3 text-txt-muted';
+  const statusIcon = statusKey ? ICON[statusKey] : null;
 
   return html`
     <div class="action-block">
-      ${buttons.map(btn => {
-        const isClicked = clicked_button_id && btn.id === clicked_button_id;
-        return html`
-          <button
-            class="action-btn action-btn-${btn.style || 'default'} pixel-border ${isClicked ? 'ring-2 ring-accent/60' : ''}"
-            onClick=${() => onClick(btn)}
-          >
-            ${btn.label}
-          </button>
-        `;
-      })}
-      ${status && html`
-        <span class="text-[10px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded ${statusClass}">
-          ${status}
-        </span>
-      `}
+      <div class="flex items-center flex-wrap gap-2">
+        ${buttons.map(btn => {
+          const isClicked = clicked_button_id && btn.id === clicked_button_id;
+          return html`
+            <button
+              class="action-btn action-btn-${btn.style || 'default'} pixel-border ${isClicked ? 'ring-2 ring-accent/60' : ''}"
+              onClick=${() => onClick(btn)}
+            >
+              ${btn.label}
+            </button>
+          `;
+        })}
+        ${status && html`
+          <span class="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide px-1.5 py-1 rounded ${statusStyle}">
+            ${statusIcon}
+            <span>${status}</span>
+          </span>
+        `}
+      </div>
       ${result && html`
-        <div class="text-xs text-txt-2 mt-1 w-full">${result}</div>
+        <div class="text-xs text-txt-2 mt-2">${result}</div>
       `}
     </div>
   `;

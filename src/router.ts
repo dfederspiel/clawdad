@@ -46,13 +46,17 @@ export function formatMessages(
 ): string {
   const lines = messages.map((m) => {
     const displayTime = formatLocalTime(m.timestamp, timezone);
+    // #141 — expose the host-assigned message id so the agent can reference
+    // its own prior outputs (e.g. update_block on a block it emitted last
+    // turn). The id is the same UUID used in /api/messages and SSE events.
+    const idAttr = m.id ? ` id="${escapeXml(m.id)}"` : '';
     const replyAttr = m.reply_to_message_id
       ? ` reply_to_id="${escapeXml(m.reply_to_message_id)}"`
       : '';
     const quoted = m.quoted_context_xml
       ? `\n    <quoted_context>\n${m.quoted_context_xml}\n    </quoted_context>\n    `
       : '';
-    return `<message sender="${escapeXml(m.sender_name)}" time="${escapeXml(displayTime)}"${replyAttr}>${quoted}${escapeXml(m.content)}</message>`;
+    return `<message${idAttr} sender="${escapeXml(m.sender_name)}" time="${escapeXml(displayTime)}"${replyAttr}>${quoted}${escapeXml(m.content)}</message>`;
   });
 
   const header = `<context timezone="${escapeXml(timezone)}" />\n`;
