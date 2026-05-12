@@ -188,7 +188,10 @@ export function Message({ id, role, content, timestamp, senderName, isError, com
 
   const errorClass = isError ? 'border-err/30' : '';
 
-  const canReply = !!id && !isError;
+  // Reply only makes sense for agent output — replying to your own message
+  // would re-submit text the agent already saw. A future "resend" affordance
+  // could fill the same slot on user messages, but that's a separate feature.
+  const canReply = isAssistant && !!id && !isError;
   const onReplyClick = (e) => {
     e.stopPropagation();
     setReplyTo({ id, content, timestamp, senderName });
@@ -221,7 +224,7 @@ export function Message({ id, role, content, timestamp, senderName, isError, com
       `}
       ${canReply && hovered && html`
         <button
-          class="absolute top-1 ${isAssistant ? 'right-1' : 'left-1'} text-[10px] px-1.5 py-0.5 rounded bg-bg-3/90 border border-border text-txt-muted hover:text-accent hover:border-accent transition-colors"
+          class="absolute top-1 right-1 text-[10px] px-1.5 py-0.5 rounded bg-bg-3/90 border border-border text-txt-muted hover:text-accent hover:border-accent transition-colors"
           onClick=${onReplyClick}
           title="Reply to this message"
         >
