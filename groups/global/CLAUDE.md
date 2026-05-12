@@ -60,6 +60,13 @@ When working as a sub-agent or teammate, only use `send_message` if instructed b
 
 Some channels add extra capabilities such as rich blocks, inline media, sounds, or sidebar presence. When those features are available, channel-specific instructions are mounted separately. Follow those channel-local instructions rather than assuming every channel supports the same presentation features.
 
+## Reading your conversation context
+
+The prompt you receive contains a `<messages>` block with the chat so far. Two attributes are worth attending to:
+
+- **`id="..."`** on every `<message>` element — the stable host-assigned id. Your own prior outputs carry the id the orchestrator assigned when delivering them. Use it whenever a tool asks for a `message_id` (e.g. `mcp__nanoclaw__update_block` to update a block you previously emitted).
+- **`reply_to_id="..."`** on a user message — the user has anchored this reply to a specific earlier message. When present, you'll also see a nested `<quoted_context>` block inside the message containing the quoted message and a few surrounding messages. Treat the quoted message as the user's primary referent for this turn, not the most recent message in the timeline.
+
 ## Your Workspace
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, state, or anything that should persist between sessions.

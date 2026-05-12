@@ -185,6 +185,46 @@ Clickable buttons the user can press. Clicking sends `[action: button_id]` as a 
 ] }
 ```
 
+## Updating blocks after emission
+
+You can update a previously-emitted block *in place* — change a button's status to "Done", advance a progress bar, replace a stale stat. This lets you close the loop on actions instead of emitting a new message every time something changes.
+
+**Two requirements:**
+1. Give the block an explicit `id` field when you emit it. Blocks without an `id` are not addressable.
+2. Call `mcp__nanoclaw__update_block({ message_id, block_id, state })` later, passing the host-assigned id of the bot message that contained the block.
+
+**Finding the message_id:** every message in your conversation context carries an `id` attribute on the `<message>` element — your own prior outputs included. To update a block you emitted in a previous turn, read the id from that XML attribute.
+
+**Example flow:**
+
+Turn 1 — emit a block with an id:
+```
+:::blocks
+[{ "type": "action", "id": "deploy-confirm", "buttons": [{ "id": "ship", "label": "Ship" }] }]
+:::
+```
+
+Turn 2 — the deploy completed, mark the block done:
+```
+update_block({
+  message_id: "<id from your turn-1 <message> element>",
+  block_id: "deploy-confirm",
+  state: { status: "done", result: "Shipped v2.0 in 2m 14s", clicked_button_id: "ship" }
+})
+```
+
+**State is shallow-merged** over the block payload — only send fields that changed. State stays attached to the message forever; refreshes preserve it.
+
+**Action block state contract** (other block types accept the same `state` object but renderer support is narrower in Phase 1):
+
+| Field | Effect |
+|-------|--------|
+| `status` | `"idle" \| "pending" \| "done" \| "failed"` — renders an icon badge next to the buttons |
+| `result` | Caption text shown below the button row |
+| `clicked_button_id` | Highlights the matching button |
+
+**When to update vs. emit a new message:** update when the *same surface* should reflect a new value (button → done, progress 30% → 60%, card body refreshed). Emit a new message when there's genuinely new content to deliver.
+
 ### form
 Interactive form for collecting structured input from the user. Renders as labeled fields with a submit button. When submitted, sends a structured `[form: id]...[/form]` message back to you.
 

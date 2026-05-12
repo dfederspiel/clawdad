@@ -141,8 +141,32 @@ Clickable buttons the user can press. Clicking sends `[action: button_id]` as a 
 
 | Field | Required | Description |
 |-------|----------|-------------|
+| `id` | recommended | Stable identifier for the block. Required if you want to update the block later via `update_block`. |
 | `buttons` | yes | Array of `{ id, label, style? }` objects |
 | `style` | no | `primary` (blue), `danger` (red), `default` (gray) |
+
+### Updating an action block
+
+Once emitted, an action block can be updated in place via the `mcp__nanoclaw__update_block` tool. Pass the host-assigned `message_id` (read it from the `id` attribute on the `<message>` element in your conversation context) and the `block_id` you assigned at emission.
+
+State fields the action renderer honors:
+
+| State field | Type | Effect |
+|---|---|---|
+| `status` | `"idle" \| "pending" \| "done" \| "failed"` | Renders an icon badge (check / x / spinner / circle) next to the buttons. |
+| `result` | string | Caption text shown below the button row. |
+| `clicked_button_id` | string | Highlights the matching button with a ring. |
+
+State is shallow-merged — only include fields that changed. Updates are persistent and survive page refresh.
+
+Example update:
+```
+update_block({
+  message_id: "<id from your prior <message> element>",
+  block_id: "deploy-confirm",
+  state: { status: "done", result: "Shipped v2.0 in 2m 14s", clicked_button_id: "ship" }
+})
+```
 
 ## form
 
