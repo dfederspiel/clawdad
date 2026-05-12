@@ -40,6 +40,7 @@ import {
   getAllGroupLastActivity,
   getAllGroupNextTaskAt,
   getMessagesSince,
+  getMessageById,
   getMediaArtifact,
   storeMediaArtifact,
   storeMessageDirect,
@@ -1809,7 +1810,7 @@ You do not delegate. If something falls outside your role, say so plainly in you
     // POST /api/send — send a message to a web group (or thread reply)
     if (method === 'POST' && url.pathname === '/api/send') {
       const body = await this.readBody(req);
-      const { jid, content, sender, thread_id } = body;
+      const { jid, content, sender, thread_id, reply_to_message_id } = body;
       if (!jid || !content) {
         return this.json(res, 400, { error: 'jid and content are required' });
       }
@@ -1826,6 +1827,23 @@ You do not delegate. If something falls outside your role, say so plainly in you
         return this.json(res, 404, { error: 'Group not registered' });
       }
 
+      // #140 — validate quote-reply anchor: must reference a real message in
+      // the same chat. Reject silently-bad IDs so the UI can correct itself.
+      if (reply_to_message_id) {
+        if (typeof reply_to_message_id !== 'string') {
+          return this.json(res, 400, {
+            error: 'reply_to_message_id must be a string',
+          });
+        }
+        const referenced = getMessageById(reply_to_message_id, jid);
+        if (!referenced) {
+          return this.json(res, 400, {
+            error:
+              'reply_to_message_id does not reference a message in this chat',
+          });
+        }
+      }
+
       const msg: NewMessage = {
         id: randomUUID(),
         chat_jid: jid,
@@ -1836,6 +1854,7 @@ You do not delegate. If something falls outside your role, say so plainly in you
         is_from_me: false,
         is_bot_message: false,
         thread_id: thread_id || undefined,
+        reply_to_message_id: reply_to_message_id || null,
       };
 
       if (thread_id) {

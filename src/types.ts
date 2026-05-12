@@ -63,6 +63,15 @@ export interface NewMessage {
   thread_id?: string;
   usage?: string;
   run_id?: number | null;
+  // #140: quote-reply anchor. Persisted in DB; references another message in
+  // the same chat_jid. Validated at /api/send.
+  reply_to_message_id?: string | null;
+  // In-memory only — populated by processGroupMessages before formatMessages
+  // runs. Rendered as a nested <quoted_context> block inside the message
+  // element; the text variant is prepended to the structured-message content
+  // for non-XML runtimes (Ollama).
+  quoted_context_xml?: string;
+  quoted_context_text?: string;
 }
 
 export interface MediaArtifact {

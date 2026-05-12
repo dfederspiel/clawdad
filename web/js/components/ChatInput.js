@@ -1,6 +1,13 @@
 import { html } from 'htm/preact';
 import { useState, useRef, useEffect, useMemo } from 'preact/hooks';
-import { handleSend, triggers, selectedGroup, pendingInput } from '../app.js';
+import {
+  handleSend,
+  triggers,
+  selectedGroup,
+  pendingInput,
+  replyTo,
+  clearReplyTo,
+} from '../app.js';
 import * as api from '../api.js';
 
 export function ChatInput() {
@@ -189,8 +196,26 @@ export function ChatInput() {
     }
   }
 
+  const currentReply = replyTo.value;
+
   return html`
     <div class="relative flex gap-2 p-3 px-3 md:px-5 border-t border-border bg-bg-2 items-end">
+      ${currentReply && html`
+        <div class="absolute left-3 right-3 bottom-full mb-2 px-3 py-2 bg-bg-3 border border-accent/60 border-l-4 border-l-accent rounded text-xs flex items-start gap-2">
+          <div class="flex-1 min-w-0">
+            <div class="text-[10px] text-txt-muted mb-0.5">Replying to <span class="text-accent">${currentReply.senderName}</span></div>
+            <div class="text-txt-2 truncate">${currentReply.snippet}</div>
+          </div>
+          <button
+            type="button"
+            class="text-txt-muted hover:text-err shrink-0"
+            onClick=${clearReplyTo}
+            title="Cancel reply"
+          >
+            ×
+          </button>
+        </div>
+      `}
       ${showMentions && filtered.length > 0 && html`
         <div
           ref=${menuRef}

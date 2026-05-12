@@ -135,6 +135,7 @@ export function MessageList() {
                   usage=${m.usage}
                   toolHistory=${m.toolHistory}
                   runId=${m.runId}
+                  replyToMessageId=${m.replyToMessageId}
                 />
                 ${thread && html`
                   <${ThreadView}

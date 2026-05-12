@@ -103,6 +103,7 @@ import {
   resolveGroupFolderPath,
 } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { attachQuotedContext } from './quote-reply.js';
 import {
   findChannel,
   formatMessages,
@@ -1128,6 +1129,10 @@ async function processGroupMessages(
     !isThreadReply, // excludeThreaded — but include thread replies when processing a thread agent
     isMultiAgent, // keepPortalThreads — coordinators need delegation output
   );
+  // #140 — resolve quote-reply windows in place before any formatter sees
+  // the messages, so the XML and structured paths both render the same
+  // context. No-op when no message carries reply_to_message_id.
+  attachQuotedContext(missedMessages, chatJid, TIMEZONE);
   const delegationResultRuns =
     mode === 'delegation_retrigger'
       ? delegationManager.getCoordinatorResults(chatJid)

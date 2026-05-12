@@ -98,8 +98,17 @@ export const deleteGroup = (folder) =>
 export const getMessages = (jid, since) =>
   fetchJson(`/api/messages/${encodeURIComponent(jid)}${since ? `?since=${since}` : ''}`);
 
-export const sendMessage = (jid, content, sender, threadId) =>
-  fetchJson('/api/send', { method: 'POST', body: { jid, content, sender, thread_id: threadId } });
+export const sendMessage = (jid, content, sender, threadId, replyToMessageId) =>
+  fetchJson('/api/send', {
+    method: 'POST',
+    body: {
+      jid,
+      content,
+      sender,
+      thread_id: threadId,
+      reply_to_message_id: replyToMessageId,
+    },
+  });
 
 export async function uploadMedia(jid, file, { threadId, caption } = {}) {
   const bytes = new Uint8Array(await file.arrayBuffer());

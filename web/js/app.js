@@ -41,6 +41,24 @@ export const tasks = signal([]);
 export const telemetry = signal(null);
 export const triggers = signal([]);
 export const pendingInput = signal(''); // set externally to inject text into ChatInput
+// #140 — quote-reply anchor for the next send. null when not replying.
+// Shape: { messageId, senderName, snippet, timestamp }.
+export const replyTo = signal(null);
+
+export function setReplyTo(message) {
+  if (!message || !message.id) return;
+  const snippet = (message.content || '').slice(0, 160);
+  replyTo.value = {
+    messageId: message.id,
+    senderName: message.senderName || message.sender_name || 'unknown',
+    snippet,
+    timestamp: message.timestamp,
+  };
+}
+
+export function clearReplyTo() {
+  replyTo.value = null;
+}
 export const usage = signal(null); // latest usage stats
 export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group latest run
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
@@ -546,6 +564,7 @@ api.onSSE('thread_created', async (data) => {
       content: m.content,
       timestamp: m.timestamp,
       senderName: m.sender_name,
+      replyToMessageId: m.reply_to_message_id || null,
     }));
   }
 });
@@ -570,6 +589,7 @@ api.onSSE('user_message', (data) => {
         content: data.message.content,
         timestamp: data.message.timestamp,
         senderName: data.message.sender_name,
+        replyToMessageId: data.message.reply_to_message_id || null,
       }];
     }
   }
@@ -798,6 +818,7 @@ export async function selectGroup(jid) {
       usage: parsedUsage,
       toolHistory: parsedUsage?.toolHistory || [],
       runId: m.run_id ?? null,
+      replyToMessageId: m.reply_to_message_id || null,
     };
   });
   const dbIds = new Set(dbMessages.map((m) => m.id));
@@ -882,14 +903,30 @@ export async function handleSend(content) {
 
   clearAgentProgressForJid(selectedJid.value);
 
+  // Capture reply anchor at send time, then clear it so the next send is
+  // a normal message unless the user explicitly replies again.
+  const anchor = replyTo.value;
+  replyTo.value = null;
+
   // Optimistic update
   messages.value = [
     ...messages.value,
-    { role: 'user', content, timestamp: new Date().toISOString() },
+    {
+      role: 'user',
+      content,
+      timestamp: new Date().toISOString(),
+      replyToMessageId: anchor?.messageId || null,
+    },
   ];
 
   try {
-    await api.sendMessage(selectedJid.value, content);
+    await api.sendMessage(
+      selectedJid.value,
+      content,
+      undefined,
+      undefined,
+      anchor?.messageId,
+    );
   } catch (err) {
     messages.value = [
       ...messages.value,

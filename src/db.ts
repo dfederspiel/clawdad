@@ -209,6 +209,17 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // #140 — quote-reply anchor: a single-hop reference to a prior message
+  // in the same chat. Index supports future "show replies" lookups.
+  try {
+    database.exec(`ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT`);
+    database.exec(
+      `CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_message_id)`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // One-shot backfill: link pre-existing bot messages to their agent_runs row
   // by emulating what attachUsageToLastBotMessage does live — for each run in
   // chronological order, claim the most recent orphan bot message in the same
@@ -516,7 +527,7 @@ export function setLastGroupSync(): void {
  */
 export function storeMessage(msg: NewMessage): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, reply_to_message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -527,6 +538,7 @@ export function storeMessage(msg: NewMessage): void {
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
     msg.thread_id || null,
+    msg.reply_to_message_id || null,
   );
 }
 
@@ -543,9 +555,10 @@ export function storeMessageDirect(msg: {
   is_from_me: boolean;
   is_bot_message?: boolean;
   thread_id?: string;
+  reply_to_message_id?: string | null;
 }): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, reply_to_message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -556,6 +569,7 @@ export function storeMessageDirect(msg: {
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
     msg.thread_id || null,
+    msg.reply_to_message_id || null,
   );
 }
 
@@ -774,7 +788,7 @@ export function getMessagesSince(
   }
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, usage, run_id
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, usage, run_id, reply_to_message_id
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
         ${botFilter}
@@ -842,7 +856,7 @@ export function getThreadMessages(
 ): NewMessage[] {
   return db
     .prepare(
-      `SELECT m.id, m.chat_jid, m.sender, m.sender_name, m.content, m.timestamp, m.is_from_me, m.is_bot_message, m.thread_id
+      `SELECT m.id, m.chat_jid, m.sender, m.sender_name, m.content, m.timestamp, m.is_from_me, m.is_bot_message, m.thread_id, m.reply_to_message_id
        FROM messages m
        JOIN threads t ON m.thread_id = t.thread_id
        WHERE m.thread_id = ? AND m.chat_jid = t.origin_jid
@@ -850,6 +864,62 @@ export function getThreadMessages(
        LIMIT ?`,
     )
     .all(threadId, limit) as NewMessage[];
+}
+
+/**
+ * Look up a single message by (id, chat_jid). Used to validate a
+ * reply_to_message_id at /api/send time and to fetch the quoted message
+ * for the prompt-builder window.
+ */
+export function getMessageById(
+  id: string,
+  chatJid: string,
+): NewMessage | undefined {
+  return db
+    .prepare(
+      `SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, reply_to_message_id
+       FROM messages
+       WHERE id = ? AND chat_jid = ?`,
+    )
+    .get(id, chatJid) as NewMessage | undefined;
+}
+
+/**
+ * Fetch a window of messages surrounding an anchor message for quote-reply
+ * context. Returns up to `before` messages chronologically preceding the
+ * anchor and up to `after` messages following it, alongside the anchor
+ * itself. The anchor is included; thread replies are excluded so the
+ * surrounding chatter mirrors what the user sees in the main feed.
+ */
+export function getQuotedContextWindow(
+  chatJid: string,
+  anchorMessageId: string,
+  before: number,
+  after: number,
+): NewMessage[] {
+  const anchor = getMessageById(anchorMessageId, chatJid);
+  if (!anchor) return [];
+  const cols =
+    'id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, reply_to_message_id';
+  const beforeRows = db
+    .prepare(
+      `SELECT ${cols} FROM messages
+       WHERE chat_jid = ? AND thread_id IS NULL AND timestamp < ?
+         AND content != '' AND content IS NOT NULL
+       ORDER BY timestamp DESC
+       LIMIT ?`,
+    )
+    .all(chatJid, anchor.timestamp, before) as NewMessage[];
+  const afterRows = db
+    .prepare(
+      `SELECT ${cols} FROM messages
+       WHERE chat_jid = ? AND thread_id IS NULL AND timestamp > ?
+         AND content != '' AND content IS NOT NULL
+       ORDER BY timestamp ASC
+       LIMIT ?`,
+    )
+    .all(chatJid, anchor.timestamp, after) as NewMessage[];
+  return [...beforeRows.reverse(), anchor, ...afterRows];
 }
 
 export function getThreadsForChat(chatJid: string): ThreadInfo[] {

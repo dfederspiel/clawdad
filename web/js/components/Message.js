@@ -1,8 +1,46 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
-import { selectedGroup } from '../app.js';
+import { messages, selectedGroup, setReplyTo } from '../app.js';
 import { openAgentPanel } from './AgentPanel.js';
 import { MessageBody } from './MessageBody.js';
+
+// #140 — find a message by id in the current chat so the reply header can
+// render the quoted preview and the click-to-scroll anchor is real.
+function lookupMessage(id) {
+  if (!id) return null;
+  return messages.value.find((m) => m.id === id) || null;
+}
+
+function scrollToMessage(id) {
+  if (!id) return;
+  const el = document.getElementById(`msg-${id}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('notif-flash');
+  setTimeout(() => el.classList.remove('notif-flash'), 1500);
+}
+
+function ReplyToHeader({ replyToMessageId }) {
+  const target = lookupMessage(replyToMessageId);
+  if (!target) {
+    return html`
+      <div class="text-[11px] text-txt-muted mb-1 italic opacity-60">
+        ↳ replying to an earlier message
+      </div>
+    `;
+  }
+  const snippet = (target.content || '').slice(0, 100);
+  return html`
+    <div
+      class="text-[11px] text-txt-muted mb-1.5 px-2 py-1 border-l-2 border-accent/60 bg-bg-3/40 rounded-r cursor-pointer hover:bg-bg-3/80 transition-colors truncate"
+      title="Jump to original message"
+      onClick=${(e) => { e.stopPropagation(); scrollToMessage(replyToMessageId); }}
+    >
+      <span class="opacity-70">↳ ${target.senderName || 'unknown'}:</span>
+      <span class="ml-1 opacity-90">${snippet}</span>
+    </div>
+  `;
+}
 
 // Time-only is ambiguous in long threads spanning multiple days. Lead with the
 // day name + date so consecutive messages are unambiguous; collapse to
@@ -128,13 +166,14 @@ function UsageFooter({ usage, toolHistory, expanded, onToggle, runId, groupFolde
   `;
 }
 
-export function Message({ id, role, content, timestamp, senderName, isError, compact, usage, toolHistory, runId }) {
+export function Message({ id, role, content, timestamp, senderName, isError, compact, usage, toolHistory, runId, replyToMessageId }) {
   const isAssistant = role === 'assistant';
   const time = formatMessageTimestamp(timestamp);
   const timeTitle = timestamp
     ? new Date(timestamp).toLocaleString()
     : new Date().toLocaleString();
   const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
 
   const group = selectedGroup.value;
   const isMultiAgent = group && group.agents && group.agents.length > 1;
@@ -149,12 +188,23 @@ export function Message({ id, role, content, timestamp, senderName, isError, com
 
   const errorClass = isError ? 'border-err/30' : '';
 
+  const canReply = !!id && !isError;
+  const onReplyClick = (e) => {
+    e.stopPropagation();
+    setReplyTo({ id, content, timestamp, senderName });
+  };
+
   return html`
-    <div class="${sizeClass} leading-relaxed ${bubbleClass} ${errorClass} overflow-hidden break-words"
-      ${showAgentBadge ? { style: `border-left: 3px solid ${nameColor}` } : {}}>
+    <div
+      class="${sizeClass} leading-relaxed ${bubbleClass} ${errorClass} overflow-hidden break-words relative group"
+      onMouseEnter=${() => setHovered(true)}
+      onMouseLeave=${() => setHovered(false)}
+      ${showAgentBadge ? { style: `border-left: 3px solid ${nameColor}` } : {}}
+    >
       ${showAgentBadge && html`
         <div class="text-[11px] font-semibold mb-1" style="color: ${nameColor}">${senderName}</div>
       `}
+      ${replyToMessageId && html`<${ReplyToHeader} replyToMessageId=${replyToMessageId} />`}
       <${MessageBody} content=${content} messageId=${id} messageTimestamp=${timestamp} />
       <div class="text-[11px] text-txt-muted mt-1.5" title=${timeTitle}>
         ${senderName && !showAgentBadge ? `${senderName} \u00B7 ${time}` : time}
@@ -168,6 +218,15 @@ export function Message({ id, role, content, timestamp, senderName, isError, com
           runId=${runId}
           groupFolder=${group?.folder}
         />
+      `}
+      ${canReply && hovered && html`
+        <button
+          class="absolute top-1 ${isAssistant ? 'right-1' : 'left-1'} text-[10px] px-1.5 py-0.5 rounded bg-bg-3/90 border border-border text-txt-muted hover:text-accent hover:border-accent transition-colors"
+          onClick=${onReplyClick}
+          title="Reply to this message"
+        >
+          \u21B3 reply
+        </button>
       `}
     </div>
   `;

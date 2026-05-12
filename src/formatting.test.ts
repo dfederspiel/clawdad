@@ -9,6 +9,8 @@ import {
   escapeXml,
   formatMessages,
   formatOutbound,
+  renderQuotedContextText,
+  renderQuotedContextXml,
   stripInternalTags,
   toStructuredMessages,
 } from './router.js';
@@ -126,6 +128,31 @@ describe('formatMessages', () => {
     expect(result).toContain('1:30');
     expect(result).toContain('PM');
     expect(result).toContain('<context timezone="America/New_York" />');
+  });
+
+  // #140 — quote-reply: a replying message should carry both a reply_to_id
+  // attribute and an inline <quoted_context> block when quoted_context_xml
+  // is attached. Round-trip through toStructuredMessages must surface the
+  // text variant as a content preamble.
+  it('renders reply_to_id and nested <quoted_context> when set', () => {
+    const replying = makeMsg({
+      id: 'r1',
+      content: 'follow-up',
+      reply_to_message_id: 'orig-1',
+      quoted_context_xml:
+        '      <message role="user" sender="Bob" time="9:00 AM">original</message>',
+    });
+    const result = formatMessages([replying], TZ);
+    expect(result).toContain('reply_to_id="orig-1"');
+    expect(result).toContain('<quoted_context>');
+    expect(result).toContain('original</message>');
+    expect(result).toContain('follow-up</message>');
+  });
+
+  it('omits the quoted_context block when no field is set', () => {
+    const result = formatMessages([makeMsg()], TZ);
+    expect(result).not.toContain('<quoted_context>');
+    expect(result).not.toContain('reply_to_id=');
   });
 });
 
@@ -627,5 +654,115 @@ describe('toStructuredMessages', () => {
     ]);
     expect(out.map((m) => m.content)).toEqual(['first', 'second', 'third']);
     expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+  });
+
+  // #140 — quote-reply text variant must be prepended to content so non-XML
+  // runtimes (Ollama) see the quoted preamble.
+  it('prepends quoted_context_text to content when present', () => {
+    const out = toStructuredMessages([
+      makeMsg({
+        id: 'reply-1',
+        content: 'thanks for clarifying',
+        quoted_context_text:
+          '[Replying to an earlier message — surrounding context:]\n> [9:00 AM] Bob: original\n[End of quoted context]',
+      }),
+    ]);
+    expect(out[0].content).toContain('Replying to an earlier message');
+    expect(out[0].content).toContain('Bob: original');
+    expect(out[0].content.endsWith('thanks for clarifying')).toBe(true);
+  });
+});
+
+// --- renderQuotedContextXml / Text (#140) ---
+
+describe('renderQuotedContextXml', () => {
+  const TZ = 'UTC';
+  const window = [
+    makeMsg({
+      id: 'a',
+      sender_name: 'Alice',
+      content: 'pre',
+      timestamp: '2024-01-01T08:59:00.000Z',
+    }),
+    makeMsg({
+      id: 'b',
+      sender_name: 'Bob',
+      content: 'anchor body',
+      timestamp: '2024-01-01T09:00:00.000Z',
+    }),
+    makeMsg({
+      id: 'c',
+      sender_name: 'Carol',
+      content: 'post',
+      timestamp: '2024-01-01T09:01:00.000Z',
+    }),
+  ];
+
+  it('marks the anchor with anchor="true"', () => {
+    const out = renderQuotedContextXml(window, 'b', TZ, 4000);
+    expect(out).toContain('sender="Bob"');
+    expect(out).toContain('anchor="true"');
+    // anchor attribute should only be on the anchor row
+    expect(out.match(/anchor="true"/g)?.length).toBe(1);
+  });
+
+  it('includes surrounding messages without anchor attribute', () => {
+    const out = renderQuotedContextXml(window, 'b', TZ, 4000);
+    expect(out).toContain('>pre</message>');
+    expect(out).toContain('>post</message>');
+  });
+
+  it('shrinks the window symmetrically when budget is tight', () => {
+    // Make the surrounding messages big so dropping one drops below budget.
+    const big = 'x'.repeat(500);
+    const wide = [
+      makeMsg({
+        id: 'a',
+        sender_name: 'Alice',
+        content: big,
+        timestamp: '2024-01-01T08:59:00.000Z',
+      }),
+      makeMsg({
+        id: 'b',
+        sender_name: 'Bob',
+        content: 'anchor',
+        timestamp: '2024-01-01T09:00:00.000Z',
+      }),
+      makeMsg({
+        id: 'c',
+        sender_name: 'Carol',
+        content: big,
+        timestamp: '2024-01-01T09:01:00.000Z',
+      }),
+    ];
+    const out = renderQuotedContextXml(wide, 'b', TZ, 700);
+    expect(out.length).toBeLessThanOrEqual(700);
+    expect(out).toContain('>anchor</message>');
+  });
+});
+
+describe('renderQuotedContextText', () => {
+  const TZ = 'UTC';
+
+  it('marks the anchor row with > and surrounds with brackets', () => {
+    const window = [
+      makeMsg({
+        id: 'a',
+        sender_name: 'Alice',
+        content: 'pre',
+        timestamp: '2024-01-01T08:59:00.000Z',
+      }),
+      makeMsg({
+        id: 'b',
+        sender_name: 'Bob',
+        content: 'anchor body',
+        timestamp: '2024-01-01T09:00:00.000Z',
+      }),
+    ];
+    const out = renderQuotedContextText(window, 'b', TZ, 4000);
+    expect(out).toContain('[Replying to an earlier message');
+    expect(out).toContain('> ');
+    expect(out).toContain('Bob: anchor body');
+    expect(out).toContain('[End of quoted context]');
   });
 });
