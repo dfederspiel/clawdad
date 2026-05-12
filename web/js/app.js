@@ -314,12 +314,12 @@ api.onSSE('message_update', (data) => {
 api.onSSE('typing', (data) => {
   // Portal-delegation typing events route to threadTyping (per-thread
   // panel) and to activeAgents (sidebar parallel-instance count — #130).
-  // Chat-level typing state (typingGroups/typingStartTime/typingAgentName)
-  // only fires for non-portal events.
+  // The chat-level indicator (typingGroups) is derived from activeAgents
+  // at the end of this handler — a coordinator's chat-level typing=false
+  // must NOT flip the dot dark while a delegated specialist (portal-
+  // thread event) is still running.
   if (data.thread_id) {
     threadTyping.value = { ...threadTyping.value, [data.thread_id]: data.isTyping };
-  } else {
-    typingGroups.value = { ...typingGroups.value, [data.jid]: data.isTyping };
   }
   // Track when typing started for elapsed time display (chat-level only)
   if (data.isTyping) {
@@ -377,6 +377,17 @@ api.onSSE('typing', (data) => {
     } else {
       activeAgents.value = { ...activeAgents.value, [data.jid]: [] };
     }
+  }
+  // Chat-level indicator: on iff ANY agent (chat-level or portal-thread
+  // delegation) is active in this chat. For chat-level events we respect
+  // isTyping=true as authoritative even if activeAgents hasn't been
+  // populated yet (covers the agent_name-undefined scheduled-task path).
+  const remaining = activeAgents.value[data.jid] || [];
+  const wantsTyping = data.thread_id
+    ? remaining.length > 0
+    : data.isTyping || remaining.length > 0;
+  if ((typingGroups.value[data.jid] || false) !== wantsTyping) {
+    typingGroups.value = { ...typingGroups.value, [data.jid]: wantsTyping };
   }
 });
 
