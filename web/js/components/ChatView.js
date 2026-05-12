@@ -1,17 +1,24 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
-import { selectedGroup, selectedJid, clearChat, messages } from '../app.js';
+import { selectedGroup, selectedJid, clearChat, messages, pins } from '../app.js';
 import { MessageList } from './MessageList.js';
 import { ChatInput } from './ChatInput.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 import { WorkStatusBanner } from './WorkStatusBanner.js';
 import { ContextPressureBanner } from './ContextPressureBanner.js';
 import { NotificationBell } from './NotificationBell.js';
+import { openPinsInDrawer } from './AgentPanel.js';
+
+// #142 follow-up — Lucide "pin" icon for the reopen pill.
+const PinIcon = html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5" aria-hidden="true"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>`;
 
 export function ChatView({ onOpenSidebar }) {
   const group = selectedGroup.value;
   const hasMessages = messages.value.length > 0;
   const [clearOpen, setClearOpen] = useState(false);
+  const pinCount = Object.values(pins.value).filter(
+    (p) => p.jid === selectedJid.value,
+  ).length;
 
   function handleClearConfirm() {
     clearChat(selectedJid.value);
@@ -34,6 +41,16 @@ export function ChatView({ onOpenSidebar }) {
           <h2 class="text-sm font-semibold">${group?.name || ''}</h2>
         </div>
         <div class="flex items-center gap-2">
+          ${pinCount > 0 && html`
+            <button
+              class="flex items-center gap-1 text-xs px-2 py-1 rounded border border-accent/40 text-accent hover:bg-accent/10 transition-colors"
+              onClick=${openPinsInDrawer}
+              title="Open pinned surfaces (${pinCount})"
+            >
+              ${PinIcon}
+              <span>${pinCount}</span>
+            </button>
+          `}
           ${hasMessages && html`
             <button
               class="text-xs text-txt-muted hover:text-err transition-colors"
