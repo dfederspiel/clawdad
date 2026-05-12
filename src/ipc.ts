@@ -56,6 +56,14 @@ export interface IpcDeps {
     sourceBatchId?: string;
     completionPolicy?: 'final_response' | 'retrigger_coordinator' | 'silent';
   }) => void;
+  onBlockUpdate?: (request: {
+    sourceGroup: string;
+    chatJid: string;
+    messageId: string;
+    blockId: string;
+    state: Record<string, unknown>;
+    sourceAgent: string;
+  }) => void;
   onPublishMedia?: (request: {
     sourceGroup: string;
     chatJid: string;
@@ -282,6 +290,67 @@ export function startIpcWatcher(deps: IpcDeps): void {
         logger.error(
           { err, sourceGroup },
           'Error reading IPC delegations directory',
+        );
+      }
+
+      // #141 — Process block-state updates from this group's IPC directory.
+      // Agents call update_block to mutate the state of a UI block they
+      // previously emitted without sending a new message.
+      const blockUpdatesDir = path.join(
+        ipcBaseDir,
+        sourceGroup,
+        'block_updates',
+      );
+      try {
+        if (fs.existsSync(blockUpdatesDir)) {
+          const blockUpdateFiles = fs
+            .readdirSync(blockUpdatesDir)
+            .filter((f) => f.endsWith('.json'));
+          for (const file of blockUpdateFiles) {
+            const filePath = path.join(blockUpdatesDir, file);
+            try {
+              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              fs.unlinkSync(filePath);
+              if (
+                data.type === 'block_update' &&
+                typeof data.messageId === 'string' &&
+                typeof data.blockId === 'string' &&
+                data.state &&
+                typeof data.state === 'object'
+              ) {
+                if (deps.onBlockUpdate) {
+                  deps.onBlockUpdate({
+                    sourceGroup,
+                    chatJid: data.chatJid || '',
+                    messageId: data.messageId,
+                    blockId: data.blockId,
+                    state: data.state as Record<string, unknown>,
+                    sourceAgent: data.sourceAgent || 'unknown',
+                  });
+                }
+              } else {
+                logger.warn(
+                  { file, sourceGroup, data },
+                  'Malformed block_update IPC payload — dropped',
+                );
+              }
+            } catch (err) {
+              logger.error(
+                { file, sourceGroup, err },
+                'Error processing IPC block_update',
+              );
+              try {
+                fs.unlinkSync(filePath);
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(
+          { err, sourceGroup },
+          'Error reading IPC block_updates directory',
         );
       }
 

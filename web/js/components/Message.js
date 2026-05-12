@@ -166,7 +166,7 @@ function UsageFooter({ usage, toolHistory, expanded, onToggle, runId, groupFolde
   `;
 }
 
-export function Message({ id, role, content, timestamp, senderName, isError, compact, usage, toolHistory, runId, replyToMessageId }) {
+export function Message({ id, role, content, timestamp, senderName, isError, compact, usage, toolHistory, runId, replyToMessageId, blockState }) {
   const isAssistant = role === 'assistant';
   const time = formatMessageTimestamp(timestamp);
   const timeTitle = timestamp
@@ -205,7 +205,7 @@ export function Message({ id, role, content, timestamp, senderName, isError, com
         <div class="text-[11px] font-semibold mb-1" style="color: ${nameColor}">${senderName}</div>
       `}
       ${replyToMessageId && html`<${ReplyToHeader} replyToMessageId=${replyToMessageId} />`}
-      <${MessageBody} content=${content} messageId=${id} messageTimestamp=${timestamp} />
+      <${MessageBody} content=${content} messageId=${id} messageTimestamp=${timestamp} blockState=${blockState} />
       <div class="text-[11px] text-txt-muted mt-1.5" title=${timeTitle}>
         ${senderName && !showAgentBadge ? `${senderName} \u00B7 ${time}` : time}
       </div>

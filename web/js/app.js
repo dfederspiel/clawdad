@@ -311,6 +311,30 @@ api.onSSE('message_update', (data) => {
   // No notification sound — it's an update, not a new message
 });
 
+// #141 — Block state overlay updates. Merge the incoming state into the
+// target message's blockState map without a refetch. Idempotent: an
+// agent's repeated update_block on the same (message_id, block_id)
+// overwrites prior state. Messages outside the active chat are still
+// updated so the rendered state is correct on group switch.
+api.onSSE('block_state_update', (data) => {
+  if (!data?.message_id || !data?.block_id) return;
+  let touched = false;
+  const next = messages.value.map((m) => {
+    if (m.id !== data.message_id) return m;
+    touched = true;
+    const prevBs = m.blockState || {};
+    const prevState = prevBs[data.block_id] || {};
+    return {
+      ...m,
+      blockState: {
+        ...prevBs,
+        [data.block_id]: { ...prevState, ...(data.state || {}) },
+      },
+    };
+  });
+  if (touched) messages.value = next;
+});
+
 api.onSSE('typing', (data) => {
   // Portal-delegation typing events route to threadTyping (per-thread
   // panel) and to activeAgents (sidebar parallel-instance count — #130).
@@ -576,6 +600,7 @@ api.onSSE('thread_created', async (data) => {
       timestamp: m.timestamp,
       senderName: m.sender_name,
       replyToMessageId: m.reply_to_message_id || null,
+      blockState: m.block_state || null,
     }));
   }
 });
@@ -830,6 +855,7 @@ export async function selectGroup(jid) {
       toolHistory: parsedUsage?.toolHistory || [],
       runId: m.run_id ?? null,
       replyToMessageId: m.reply_to_message_id || null,
+      blockState: m.block_state || null,
     };
   });
   const dbIds = new Set(dbMessages.map((m) => m.id));

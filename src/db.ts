@@ -340,6 +340,23 @@ function createSchema(database: Database.Database): void {
     /* columns already exist */
   }
 
+  // #141 — block-state overlay. State is keyed by (message_id, block_id)
+  // and shallow-merged over the original block payload at render time.
+  // We never mutate messages.content (the abandoned updateMessage() path
+  // proved that unreliable). The PK is the natural key; updated_by helps
+  // diagnose "which agent stomped my pin's value."
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS block_state (
+      message_id TEXT NOT NULL,
+      block_id TEXT NOT NULL,
+      state_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT,
+      PRIMARY KEY (message_id, block_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_block_state_message ON block_state(message_id);
+  `);
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS delegation_runs (
       id TEXT PRIMARY KEY,
@@ -920,6 +937,98 @@ export function getQuotedContextWindow(
     )
     .all(chatJid, anchor.timestamp, after) as NewMessage[];
   return [...beforeRows.reverse(), anchor, ...afterRows];
+}
+
+// --- Block state overlay (#141) ---
+
+export interface BlockStateRow {
+  message_id: string;
+  block_id: string;
+  state: Record<string, unknown>;
+  updated_at: string;
+  updated_by?: string | null;
+}
+
+/**
+ * Upsert a block-state overlay row. State is shallow-merged over any
+ * existing row's state — agents only need to send fields they changed.
+ * Returns the post-merge row so the caller can broadcast it.
+ */
+export function upsertBlockState(
+  messageId: string,
+  blockId: string,
+  state: Record<string, unknown>,
+  updatedBy?: string,
+): BlockStateRow {
+  const existing = db
+    .prepare(
+      `SELECT state_json FROM block_state WHERE message_id = ? AND block_id = ?`,
+    )
+    .get(messageId, blockId) as { state_json: string } | undefined;
+  let merged: Record<string, unknown> = state;
+  if (existing) {
+    try {
+      const prev = JSON.parse(existing.state_json) as Record<string, unknown>;
+      merged = { ...prev, ...state };
+    } catch {
+      /* malformed prior row — replace */
+    }
+  }
+  const updatedAt = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO block_state (message_id, block_id, state_json, updated_at, updated_by)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(message_id, block_id) DO UPDATE SET
+       state_json = excluded.state_json,
+       updated_at = excluded.updated_at,
+       updated_by = excluded.updated_by`,
+  ).run(
+    messageId,
+    blockId,
+    JSON.stringify(merged),
+    updatedAt,
+    updatedBy || null,
+  );
+  return {
+    message_id: messageId,
+    block_id: blockId,
+    state: merged,
+    updated_at: updatedAt,
+    updated_by: updatedBy || null,
+  };
+}
+
+/**
+ * Bulk-load block-state rows for a set of message IDs. Returns a
+ * { [messageId]: { [blockId]: state } } map for cheap merging at render
+ * time. Empty input returns an empty object.
+ */
+export function getBlockStateForMessages(
+  messageIds: string[],
+): Record<string, Record<string, Record<string, unknown>>> {
+  const out: Record<string, Record<string, Record<string, unknown>>> = {};
+  if (messageIds.length === 0) return out;
+  const placeholders = messageIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT message_id, block_id, state_json FROM block_state WHERE message_id IN (${placeholders})`,
+    )
+    .all(...messageIds) as Array<{
+    message_id: string;
+    block_id: string;
+    state_json: string;
+  }>;
+  for (const r of rows) {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(r.state_json) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (!out[r.message_id]) out[r.message_id] = {};
+    out[r.message_id][r.block_id] = parsed;
+  }
+  return out;
 }
 
 export function getThreadsForChat(chatJid: string): ThreadInfo[] {

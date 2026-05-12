@@ -81,6 +81,7 @@ import {
   getAllTasks,
   getAllThreads,
   getLastBotMessageTimestamp,
+  getMessageById,
   getMessagesSince,
   getNewMessages,
   getRouterState,
@@ -96,6 +97,7 @@ import {
   setGroupSubtitle,
   storeMediaArtifact,
   storeMessage,
+  upsertBlockState,
 } from './db.js';
 import { GroupQueue, MessageCheckMode } from './group-queue.js';
 import {
@@ -221,6 +223,23 @@ function broadcastWorkState(event: import('./types.js').WorkStateEvent): void {
   for (const ch of channels) {
     if (ch.name === 'web' && 'broadcastWorkState' in ch) {
       (ch as any).broadcastWorkState(event);
+      break;
+    }
+  }
+}
+
+/** #141 — Broadcast block-state overlay updates to web UI clients. */
+function broadcastBlockStateUpdate(payload: {
+  jid: string;
+  message_id: string;
+  block_id: string;
+  state: Record<string, unknown>;
+  updated_at: string;
+  updated_by?: string | null;
+}): void {
+  for (const ch of channels) {
+    if (ch.name === 'web' && 'broadcastBlockStateUpdate' in ch) {
+      (ch as any).broadcastBlockStateUpdate(payload);
       break;
     }
   }
@@ -3745,6 +3764,57 @@ async function main(): Promise<void> {
       });
     },
     onDelegateToAgent: delegationHandler,
+    onBlockUpdate: (request) => {
+      // #141 — validate ownership (the IPC dir is per-group, but the
+      // chatJid the agent self-reports is not authoritative). Look up
+      // the target message and verify both that it exists and that its
+      // chat belongs to the requesting group.
+      const ipcGroup = request.sourceGroup;
+      const msg = getMessageById(request.messageId, request.chatJid);
+      if (!msg) {
+        logger.warn(
+          { messageId: request.messageId, chatJid: request.chatJid, ipcGroup },
+          'update_block rejected — message not found in chat',
+        );
+        return;
+      }
+      const group = registeredGroups[msg.chat_jid];
+      if (!group || group.folder !== ipcGroup) {
+        logger.warn(
+          {
+            messageId: request.messageId,
+            chatJid: request.chatJid,
+            ipcGroup,
+            actualFolder: group?.folder,
+          },
+          'update_block rejected — cross-group update attempt',
+        );
+        return;
+      }
+      const row = upsertBlockState(
+        request.messageId,
+        request.blockId,
+        request.state,
+        `agent:${request.sourceAgent}`,
+      );
+      broadcastBlockStateUpdate({
+        jid: msg.chat_jid,
+        message_id: row.message_id,
+        block_id: row.block_id,
+        state: row.state,
+        updated_at: row.updated_at,
+        updated_by: row.updated_by ?? null,
+      });
+      logger.info(
+        {
+          group: ipcGroup,
+          messageId: request.messageId,
+          blockId: request.blockId,
+          sourceAgent: request.sourceAgent,
+        },
+        'Block state updated',
+      );
+    },
     onSetSubtitle: (jid, subtitle) => {
       // Update DB and broadcast
       const group = registeredGroups[jid];

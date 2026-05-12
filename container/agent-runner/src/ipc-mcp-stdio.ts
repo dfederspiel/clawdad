@@ -894,6 +894,55 @@ Set to empty string to clear.`,
   },
 );
 
+// #141 — update_block: agents update the state of a UI block they previously
+// emitted (action button status, stat value, progress, etc.) without
+// emitting a new message. Available to ALL agents, not just coordinators:
+// specialists are often the right author of an update.
+server.tool(
+  'update_block',
+  `Update a UI block you previously emitted. Use this when the outcome of an action changes (e.g. a button you emitted is now "Done"), when a stat or progress value advances, or when a card's content is stale.
+
+Pass the message_id from the bot message that contained the block (visible in the conversation via the message metadata) and the block_id you assigned when emitting it. The state object is shallow-merged over any prior state — only include fields that changed.
+
+This does NOT send a new message — the existing block updates in place. Use this for status changes; emit a new message for new content.
+
+Example: update_block({ message_id: "msg-7c3f...", block_id: "deploy-confirm", state: { status: "done", result: "Deployed in 2m 14s" } })`,
+  {
+    message_id: z
+      .string()
+      .min(1)
+      .describe('The id of the bot message containing the block.'),
+    block_id: z
+      .string()
+      .min(1)
+      .describe('The id you assigned to the block when emitting it. Blocks without an explicit id cannot be updated.'),
+    state: z
+      .record(z.string(), z.unknown())
+      .describe('Object of fields to shallow-merge over the block. E.g. { status: "done", result: "OK" }.'),
+  },
+  async (args) => {
+    const BLOCK_UPDATES_DIR = path.join(IPC_DIR, 'block_updates');
+    writeIpcFile(BLOCK_UPDATES_DIR, {
+      type: 'block_update',
+      messageId: args.message_id,
+      blockId: args.block_id,
+      state: args.state,
+      sourceAgent: process.env.NANOCLAW_AGENT_NAME || 'default',
+      chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Updated block "${args.block_id}" on message ${args.message_id}.`,
+        },
+      ],
+    };
+  },
+);
+
 // Only coordinators (agents without triggers) can delegate to other agents.
 // Specialists should hand back to the coordinator via their output text.
 if (process.env.NANOCLAW_CAN_DELEGATE === '1') {

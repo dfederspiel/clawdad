@@ -39,6 +39,7 @@ import {
 import {
   getAllGroupLastActivity,
   getAllGroupNextTaskAt,
+  getBlockStateForMessages,
   getMessagesSince,
   getMessageById,
   getMediaArtifact,
@@ -509,6 +510,18 @@ export class WebChannel implements Channel {
 
   broadcastWorkState(event: import('../types.js').WorkStateEvent): void {
     this.broadcast('work_state', event as unknown as Record<string, unknown>);
+  }
+
+  // #141 — Pushed when an agent's update_block call lands.
+  broadcastBlockStateUpdate(payload: {
+    jid: string;
+    message_id: string;
+    block_id: string;
+    state: Record<string, unknown>;
+    updated_at: string;
+    updated_by?: string | null;
+  }): void {
+    this.broadcast('block_state_update', payload);
   }
 
   broadcastUsageUpdate(
@@ -1792,7 +1805,15 @@ You do not delegate. If something falls outside your role, say so plainly in you
         true,
         true, // excludeThreaded — hide thread replies from main timeline
       );
-      return this.json(res, 200, { messages });
+      // #141 — attach block-state overlay so the renderer can merge per-block
+      // state without a follow-up fetch. Empty when no agent has called
+      // update_block on any message in this page.
+      const blockState = getBlockStateForMessages(messages.map((m) => m.id));
+      const withState = messages.map((m) => ({
+        ...m,
+        block_state: blockState[m.id] || undefined,
+      }));
+      return this.json(res, 200, { messages: withState });
     }
 
     // DELETE /api/messages/:jid — clear all messages (and threads) for a group
