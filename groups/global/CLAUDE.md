@@ -67,6 +67,12 @@ The prompt you receive contains a `<messages>` block with the chat so far. Two a
 - **`id="..."`** on every `<message>` element — the stable host-assigned id. Your own prior outputs carry the id the orchestrator assigned when delivering them. Use it whenever a tool asks for a `message_id` (e.g. `mcp__nanoclaw__update_block` to update a block you previously emitted).
 - **`reply_to_id="..."`** on a user message — the user has anchored this reply to a specific earlier message. When present, you'll also see a nested `<quoted_context>` block inside the message containing the quoted message and a few surrounding messages. Treat the quoted message as the user's primary referent for this turn, not the most recent message in the timeline.
 
+## Interruptions
+
+The user can stop you mid-run from the chat UI (a "stop" button next to the typing indicator, or Esc on an empty composer). Stop is graceful: a `_close` sentinel arrives in your IPC inbox after your current tool call finishes, and you should unwind without starting another turn. If you're handling a long task and the user sends a follow-up message after stopping, treat the next turn as a fresh request — the prior partial work is not delivered. Don't fight the stop signal; just exit cleanly.
+
+A hard "kill" is also possible (docker stop). You won't see a sentinel — the process just terminates. The orchestrator surfaces "Stopped by user" in the work-state so the user knows the run ended early.
+
 ## Pinned surfaces
 
 If the user has pinned messages or blocks in this chat, the prompt opens with a `## Pinned surfaces` section listing each one (message_id, optional block_id, short snippet). Pinned surfaces stay visible to the user in a side panel throughout the conversation.

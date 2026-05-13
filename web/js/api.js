@@ -123,6 +123,10 @@ export const createPin = (jid, messageId, blockId, title) =>
 export const deletePin = (threadId) =>
   fetchJson(`/api/pins/${encodeURIComponent(threadId)}`, { method: 'DELETE' });
 
+// #143 — Abort in-flight agent run. mode: 'stop' (graceful) | 'kill' (hard).
+export const abortRun = (jid, mode = 'stop') =>
+  fetchJson('/api/abort', { method: 'POST', body: { jid, mode } });
+
 export async function uploadMedia(jid, file, { threadId, caption } = {}) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = '';

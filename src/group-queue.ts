@@ -392,6 +392,30 @@ export class GroupQueue {
     return state.activeDelegations > 0 || state.pendingDelegations.length > 0;
   }
 
+  /**
+   * #143 — Read-only snapshot of a group's in-flight state. Callers
+   * (e.g. /api/abort) need to know whether a run is live and what
+   * container name to target for a hard kill. Returns null when the
+   * group has never been touched.
+   */
+  getRunStateSnapshot(groupJid: string): {
+    active: boolean;
+    containerName: string | null;
+    coordinatorAgentName: string | null;
+    activeDelegations: number;
+    activeDelegationAgents: string[];
+  } | null {
+    const state = this.groups.get(groupJid);
+    if (!state) return null;
+    return {
+      active: state.active,
+      containerName: state.containerName,
+      coordinatorAgentName: state.coordinatorAgentName,
+      activeDelegations: state.activeDelegations,
+      activeDelegationAgents: [...state.activeDelegationAgents],
+    };
+  }
+
   enqueueWork(work: QueuedDelegationWork): void {
     if (this.shuttingDown) return;
     if (work.kind !== 'delegation') return;

@@ -82,6 +82,20 @@ export async function removePin(threadId) {
     console.error('Failed to remove pin', err);
   }
 }
+
+// #143 — Abort the in-flight run for the current chat. mode='stop' is
+// graceful (the agent finishes its current tool call and exits cleanly);
+// mode='kill' is hard-stop (docker stop the coordinator + delegations).
+export async function abortCurrentRun(mode = 'stop') {
+  const jid = selectedJid.value;
+  if (!jid) return null;
+  try {
+    return await api.abortRun(jid, mode);
+  } catch (err) {
+    console.error('Failed to abort run', err);
+    return null;
+  }
+}
 export const usage = signal(null); // latest usage stats
 export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group latest run
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
@@ -543,7 +557,19 @@ api.onSSE('usage_update', (data) => {
 
 api.onSSE('work_state', (data) => {
   workState.value = { ...workState.value, [data.jid]: data };
-  if (['idle', 'completed', 'error'].includes(data.phase)) {
+  // Clearing typing/progress on idle is correct *only* when no agent is
+  // still active in this chat. The coordinator dispatching a delegation
+  // immediately returns 'idle' even though the specialist's run is still
+  // in flight — clearing here was the #144 root cause. Use activeAgents
+  // (which tracks both chat-level and portal-thread delegation instances)
+  // as the authoritative source of "is anyone working in this chat."
+  // 'aborted' is a user-initiated stop and should clear unconditionally —
+  // the stop button must disappear even if delegations linger briefly.
+  const stillActive = (activeAgents.value[data.jid] || []).length > 0;
+  if (data.phase === 'aborted') {
+    clearTypingStateForJid(data.jid);
+    clearAgentProgressForJid(data.jid);
+  } else if (['idle', 'completed', 'error'].includes(data.phase) && !stillActive) {
     clearTypingStateForJid(data.jid);
     clearAgentProgressForJid(data.jid);
   }

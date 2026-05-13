@@ -3248,6 +3248,108 @@ async function main(): Promise<void> {
   channelOpts.onRunTaskNow = (taskId: string) =>
     runTaskNow(taskId, schedulerDeps);
 
+  // #143 — Wire abort handler. Soft 'stop' writes a _close sentinel so the
+  // agent finishes its current tool call and exits cleanly. Hard 'kill'
+  // shells out to docker stop on the coordinator container and any
+  // delegation containers currently running for this chat (matched by
+  // the safe-name prefix convention used in container-runner).
+  channelOpts.onAbortRun = async ({ jid, mode }) => {
+    const snapshot = queue.getRunStateSnapshot(jid);
+    // A run is in flight if the coordinator is active OR if any delegation
+    // is running. After the coordinator exits cleanly post-soft-stop the
+    // delegations live on independently — kill must still be able to
+    // reach them.
+    const hasInflight =
+      !!snapshot && (snapshot.active || snapshot.activeDelegations > 0);
+    if (!hasInflight) {
+      return { found: false, mode };
+    }
+    const coordinatorContainer =
+      snapshot && snapshot.active && snapshot.containerName
+        ? snapshot.containerName
+        : undefined;
+
+    if (mode === 'stop') {
+      // Graceful shutdown of the coordinator. Live delegations continue
+      // their own runs — soft stop is "stop the current turn" not "kill
+      // everything." Hard kill is the path for tearing down delegations.
+      queue.closeStdin(jid);
+    } else {
+      // Hard stop. Coordinator first, then any delegation containers
+      // matching the group's name prefix. Delegations aren't registered
+      // individually with the queue, so we list docker containers and
+      // filter by the orchestrator's naming convention.
+      if (coordinatorContainer) {
+        try {
+          stopContainer(coordinatorContainer);
+        } catch (err) {
+          logger.warn(
+            { jid, container: coordinatorContainer, err },
+            'Failed to stop coordinator container during abort',
+          );
+        }
+      }
+      const group = registeredGroups[jid];
+      const delegationContainers: string[] = [];
+      if (group) {
+        // Mirror container-runner.ts:778 — `_` is NOT preserved, only
+        // [a-zA-Z0-9-] survives. `web_test-team` becomes `web-test-team`
+        // and the container prefix is `nanoclaw-web-test-team-`.
+        const safe = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
+        const prefix = `nanoclaw-${safe}-`;
+        try {
+          const { execSync } = await import('child_process');
+          const out = execSync(
+            `docker ps --format '{{.Names}}' --filter name=${prefix}`,
+            { encoding: 'utf-8' },
+          );
+          for (const name of out.split('\n').map((l) => l.trim())) {
+            if (!name || name === coordinatorContainer) continue;
+            try {
+              stopContainer(name);
+              delegationContainers.push(name);
+            } catch (err) {
+              logger.warn(
+                { jid, container: name, err },
+                'Failed to stop delegation container during abort',
+              );
+            }
+          }
+        } catch (err) {
+          logger.warn(
+            { jid, err },
+            'Failed to list delegation containers during abort',
+          );
+        }
+      }
+      broadcastWorkState({
+        jid,
+        phase: 'aborted',
+        summary: 'Stopped by user',
+        updated_at: new Date().toISOString(),
+      });
+      return {
+        found: true,
+        mode,
+        coordinatorContainer,
+        delegationContainers,
+      };
+    }
+
+    broadcastWorkState({
+      jid,
+      phase: 'aborted',
+      summary: 'Stopping — finishing current tool call',
+      updated_at: new Date().toISOString(),
+    });
+    return {
+      found: true,
+      mode,
+      coordinatorContainer,
+      delegationContainers: [],
+    };
+  };
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop(schedulerDeps);
 

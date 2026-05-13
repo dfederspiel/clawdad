@@ -1,6 +1,7 @@
 import { html } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
 import {
+  abortCurrentRun,
   selectedJid,
   typing,
   typingStartTime,
@@ -8,6 +9,11 @@ import {
   agentProgress,
   currentWorkState,
 } from '../app.js';
+import { ConfirmDialog } from './ConfirmDialog.js';
+
+// #143 — Lucide square icon for the stop button. A solid square reads as
+// "halt" without needing a label at this size.
+const StopIcon = html`<svg viewBox="0 0 24 24" fill="currentColor" class="w-3 h-3" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`;
 
 const PHASE_LABELS = {
   queued: 'queued',
@@ -31,6 +37,8 @@ function renderProgressBadge(tool, isLatest) {
 
 export function TypingIndicator() {
   const [elapsed, setElapsed] = useState(0);
+  const [aborting, setAborting] = useState(false);
+  const [killConfirmOpen, setKillConfirmOpen] = useState(false);
   const jid = selectedJid.value;
   const isTyping = typing.value;
   const startTime = typingStartTime.value[jid];
@@ -38,6 +46,22 @@ export function TypingIndicator() {
   const agentName = typingAgentName.value[jid];
   const work = currentWorkState.value;
   const phase = isTyping ? 'thinking' : work?.phase;
+
+  async function onStop() {
+    if (aborting) return;
+    setAborting(true);
+    await abortCurrentRun('stop');
+    // The work_state 'aborted' SSE event clears the indicator; reset
+    // local pending state after a tick so a re-render flushes.
+    setTimeout(() => setAborting(false), 500);
+  }
+
+  async function onKillConfirm() {
+    setKillConfirmOpen(false);
+    setAborting(true);
+    await abortCurrentRun('kill');
+    setTimeout(() => setAborting(false), 500);
+  }
 
   useEffect(() => {
     if (!startTime) { setElapsed(0); return; }
@@ -72,6 +96,24 @@ export function TypingIndicator() {
           <span class="typing-dot" />
           <span class="typing-dot" />
         `}
+        ${showDots && html`
+          <button
+            class="ml-2 flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-border text-txt-muted hover:text-err hover:border-err transition-colors ${aborting ? 'opacity-50' : ''}"
+            onClick=${onStop}
+            disabled=${aborting}
+            title="Stop \u2014 agent finishes current tool call and exits cleanly (Esc)"
+          >
+            ${StopIcon}
+            <span>${aborting ? 'stopping\u2026' : 'stop'}</span>
+          </button>
+          <button
+            class="text-[10px] px-1.5 py-0.5 rounded border border-border text-txt-muted hover:text-err hover:border-err transition-colors"
+            onClick=${() => setKillConfirmOpen(true)}
+            title="Kill \u2014 hard-stops the container. Session may be left in a partial state."
+          >
+            kill
+          </button>
+        `}
       </div>
       ${progress && html`
         <div class="mt-2 flex flex-col gap-1">
@@ -91,6 +133,15 @@ export function TypingIndicator() {
           })}
         </div>
       `}
+      <${ConfirmDialog}
+        open=${killConfirmOpen}
+        title="Hard-kill the agent?"
+        message="This stops the container immediately. Any in-flight tool call is lost and the session may end up in a partial state. Use Stop for a graceful exit."
+        confirmLabel="Kill"
+        destructive=${true}
+        onConfirm=${onKillConfirm}
+        onCancel=${() => setKillConfirmOpen(false)}
+      />
     </div>
   `;
 }

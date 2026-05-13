@@ -94,6 +94,19 @@ export interface ChannelOpts {
   getDiscoveredAgents?: (jid: string) => Agent[];
   /** Manually trigger a scheduled task to run (web UI "run now" button) */
   onRunTaskNow?: (taskId: string) => void;
+  /**
+   * #143 — Interrupt an in-flight agent run for a chat. `mode: 'stop'` is
+   * the graceful path (writes a `_close` sentinel so the agent finishes
+   * its current tool call and exits cleanly). `mode: 'kill'` hard-stops
+   * the coordinator container and any delegation containers running for
+   * this chat. Returns a summary of what was acted on.
+   */
+  onAbortRun?: (request: { jid: string; mode: 'stop' | 'kill' }) => Promise<{
+    found: boolean;
+    mode: 'stop' | 'kill';
+    coordinatorContainer?: string;
+    delegationContainers?: string[];
+  }>;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

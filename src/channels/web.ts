@@ -2052,6 +2052,37 @@ You do not delegate. If something falls outside your role, say so plainly in you
       return this.json(res, 200, { ok: true });
     }
 
+    // #143 — POST /api/abort — interrupt an in-flight agent run for a chat.
+    // mode: 'stop' graceful (close stdin, agent finishes current tool call);
+    // mode: 'kill' hard-stop (docker stop on coordinator + delegations).
+    if (method === 'POST' && url.pathname === '/api/abort') {
+      const body = await this.readBody(req);
+      const { jid, mode } = body;
+      if (!jid || typeof jid !== 'string') {
+        return this.json(res, 400, { error: 'jid is required' });
+      }
+      const requestedMode = mode === 'kill' ? 'kill' : 'stop';
+      if (!this.opts.onAbortRun) {
+        return this.json(res, 503, {
+          error: 'Abort handler not wired on this channel',
+        });
+      }
+      const result = await this.opts.onAbortRun({ jid, mode: requestedMode });
+      if (!result.found) {
+        return this.json(res, 404, { error: 'no run in flight for this jid' });
+      }
+      logger.info(
+        {
+          jid,
+          mode: result.mode,
+          coordinator: result.coordinatorContainer,
+          delegations: result.delegationContainers?.length || 0,
+        },
+        'Run aborted',
+      );
+      return this.json(res, 200, { ok: true, ...result });
+    }
+
     // GET /api/status — container/queue status + uptime
     if (method === 'GET' && url.pathname === '/api/status') {
       const status = this.opts.getStatus?.() || {};

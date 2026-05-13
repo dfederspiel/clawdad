@@ -1,12 +1,15 @@
 import { html } from 'htm/preact';
 import { useState, useRef, useEffect, useMemo } from 'preact/hooks';
 import {
+  abortCurrentRun,
+  currentWorkState,
   handleSend,
   triggers,
   selectedGroup,
   pendingInput,
   replyTo,
   clearReplyTo,
+  typing,
 } from '../app.js';
 import * as api from '../api.js';
 
@@ -160,6 +163,21 @@ export function ChatInput() {
       if (e.key === 'Escape') {
         e.preventDefault();
         setShowMentions(false);
+        return;
+      }
+    }
+    // #143 — Esc on an empty composer = soft-stop the in-flight agent
+    // run, mirroring Claude Code's interrupt. Only fires when no text is
+    // typed (so Esc doesn't accidentally interrupt while the user is
+    // mid-thought) and when something is actually running.
+    if (e.key === 'Escape' && !text) {
+      const work = currentWorkState.value;
+      const runningPhases = ['thinking', 'working', 'delegating', 'task_running', 'queued'];
+      const isRunning =
+        typing.value || (work?.phase && runningPhases.includes(work.phase));
+      if (isRunning) {
+        e.preventDefault();
+        abortCurrentRun('stop');
         return;
       }
     }
