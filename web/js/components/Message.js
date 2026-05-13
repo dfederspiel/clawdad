@@ -1,12 +1,17 @@
 import { html } from 'htm/preact';
 import { useState } from 'preact/hooks';
-import { addPin, messages, pins, removePin, selectedGroup, setReplyTo } from '../app.js';
+import { addPin, deleteMessageInChat, messages, pins, removePin, selectedGroup, setReplyTo } from '../app.js';
 import { openAgentPanel, openPinsInDrawer } from './AgentPanel.js';
 import { MessageBody } from './MessageBody.js';
+import { ConfirmDialog } from './ConfirmDialog.js';
 
 // #142 — Pin icon (Lucide "pin"). Stays small; renders inline next to
 // the reply affordance on hover and in the pinned-state indicator.
 const PinIcon = html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3" aria-hidden="true"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>`;
+
+// #147 — Lucide "trash-2" for delete. Slightly smaller stroke to read
+// as a tertiary action next to pin/reply rather than primary.
+const TrashIcon = html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
 
 // #140 — find a message by id in the current chat so the reply header can
 // render the quoted preview and the click-to-scroll anchor is real.
@@ -219,6 +224,24 @@ export function Message({ id, role, content, timestamp, senderName, isError, com
     }
   };
 
+  // #147 — Delete this message. Available on user AND assistant messages;
+  // cascades block_state + pin threads anchored to it. Counts any pins
+  // (message-level OR block-level) anchored here so the confirm dialog
+  // can warn — the user might be deleting work they actively reference.
+  const canDelete = !!id && !isError;
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const anchoredPinCount = Object.values(pins.value).filter(
+    (p) => p.message_id === id,
+  ).length;
+  const onDeleteClick = (e) => {
+    e.stopPropagation();
+    setDeleteConfirmOpen(true);
+  };
+  const onDeleteConfirm = async () => {
+    setDeleteConfirmOpen(false);
+    await deleteMessageInChat(id);
+  };
+
   return html`
     <div
       class="${sizeClass} leading-relaxed ${bubbleClass} ${errorClass} overflow-hidden break-words relative group"
@@ -244,7 +267,7 @@ export function Message({ id, role, content, timestamp, senderName, isError, com
           groupFolder=${group?.folder}
         />
       `}
-      ${(canReply || canPin) && (hovered || messagePin) && html`
+      ${(canReply || canPin || canDelete) && (hovered || messagePin) && html`
         <div class="absolute top-1 right-1 flex items-center gap-1">
           ${canPin && (hovered || messagePin) && html`
             <button
@@ -265,8 +288,29 @@ export function Message({ id, role, content, timestamp, senderName, isError, com
               \u21B3 reply
             </button>
           `}
+          ${canDelete && hovered && html`
+            <button
+              class="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-bg-3/90 border border-border text-txt-muted hover:text-err hover:border-err transition-colors"
+              onClick=${onDeleteClick}
+              title="Delete this message"
+            >
+              ${TrashIcon}
+              <span>delete</span>
+            </button>
+          `}
         </div>
       `}
+      <${ConfirmDialog}
+        open=${deleteConfirmOpen}
+        title="Delete this message?"
+        message=${anchoredPinCount > 0
+          ? `This message has ${anchoredPinCount} pinned surface${anchoredPinCount === 1 ? '' : 's'} anchored to it \u2014 they will also be removed. This cannot be undone.`
+          : 'This cannot be undone.'}
+        confirmLabel="Delete"
+        destructive=${true}
+        onConfirm=${onDeleteConfirm}
+        onCancel=${() => setDeleteConfirmOpen(false)}
+      />
     </div>
   `;
 }

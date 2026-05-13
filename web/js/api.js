@@ -127,6 +127,14 @@ export const deletePin = (threadId) =>
 export const abortRun = (jid, mode = 'stop') =>
   fetchJson('/api/abort', { method: 'POST', body: { jid, mode } });
 
+// #147 — Delete a single message. Cascades block_state + pin threads
+// anchored to this message_id. Response includes the cascade summary.
+export const deleteMessage = (jid, messageId) =>
+  fetchJson(
+    `/api/messages/${encodeURIComponent(jid)}/${encodeURIComponent(messageId)}`,
+    { method: 'DELETE' },
+  );
+
 export async function uploadMedia(jid, file, { threadId, caption } = {}) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = '';

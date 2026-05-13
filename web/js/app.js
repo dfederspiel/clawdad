@@ -96,6 +96,21 @@ export async function abortCurrentRun(mode = 'stop') {
     return null;
   }
 }
+
+// #147 — Delete a single message from the active chat. The SSE handler
+// removes it from local state and reaps cascaded pins; this just kicks
+// off the API call and surfaces errors. Returns the cascade summary on
+// success so the caller can decide whether to warn the user.
+export async function deleteMessageInChat(messageId) {
+  const jid = selectedJid.value;
+  if (!jid || !messageId) return null;
+  try {
+    return await api.deleteMessage(jid, messageId);
+  } catch (err) {
+    console.error('Failed to delete message', err);
+    return null;
+  }
+}
 export const usage = signal(null); // latest usage stats
 export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group latest run
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
@@ -716,6 +731,23 @@ api.onSSE('user_message', (data) => {
 api.onSSE('achievement', (data) => {
   const enriched = handleAchievementSSE(data);
   showAchievementToast(enriched);
+});
+
+// #147 — Mirror a server-side single-message delete in local state.
+// Pins anchored to this message are removed separately via the
+// pin_removed events the server broadcasts alongside; we just need to
+// reap the message itself here.
+api.onSSE('message_deleted', (data) => {
+  if (!data?.message_id) return;
+  if (data.jid !== selectedJid.value) return;
+  const next = messages.value.filter((m) => m.id !== data.message_id);
+  if (next.length !== messages.value.length) {
+    messages.value = next;
+  }
+  // If this message was the anchor of the current reply chip, drop it.
+  if (replyTo.value?.messageId === data.message_id) {
+    replyTo.value = null;
+  }
 });
 
 api.onSSE('messages_cleared', (data) => {

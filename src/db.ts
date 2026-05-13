@@ -1207,6 +1207,61 @@ export function clearMessages(chatJid: string): void {
   txn();
 }
 
+/**
+ * #147 — Hard-delete a single message and reap rows in adjacent tables
+ * that would otherwise dangle. Returns a summary the caller broadcasts so
+ * connected clients can mirror the cascade in their local state.
+ *
+ * Cascades:
+ *   - block_state rows keyed by message_id (no longer addressable)
+ *   - pin threads anchored to this message_id (the pin is now useless)
+ *
+ * Intentionally NOT cascaded:
+ *   - messages.reply_to_message_id pointing here. The render path already
+ *     handles a dangling anchor gracefully ("↳ replying to an earlier
+ *     message"). Cascading would require a write-all-replies pass and
+ *     the half-broken render is better than scrambling them.
+ *   - thread rows whose thread_id matches the message_id. Trigger thread
+ *     identity is independent of the trigger message; leave them alone.
+ */
+export function deleteMessage(
+  chatJid: string,
+  messageId: string,
+): {
+  messageExisted: boolean;
+  blockStateRows: number;
+  pinThreadIds: string[];
+} {
+  let messageExisted = false;
+  let blockStateRows = 0;
+  const pinThreadIds: string[] = [];
+  const txn = db.transaction(() => {
+    // Collect pin thread ids first so we can broadcast pin_removed events
+    // after the transaction commits.
+    const pins = db
+      .prepare(
+        `SELECT thread_id FROM threads WHERE kind = 'pin' AND pin_message_id = ? AND origin_jid = ?`,
+      )
+      .all(messageId, chatJid) as Array<{ thread_id: string }>;
+    for (const p of pins) pinThreadIds.push(p.thread_id);
+    db.prepare(
+      `DELETE FROM threads WHERE kind = 'pin' AND pin_message_id = ? AND origin_jid = ?`,
+    ).run(messageId, chatJid);
+
+    const bsResult = db
+      .prepare(`DELETE FROM block_state WHERE message_id = ?`)
+      .run(messageId);
+    blockStateRows = bsResult.changes;
+
+    const msgResult = db
+      .prepare(`DELETE FROM messages WHERE id = ? AND chat_jid = ?`)
+      .run(messageId, chatJid);
+    messageExisted = msgResult.changes > 0;
+  });
+  txn();
+  return { messageExisted, blockStateRows, pinThreadIds };
+}
+
 export function deleteThreadsForGroup(jid: string): void {
   db.prepare('DELETE FROM threads WHERE origin_jid = ? OR agent_jid = ?').run(
     jid,

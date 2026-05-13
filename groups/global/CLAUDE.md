@@ -73,6 +73,10 @@ The user can stop you mid-run from the chat UI (a "stop" button next to the typi
 
 A hard "kill" is also possible (docker stop). You won't see a sentinel — the process just terminates. The orchestrator surfaces "Stopped by user" in the work-state so the user knows the run ended early.
 
+## Messages can disappear
+
+The user can delete individual messages from the chat. If a message you referenced (by `id` attribute or via `reply_to_id`) is gone from your next prompt's `<messages>` block, don't reconstruct it from memory and don't act surprised — treat the now-shorter history as the canonical record. `update_block` calls against a deleted message will fail silently (the host validates the message exists before applying state). Pins anchored to a deleted message are also reaped automatically.
+
 ## Pinned surfaces
 
 If the user has pinned messages or blocks in this chat, the prompt opens with a `## Pinned surfaces` section listing each one (message_id, optional block_id, short snippet). Pinned surfaces stay visible to the user in a side panel throughout the conversation.

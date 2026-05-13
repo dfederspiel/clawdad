@@ -51,6 +51,7 @@ import {
   storeMessageDirect,
   updateMessageContent,
   clearMessages,
+  deleteMessage,
   getAllTasks,
   getTaskById,
   getTaskRunLogs,
@@ -1836,6 +1837,58 @@ You do not delegate. If something falls outside your role, say so plainly in you
         block_state: blockState[m.id] || undefined,
       }));
       return this.json(res, 200, { messages: withState });
+    }
+
+    // #147 — DELETE /api/messages/:jid/:message_id — delete a single message
+    // and cascade adjacent state (block_state, pin threads). Must match
+    // BEFORE the clear-all route below — the greedy regex on the existing
+    // route would otherwise swallow the two-segment path.
+    const singleDeleteMatch = url.pathname.match(
+      /^\/api\/messages\/([^/]+)\/([^/]+)$/,
+    );
+    if (method === 'DELETE' && singleDeleteMatch) {
+      const jid = decodeURIComponent(singleDeleteMatch[1]);
+      const messageId = decodeURIComponent(singleDeleteMatch[2]);
+      if (!jid.startsWith('web:')) {
+        return this.json(res, 400, { error: 'jid must start with web:' });
+      }
+      const summary = deleteMessage(jid, messageId);
+      if (!summary.messageExisted) {
+        return this.json(res, 404, {
+          error: 'message not found in this chat',
+        });
+      }
+      // Broadcast the message_deleted event so all connected clients can
+      // remove the row from their local state. One pin_removed event per
+      // cascaded pin so existing pin-handling logic doesn't need to know
+      // about the new delete path.
+      this.broadcast('message_deleted', {
+        jid,
+        message_id: messageId,
+        cascaded: {
+          block_state: summary.blockStateRows,
+          pins: summary.pinThreadIds.length,
+        },
+      });
+      for (const threadId of summary.pinThreadIds) {
+        this.broadcastPinRemoved({ jid, thread_id: threadId });
+      }
+      logger.info(
+        {
+          jid,
+          messageId,
+          blockStateRows: summary.blockStateRows,
+          pinThreadIds: summary.pinThreadIds.length,
+        },
+        'Message deleted',
+      );
+      return this.json(res, 200, {
+        ok: true,
+        cascaded: {
+          block_state: summary.blockStateRows,
+          pins: summary.pinThreadIds.length,
+        },
+      });
     }
 
     // DELETE /api/messages/:jid — clear all messages (and threads) for a group
