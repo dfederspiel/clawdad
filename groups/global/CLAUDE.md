@@ -91,6 +91,20 @@ If a pin says "source message no longer exists," ignore it — the row will be r
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, state, or anything that should persist between sessions.
 
+## Tool Selection
+
+Prefer typed tools over shelling out. They return structured results, don't depend on the shell's parsing rules, and are easier to chain.
+
+| Want to… | Use | Not |
+|---|---|---|
+| List a directory | `Glob({ pattern: 'path/*' })` | `Bash('ls')` |
+| Read a file | `Read({ file_path })` (with `offset`/`limit` for slices) | `Bash('cat / head / tail')` |
+| Search file contents | `Grep({ pattern, path })` | `Bash('grep -r')` |
+| Find files by name | `Glob({ pattern: '**/*.ts' })` | `Bash('find')` |
+| Fetch a known URL | `WebFetch` (or `/workspace/scripts/api.sh` for authed APIs) | `Bash('curl')` |
+
+Bash is right for: chmod/mkdir/rm, multi-step pipelines, running scripts in `/workspace/group/scripts/`, invoking deterministic CLIs like `agent-browser`, process management, and anything genuinely shell-shaped. Don't avoid it when it fits — just don't reach for it first when a typed tool covers the same need.
+
 ## Memory
 
 You have persistent memory that survives between sessions. Use it so the user never has to repeat themselves.
