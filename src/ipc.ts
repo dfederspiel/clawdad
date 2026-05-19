@@ -55,6 +55,7 @@ export interface IpcDeps {
     sourceAgent: string;
     sourceBatchId?: string;
     completionPolicy?: 'final_response' | 'retrigger_coordinator' | 'silent';
+    historyScope?: 'none' | 'recent' | 'full';
   }) => void;
   onBlockUpdate?: (request: {
     sourceGroup: string;
@@ -259,6 +260,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     sourceBatchId: data.sourceBatchId || '',
                     completionPolicy:
                       data.completionPolicy || 'retrigger_coordinator',
+                    historyScope: data.historyScope || undefined,
                   });
                   logger.info(
                     {

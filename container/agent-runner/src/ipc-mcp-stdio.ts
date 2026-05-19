@@ -948,7 +948,7 @@ Example: update_block({ message_id: "msg-7c3f...", block_id: "deploy-confirm", s
 if (process.env.NANOCLAW_CAN_DELEGATE === '1') {
   server.tool(
     'delegate_to_agent',
-    `Delegate a task to another agent in this group. The target agent runs in its own container with the full conversation context plus your instructions. Use this when work falls outside your role.
+    `Delegate a task to another agent in this group. The target agent runs in its own container with the delegation message plus a small slice of recent group history. Use this when work falls outside your role.
 
 The target agent runs after your turn completes. Their user-visible response may be suppressed if newer context arrives before delivery, but the coordinator still gets a system note that they finished.
 
@@ -959,6 +959,7 @@ Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the thre
       agent: z.string().describe('Name of the target agent (e.g. "analyst", "greeter"). Must be an agent in this group.'),
       message: z.string().describe('Instructions or context for the target agent. Be specific about what you want them to do.'),
       completion_policy: z.enum(['final_response', 'retrigger_coordinator']).default('retrigger_coordinator').describe('What happens after the specialist responds. "retrigger_coordinator" (default): you get a follow-up turn to acknowledge, synthesize, or continue the conversation. Choose this whenever you might want to respond to the user after the specialist replies. "final_response": the specialist\'s output IS the final answer — you will NOT get a follow-up turn. Use this only for true fire-and-forget handoffs where you have nothing to add.'),
+      history_scope: z.enum(['none', 'recent', 'full']).default('recent').describe('How much prior group history the specialist sees alongside your delegation message. "recent" (default): the last ~3 messages — usually enough to ground a focused task. "none": just your delegation message — best for truly one-shot fan-outs where your instructions are self-contained, cuts the specialist\'s prompt cost. "full": the last 10 messages — pick this only when the specialist genuinely needs to see the whole recent thread (rare; your delegation message should normally carry the intent).'),
     },
     async (args) => {
       // Platform-level validation (#48): specialists see only this message,
@@ -982,6 +983,7 @@ Example: delegate_to_agent({ agent: "analyst", message: "Please analyze the thre
         targetAgent: args.agent,
         message: args.message,
         completionPolicy: args.completion_policy || 'retrigger_coordinator',
+        historyScope: args.history_scope || 'recent',
         sourceAgent: process.env.NANOCLAW_AGENT_NAME || 'default',
         sourceAgentId: process.env.NANOCLAW_AGENT_ID || '',
         sourceBatchId: process.env.NANOCLAW_RUN_BATCH_ID || '',

@@ -3374,6 +3374,7 @@ async function main(): Promise<void> {
     sourceAgent: string;
     sourceBatchId?: string;
     completionPolicy?: DelegationCompletionPolicy;
+    historyScope?: DelegationHistoryScope;
     title?: string;
   }): void => {
     const {
@@ -3384,6 +3385,7 @@ async function main(): Promise<void> {
       sourceAgent,
       sourceBatchId,
       completionPolicy,
+      historyScope,
       title,
     } = request;
 
@@ -3477,7 +3479,10 @@ async function main(): Promise<void> {
       sourceAgent,
       portalTitle,
     );
-    const portalHistoryScope: DelegationHistoryScope = 'recent';
+    // Honor the coordinator's per-call history_scope when provided
+    // (#137 Phase 2). Falls back to 'recent' — the same compact default
+    // Phase 1 wired in for orchestrator-initiated portal delegations.
+    const portalHistoryScope: DelegationHistoryScope = historyScope || 'recent';
     delegationManager.delegate(
       {
         groupJid: chatJid,
@@ -3489,8 +3494,6 @@ async function main(): Promise<void> {
         completionPolicy: completionPolicy || 'retrigger_coordinator',
         batchId,
         threadId: portalThreadId,
-        // The coordinator already condensed intent into the delegation
-        // message; a few messages of context is enough (#137).
         historyScope: portalHistoryScope,
       },
       async (runId) => {
