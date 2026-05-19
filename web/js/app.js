@@ -116,6 +116,13 @@ export const lastRunUsage = signal({}); // { [jid]: UsageData } — per-group la
 export const typingStartTime = signal({}); // { [jid]: timestamp } — when typing started
 export const typingAgentName = signal({}); // { [jid]: string } — which agent is typing
 export const agentProgress = signal({}); // { [jid]: { tool, summary, history[] } }
+// Per-instance progress shard. Parallel runs of the same agent each get
+// their own entry keyed by instanceId so TypingIndicator can render one
+// row per instance instead of interleaving tool calls from different
+// runs into a single confusing chronology (#138). The flat agentProgress
+// shard above is kept for usage_update and other single-run consumers.
+// { [jid]: { [instanceId]: { tool, summary, history[], agentName } } }
+export const agentProgressByInstance = signal({});
 // Portal-scoped progress shard. Same shape as agentProgress but keyed by
 // thread_id so each PortalSection in the drawer can render its own live
 // tool activity. Also tracks lastEventAt for stall detection.
@@ -265,6 +272,9 @@ function clearAgentProgressForJid(jid) {
   const next = { ...agentProgress.value };
   delete next[jid];
   agentProgress.value = next;
+  const nextInst = { ...agentProgressByInstance.value };
+  delete nextInst[jid];
+  agentProgressByInstance.value = nextInst;
 }
 
 // --- SSE ---
@@ -523,6 +533,20 @@ api.onSSE('typing', (data) => {
           ? current
           : [...current.slice(0, idx), ...current.slice(idx + 1)];
       activeAgents.value = { ...activeAgents.value, [data.jid]: filtered };
+      // Drop the per-instance progress shard for this instance (#138).
+      // The aggregate agentProgress shard stays — usage_update may still
+      // attach its history to the final assistant message.
+      if (data.instance_id) {
+        const jidShard = agentProgressByInstance.value[data.jid];
+        if (jidShard && jidShard[data.instance_id]) {
+          const nextJidShard = { ...jidShard };
+          delete nextJidShard[data.instance_id];
+          agentProgressByInstance.value = {
+            ...agentProgressByInstance.value,
+            [data.jid]: nextJidShard,
+          };
+        }
+      }
     } else {
       activeAgents.value = { ...activeAgents.value, [data.jid]: [] };
     }
@@ -582,6 +606,30 @@ api.onSSE('agent_progress', (data) => {
     ...agentProgress.value,
     [data.jid]: { tool: data.tool, summary: data.summary, history: updated },
   };
+  // Per-instance shard (#138). Only fan out when instance_id is present;
+  // legacy events without one stay aggregate-only.
+  if (data.instance_id) {
+    const jidShard = agentProgressByInstance.value[data.jid] || {};
+    const prevInst = jidShard[data.instance_id];
+    const instHistory = prevInst?.history || [];
+    const instUpdated = [
+      ...instHistory,
+      { tool: data.tool, summary: data.summary, timestamp: data.timestamp },
+    ];
+    if (instUpdated.length > 20) instUpdated.shift();
+    agentProgressByInstance.value = {
+      ...agentProgressByInstance.value,
+      [data.jid]: {
+        ...jidShard,
+        [data.instance_id]: {
+          tool: data.tool,
+          summary: data.summary,
+          history: instUpdated,
+          agentName: data.agent_name || prevInst?.agentName,
+        },
+      },
+    };
+  }
   if (data.agent_name) {
     typingAgentName.value = { ...typingAgentName.value, [data.jid]: data.agent_name };
   }

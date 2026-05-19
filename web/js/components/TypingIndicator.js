@@ -7,6 +7,8 @@ import {
   typingStartTime,
   typingAgentName,
   agentProgress,
+  agentProgressByInstance,
+  activeAgents,
   currentWorkState,
 } from '../app.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
@@ -46,6 +48,11 @@ export function TypingIndicator() {
   const agentName = typingAgentName.value[jid];
   const work = currentWorkState.value;
   const phase = isTyping ? 'thinking' : work?.phase;
+  // #138 — when more than one instance is live, render one row per instance
+  // so parallel same-agent runs don't clobber each other into a single soup.
+  const instances = (activeAgents.value[jid] || []).filter((a) => a.instanceId);
+  const multiInstance = instances.length > 1;
+  const instanceShard = agentProgressByInstance.value[jid] || {};
 
   async function onStop() {
     if (aborting) return;
@@ -83,9 +90,26 @@ export function TypingIndicator() {
   const recentTools = history.slice(-3);
   const label = phase ? (PHASE_LABELS[phase] || phase) : 'thinking';
   const showDots = isTyping || ['working', 'delegating', 'task_running'].includes(phase || '');
-  const headline = agentName
-    ? html`<span class="font-medium text-txt-2">${agentName}</span> is ${label}`
-    : label.charAt(0).toUpperCase() + label.slice(1);
+  // Headline: collapse to "Name ×N" when all instances share a name,
+  // otherwise just count. Falls back to single-name layout when not multi.
+  let headline;
+  if (multiInstance) {
+    const distinctNames = Array.from(new Set(instances.map((a) => a.name)));
+    const headName = distinctNames.length === 1
+      ? html`<span class="font-medium text-txt-2">${distinctNames[0]}</span> <span class="text-txt-muted">×${instances.length}</span>`
+      : html`<span class="font-medium text-txt-2">${instances.length} agents</span>`;
+    headline = html`${headName} are ${label}`;
+  } else {
+    headline = agentName
+      ? html`<span class="font-medium text-txt-2">${agentName}</span> is ${label}`
+      : label.charAt(0).toUpperCase() + label.slice(1);
+  }
+
+  // Per-instance rows for the activity block. Cap visible rows; overflow
+  // collapses into a "+N more" footer so the indicator height stays bounded.
+  const MAX_INSTANCE_ROWS = 4;
+  const visibleInstances = instances.slice(0, MAX_INSTANCE_ROWS);
+  const overflowCount = instances.length - visibleInstances.length;
 
   return html`
     <div class="self-start bg-asstbg border border-border rounded-2xl rounded-bl-sm px-4 py-3 max-w-[90%]">
@@ -115,7 +139,30 @@ export function TypingIndicator() {
           </button>
         `}
       </div>
-      ${progress && html`
+      ${multiInstance ? html`
+        <div class="mt-2 flex flex-col gap-1">
+          ${visibleInstances.map((inst) => {
+            const instProgress = instanceShard[inst.instanceId];
+            const instHistory = (instProgress?.history || []).filter((t) => t.tool !== 'text');
+            const latest = instHistory[instHistory.length - 1];
+            return html`
+              <div class="flex items-start gap-1.5 text-[11px] text-txt-muted">
+                <span class="font-medium text-txt-2 shrink-0">${inst.name}</span>
+                ${latest
+                  ? html`
+                      ${renderProgressBadge(latest.tool, true)}
+                      <span class="truncate">${latest.summary}</span>
+                    `
+                  : html`<span class="opacity-50">starting\u2026</span>`
+                }
+              </div>
+            `;
+          })}
+          ${overflowCount > 0 && html`
+            <div class="text-[10px] text-txt-muted opacity-70">+${overflowCount} more</div>
+          `}
+        </div>
+      ` : progress && html`
         <div class="mt-2 flex flex-col gap-1">
           ${recentTools.map((t, i) => {
             const isLatest = i === recentTools.length - 1;
