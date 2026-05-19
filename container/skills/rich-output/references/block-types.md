@@ -131,10 +131,15 @@ Unified diff display with add/remove line coloring.
 
 ## action
 
-Clickable buttons the user can press. Clicking sends `[action: button_id]` as a chat message back to you.
+Clickable buttons the user can press. Each button can open a URL, run a specialist in a portal, or send `[action: button_id]` back into the chat. Click-handler precedence is `url` → `target: "thread"` → default chat round-trip.
 
 ```json
 { "type": "action", "buttons": [{ "id": "approve", "label": "Approve", "style": "primary" }, { "id": "reject", "label": "Reject", "style": "danger" }, { "id": "skip", "label": "Skip", "style": "default" }] }
+```
+
+URL button — opens the link in a new tab, no chat round-trip:
+```json
+{ "type": "action", "buttons": [{ "label": "View on GitHub", "style": "primary", "url": "https://github.com/dfederspiel/clawdad/pull/148" }] }
 ```
 
 **When to use:** Presenting choices that require user input — approve/deny, pick an option, confirm an action. When you receive `[action: <id>]` in a follow-up message, that's the user clicking the button.
@@ -142,8 +147,29 @@ Clickable buttons the user can press. Clicking sends `[action: button_id]` as a 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `id` | recommended | Stable identifier for the block. Required if you want to update the block later via `update_block`. |
-| `buttons` | yes | Array of `{ id, label, style? }` objects |
+| `buttons` | yes | Array of button objects (see below) |
+
+**Button fields:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `label` | yes | Button text. |
+| `id` | yes unless `url` is set | Identifier echoed back as `[action: id]` when the button is clicked. Not used by URL buttons. |
 | `style` | no | `primary` (blue), `danger` (red), `default` (gray) |
+| `url` | no | `http(s)` URL. Click opens in a new tab via `window.open(url, '_blank', 'noopener,noreferrer')`. Non-http schemes (`javascript:`, `data:`, `file:`) are rejected for safety. |
+| `target` | no | `"main"` (default) or `"thread"`. `"thread"` runs the action in a portal panel instead of injecting `[action: id]` into the main chat. |
+| `target_agent` | required when `target="thread"` | Name of the specialist agent the portal should run. |
+| `action_message` | no | Custom prompt sent to the specialist. Defaults to the button label. |
+
+**Pick the right click mode:**
+
+| Goal | Use |
+|------|-----|
+| Navigate to an external page (PR, dashboard, docs) | `url` (or a plain markdown link) |
+| Run a specialist task without flooding the main feed | `target: "thread"` + `target_agent` |
+| Get user input back into the conversation | default (echoes `[action: id]`) |
+
+**Anti-pattern — silently broken navigation buttons.** A button labelled "View on GitHub" / "Open dashboard" without a `url` will fire `[action: id]` instead of opening anything. The user sees nothing happen, you receive a dead callback, and you burn turns on a no-op. Always set `url` for navigation, or use a markdown link.
 
 ### Updating an action block
 

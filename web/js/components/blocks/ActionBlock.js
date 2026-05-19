@@ -47,6 +47,12 @@ export function ActionBlock({ buttons, status, result, clicked_button_id }) {
   if (!buttons || !buttons.length) return null;
 
   const onClick = (btn) => {
+    // url wins over every other mode. Reject non-http(s) schemes so an
+    // agent can't smuggle javascript:/data:/file: URIs into a trusted chat.
+    if (typeof btn.url === 'string' && /^https?:\/\//i.test(btn.url)) {
+      window.open(btn.url, '_blank', 'noopener,noreferrer');
+      return;
+    }
     // target: "thread" routes the click into a portal via /api/action.
     // Requires target_agent — which specialist should run the work.
     if (btn.target === 'thread' && btn.target_agent) {

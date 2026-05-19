@@ -49,7 +49,7 @@ For full documentation with JSON examples and field tables: `Read references/blo
 | `progress` | `label`, `value`, `max`, `color?` | Task completion, build progress |
 | `alert` | `level` (success/warn/error/info), `body`, `title?` | Important status changes, errors, warnings |
 | `diff` | `content`, `filename?` | Unified diffs with colored add/remove lines |
-| `action` | `buttons: [{ id, label, style? }]` | Clickable buttons — user clicks send `[action: id]` |
+| `action` | `buttons: [{ id, label, style?, url? }]` | Clickable buttons — open a URL, run a portal specialist, or send `[action: id]` |
 | `form` | `id`, `fields`, `title?`, `submitLabel?` | Multi-field input collection — submits send `[form: id]` |
 | `image` | `src`, `alt?` | Inline images |
 | `sound` | `tone`, `label?` | Notification tones |
@@ -160,7 +160,7 @@ Unified diff display with add/remove line coloring.
 | `filename` | no | File being diffed |
 
 ### action
-Clickable buttons the user can press. Clicking sends `[action: button_id]` as a chat message back to you — unless the button targets a portal (see below).
+Clickable buttons the user can press. Each button can open a URL, run a specialist in a portal, or send `[action: button_id]` back into the chat.
 
 ```json
 { "type": "action", "buttons": [{ "id": "approve", "label": "Approve", "style": "primary" }, { "id": "reject", "label": "Reject", "style": "danger" }, { "id": "skip", "label": "Skip", "style": "default" }] }
@@ -170,11 +170,23 @@ Clickable buttons the user can press. Clicking sends `[action: button_id]` as a 
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `buttons` | yes | Array of `{ id, label, style?, target?, target_agent?, action_message? }` objects |
+| `buttons` | yes | Array of `{ id, label, style?, url?, target?, target_agent?, action_message? }` objects |
+| `id` | yes unless `url` is set | Identifier echoed back as `[action: id]` when the button is clicked. Not used when `url` is set. |
 | `style` | no | `primary` (blue), `danger` (red), `default` (gray) |
+| `url` | no | `http(s)` URL. Click opens it in a new tab (`noopener,noreferrer`); no chat round-trip. Non-http schemes are rejected. |
 | `target` | no | `"main"` (default — click sends a user message in chat) or `"thread"` (click runs a specialist agent in a side-panel portal instead of cluttering the main feed). Use for "run a focused task" actions like "Review PR #1310" or "Regenerate weekly report". |
 | `target_agent` | required when `target="thread"` | Name of the specialist agent that should handle this action. The portal drains that agent's output. |
 | `action_message` | no | Custom prompt sent to the target agent. Defaults to the button label. Prefer an explicit, specific prompt so the specialist has the context it needs. |
+
+**Pick the right click mode** — precedence is `url` → `target: "thread"` → default:
+
+| Goal | Use |
+|------|-----|
+| Open an external page (GitHub PR, dashboard, docs) | `url` field (or a markdown link if the visual emphasis of a button isn't needed) |
+| Run a focused specialist task without flooding the main feed | `target: "thread"` + `target_agent` |
+| Get user input back into the conversation (approve/reject/pick) | default — clicks send `[action: id]` |
+
+**Anti-pattern:** a navigation-styled button without `url` is silently broken. If the label reads like "View on GitHub" / "Open dashboard" / "View build" and there's no `url`, the click fires `[action: id]` and you have to handle a dead round-trip. Either set `url`, or use a markdown link instead of a button.
 
 **Portal button example** — dashboard with drill-in actions that don't bury the status report:
 
