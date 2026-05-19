@@ -330,6 +330,33 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add agent_name to agent_runs so the telemetry panel can break runs
+  // down by agent within a group (#139 Phase 2). Forward writes set the
+  // canonical agent.name; historical rows are best-effort backfilled
+  // below from the linked bot message's sender_name.
+  try {
+    database.exec(`ALTER TABLE agent_runs ADD COLUMN agent_name TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
+  const agentNameBackfillDone = database
+    .prepare(`SELECT value FROM router_state WHERE key = ?`)
+    .get('migrated_agent_run_agent_name') as { value: string } | undefined;
+  if (!agentNameBackfillDone) {
+    database.exec(`
+      UPDATE agent_runs SET agent_name = (
+        SELECT m.sender_name FROM messages m
+        WHERE m.run_id = agent_runs.id
+        LIMIT 1
+      )
+      WHERE agent_name IS NULL
+    `);
+    database
+      .prepare(`INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)`)
+      .run('migrated_agent_run_agent_name', new Date().toISOString());
+  }
+
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
@@ -1983,6 +2010,7 @@ export interface AgentRunRecord {
   chat_jid: string;
   group_folder: string;
   session_id?: string;
+  agent_name?: string;
   timestamp: string;
   input_tokens: number;
   output_tokens: number;
@@ -2034,13 +2062,14 @@ export function attachUsageToLastBotMessage(
 export function storeAgentRun(run: AgentRunRecord): number {
   const result = db
     .prepare(
-      `INSERT INTO agent_runs (chat_jid, group_folder, session_id, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms, num_turns, is_error, tool_history, container_reuse)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agent_runs (chat_jid, group_folder, session_id, agent_name, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms, num_turns, is_error, tool_history, container_reuse)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       run.chat_jid,
       run.group_folder,
       run.session_id || null,
+      run.agent_name || null,
       run.timestamp,
       run.input_tokens,
       run.output_tokens,
@@ -2071,6 +2100,13 @@ export function getUsageStats(periodHours: number = 24): {
     input_tokens: number;
     output_tokens: number;
     cost_usd: number;
+  }>;
+  byAgent: Array<{
+    group_folder: string;
+    agent_name: string;
+    runs: number;
+    cost_usd: number;
+    avg_duration_ms: number;
   }>;
   topTools: Array<{ tool: string; count: number }>;
 } {
@@ -2120,6 +2156,28 @@ export function getUsageStats(periodHours: number = 24): {
     cost_usd: number;
   }>;
 
+  // Per-agent rollup within group (#139 Phase 2). NULL agent_name rows
+  // (older runs the backfill couldn't resolve) collapse into the same
+  // bucket — filter them out so they don't clutter the panel.
+  const byAgent = db
+    .prepare(
+      `SELECT group_folder, agent_name,
+        COUNT(*) as runs,
+        COALESCE(SUM(cost_usd), 0) as cost_usd,
+        COALESCE(AVG(duration_ms), 0) as avg_duration_ms
+       FROM agent_runs
+       WHERE timestamp > ? AND agent_name IS NOT NULL AND agent_name != ''
+       GROUP BY group_folder, agent_name
+       ORDER BY cost_usd DESC LIMIT 30`,
+    )
+    .all(since) as Array<{
+    group_folder: string;
+    agent_name: string;
+    runs: number;
+    cost_usd: number;
+    avg_duration_ms: number;
+  }>;
+
   // Aggregate tool call counts from stored tool_history JSON
   const toolRows = db
     .prepare(
@@ -2154,6 +2212,7 @@ export function getUsageStats(periodHours: number = 24): {
     totalDurationMs: totals.duration_ms,
     avgTurns: totals.avg_turns,
     byGroup,
+    byAgent,
     topTools,
   };
 }

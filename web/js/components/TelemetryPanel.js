@@ -1,5 +1,5 @@
 import { html } from 'htm/preact';
-import { telemetry, status, usage } from '../app.js';
+import { telemetry, status, usage, activeAgents } from '../app.js';
 
 function formatDuration(ms) {
   if (!ms) return '-';
@@ -43,12 +43,28 @@ export function TelemetryPanel() {
   const tel = telemetry.value;
   const st = status.value;
   const usg = usage.value;
+  const liveByJid = activeAgents.value;
 
   if (!tel) {
     return html`<div class="px-4 py-3 text-xs text-txt-muted">Loading...</div>`;
   }
 
   const successPct = Math.round(tel.taskSuccessRate * 100);
+
+  // Flatten the per-jid activeAgents map into a single in-flight list.
+  // Per-jid counts (with multiplicity) tell the user where the load is —
+  // raw instance_ids aren't user-meaningful so we skip rendering them.
+  const liveEntries = [];
+  let totalLive = 0;
+  for (const [jid, agents] of Object.entries(liveByJid)) {
+    if (!agents || agents.length === 0) continue;
+    totalLive += agents.length;
+    const counts = {};
+    for (const a of agents) {
+      counts[a.name] = (counts[a.name] || 0) + 1;
+    }
+    liveEntries.push({ jid, counts });
+  }
 
   return html`
     <div class="px-4 py-3 grid grid-cols-2 gap-3">
@@ -61,6 +77,29 @@ export function TelemetryPanel() {
         value="${tel.taskCounts.active} active"
         sub="${tel.taskCounts.paused} paused · ${tel.taskCounts.completed} done"
       />
+
+      ${totalLive > 0 && html`
+        <div class="col-span-2 border-t border-border pt-3 mt-1">
+          <span class="text-[10px] text-txt-muted uppercase tracking-wider">
+            Active Now
+            <span class="text-accent normal-case ml-1">${totalLive} run${totalLive !== 1 ? 's' : ''} in ${liveEntries.length} chat${liveEntries.length !== 1 ? 's' : ''}</span>
+          </span>
+          <div class="mt-1 flex flex-col gap-0.5">
+            ${liveEntries.slice(0, 8).map(
+              (e) => html`
+                <div class="flex items-center justify-between text-[11px]">
+                  <span class="text-txt-2 truncate">
+                    ${Object.entries(e.counts).map(([name, n]) => html`
+                      <span class="font-mono">${name}${n > 1 ? html`<span class="text-txt-muted">×${n}</span>` : ''}</span>${' '}
+                    `)}
+                  </span>
+                  <span class="text-txt-muted font-mono text-[10px] ml-2 truncate max-w-[40%]" title=${e.jid}>${e.jid}</span>
+                </div>
+              `,
+            )}
+          </div>
+        </div>
+      `}
 
       ${usg && usg.totalRuns > 0 && html`
         <div class="col-span-2 border-t border-border pt-3 mt-1">
@@ -100,6 +139,28 @@ export function TelemetryPanel() {
                   <div class="flex items-center justify-between text-[11px]">
                     <span class="text-txt-2 truncate">${g.group_folder}</span>
                     <span class="text-txt-muted font-mono ml-2">${formatCost(g.cost_usd)}</span>
+                  </div>
+                `,
+              )}
+            </div>
+          </div>
+        `}
+
+        ${usg.byAgent && usg.byAgent.length > 0 && html`
+          <div class="col-span-2">
+            <span class="text-[10px] text-txt-muted uppercase tracking-wider">Cost by Agent (24h)</span>
+            <div class="mt-1 flex flex-col gap-0.5">
+              ${usg.byAgent.slice(0, 10).map(
+                (a) => html`
+                  <div class="flex items-center justify-between text-[11px]">
+                    <span class="text-txt-2 truncate">
+                      <span class="font-mono">${a.agent_name}</span>
+                      <span class="text-txt-muted"> · ${a.group_folder}</span>
+                    </span>
+                    <span class="text-txt-muted font-mono ml-2 shrink-0">
+                      ${formatCost(a.cost_usd)}
+                      <span class="opacity-60"> · ${a.runs}× · ${formatDuration(a.avg_duration_ms)}</span>
+                    </span>
                   </div>
                 `,
               )}
