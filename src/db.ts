@@ -2006,14 +2006,19 @@ export function attachUsageToLastBotMessage(
   runId?: number,
 ): void {
   if (runId !== undefined) {
+    // Claim the most recent bot message that is either unattributed or
+    // already this run's — never one another run has claimed. Without the
+    // run_id guard, parallel fan-out runs finishing near-simultaneously all
+    // target "the latest bot message" and usage lands on the wrong one (#139).
     db.prepare(
       `UPDATE messages SET usage = ?, run_id = ?
        WHERE rowid = (
          SELECT rowid FROM messages
          WHERE chat_jid = ? AND is_bot_message = 1
+           AND (run_id IS NULL OR run_id = ?)
          ORDER BY timestamp DESC LIMIT 1
        )`,
-    ).run(usageJson, runId, chatJid);
+    ).run(usageJson, runId, chatJid, runId);
   } else {
     db.prepare(
       `UPDATE messages SET usage = ?
