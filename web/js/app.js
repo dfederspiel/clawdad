@@ -420,6 +420,46 @@ api.onSSE('pin_removed', (data) => {
   pins.value = next;
 });
 
+// #144 — warm-pool runs can flip typing true→false within a single render
+// frame (fast reply on a hot container), so the dot never visually lights.
+// Hold the chat-level indicator on for a minimum window before honoring an
+// off transition. A later true cancels any pending off; the deferred off
+// re-checks activeAgents so it can't dark the dot while work is still live.
+const TYPING_MIN_VISIBLE_MS = 300;
+const typingMinUntil = {}; // { [jid]: timestamp }
+const typingOffTimers = {}; // { [jid]: timeoutId }
+
+function setTypingGroup(jid, wantsTyping) {
+  if (wantsTyping) {
+    if (typingOffTimers[jid]) {
+      clearTimeout(typingOffTimers[jid]);
+      delete typingOffTimers[jid];
+    }
+    typingMinUntil[jid] = Date.now() + TYPING_MIN_VISIBLE_MS;
+    if (!typingGroups.value[jid]) {
+      typingGroups.value = { ...typingGroups.value, [jid]: true };
+    }
+    return;
+  }
+  const holdMs = typingMinUntil[jid] ? typingMinUntil[jid] - Date.now() : 0;
+  if (holdMs > 0) {
+    if (typingOffTimers[jid]) clearTimeout(typingOffTimers[jid]);
+    typingOffTimers[jid] = setTimeout(() => {
+      delete typingOffTimers[jid];
+      delete typingMinUntil[jid];
+      const stillActive = (activeAgents.value[jid] || []).length > 0;
+      if (!stillActive && typingGroups.value[jid]) {
+        typingGroups.value = { ...typingGroups.value, [jid]: false };
+      }
+    }, holdMs);
+    return;
+  }
+  delete typingMinUntil[jid];
+  if (typingGroups.value[jid]) {
+    typingGroups.value = { ...typingGroups.value, [jid]: false };
+  }
+}
+
 api.onSSE('typing', (data) => {
   // Portal-delegation typing events route to threadTyping (per-thread
   // panel) and to activeAgents (sidebar parallel-instance count — #130).
@@ -495,9 +535,7 @@ api.onSSE('typing', (data) => {
   const wantsTyping = data.thread_id
     ? remaining.length > 0
     : data.isTyping || remaining.length > 0;
-  if ((typingGroups.value[data.jid] || false) !== wantsTyping) {
-    typingGroups.value = { ...typingGroups.value, [data.jid]: wantsTyping };
-  }
+  setTypingGroup(data.jid, wantsTyping);
 });
 
 api.onSSE('play_sound', (data) => {
