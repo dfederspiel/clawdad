@@ -64,21 +64,84 @@ function ThinkingEntry({ entry }) {
   `;
 }
 
+// Two collapsible payloads (args / result) live on a tool_call entry,
+// each with its own open state. Keep them small by default — the
+// summary line carries the headline; expand-on-click reveals detail.
+function ExpandablePayload({ label, content, accent }) {
+  const [open, setOpen] = useState(false);
+  if (!content) return null;
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  return html`
+    <div class="mt-1">
+      <button
+        class="text-[10px] font-mono ${accent ? 'text-accent/80 hover:text-accent' : 'text-txt-muted hover:text-txt-2'} flex items-center gap-1 transition-colors"
+        onClick=${() => setOpen(!open)}
+      >
+        <span class="text-[9px] transition-transform ${open ? 'rotate-90' : ''}">▶</span>
+        <span>${label}</span>
+      </button>
+      ${open && html`
+        <pre class="mt-1 text-[11px] text-txt-muted font-mono whitespace-pre-wrap break-words max-h-64 overflow-y-auto bg-bg/40 rounded p-2">${trimmed}</pre>
+      `}
+    </div>
+  `;
+}
+
+// Combined tool_use + tool_result entry produced by the paired
+// projection (#136). Renders one card per call with status pill,
+// duration, and expandable args + result. A missing status means the
+// matching tool_result never arrived (run aborted mid-call).
+function ToolCallEntry({ entry }) {
+  const status = entry.status;
+  const isError = status === 'error';
+  const isPending = !status;
+  const borderColor = isError ? 'border-err/60' : isPending ? 'border-yellow-500/50' : 'border-accent/40';
+  const toolNameColor = isError ? 'text-err' : 'text-accent';
+  return html`
+    <div class="flex flex-col gap-1 py-1.5 px-2 border-l-2 ${borderColor}">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="font-mono text-[10px] ${toolNameColor} shrink-0">${entry.tool}</span>
+        ${status && html`
+          <span class="text-[9px] font-mono uppercase tracking-wide px-1 rounded ${isError ? 'bg-err/20 text-err' : 'bg-green-500/15 text-green-300'}">${status}</span>
+        `}
+        ${isPending && html`
+          <span class="text-[9px] font-mono uppercase tracking-wide px-1 rounded bg-yellow-500/20 text-yellow-300">pending</span>
+        `}
+        ${entry.duration_ms !== undefined && entry.duration_ms !== null && html`
+          <span class="text-[10px] text-txt-muted font-mono">${formatDuration(entry.duration_ms)}</span>
+        `}
+        ${entry.summary && html`
+          <span class="text-xs text-txt-2 font-mono break-words min-w-0 flex-1 truncate">${entry.summary}</span>
+        `}
+      </div>
+      <${ExpandablePayload} label="args" content=${entry.args} accent=${true} />
+      <${ExpandablePayload} label="result" content=${entry.result} accent=${false} />
+    </div>
+  `;
+}
+
 function Entry({ entry }) {
   if (entry.type === 'thinking') {
     return html`<${ThinkingEntry} entry=${entry} />`;
   }
   if (entry.type === 'text') {
     const isUser = entry.role === 'user';
+    const label = entry.sender || (isUser ? 'user' : 'assistant');
     return html`
       <div class="flex flex-col gap-1 py-2 px-3 rounded-md ${isUser ? 'bg-userbg' : 'bg-asstbg'}">
         <div class="text-[10px] text-txt-muted font-mono">
-          ${isUser ? 'user' : 'assistant'} · ${formatTime(entry.timestamp)}
+          ${label} · ${formatTime(entry.timestamp)}
         </div>
         <div class="text-xs text-txt-2 whitespace-pre-wrap break-words">${entry.content}</div>
       </div>
     `;
   }
+  if (entry.type === 'tool_call') {
+    return html`<${ToolCallEntry} entry=${entry} />`;
+  }
+  // Legacy / orphaned shapes — tool_result without a matching tool_use,
+  // or transcripts from older runs before the projection change.
   if (entry.type === 'tool_use') {
     return html`
       <div class="flex items-start gap-2 py-1.5 px-2 border-l-2 border-accent/50">
@@ -89,8 +152,9 @@ function Entry({ entry }) {
   }
   if (entry.type === 'tool_result') {
     if (!entry.content) return null;
+    const isError = entry.status === 'error';
     return html`
-      <div class="pl-4 text-[11px] text-txt-muted font-mono whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
+      <div class="pl-4 text-[11px] ${isError ? 'text-err' : 'text-txt-muted'} font-mono whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
         ${entry.content}
       </div>
     `;

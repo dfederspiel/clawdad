@@ -2426,6 +2426,16 @@ You do not delegate. If something falls outside your role, say so plainly in you
           summary?: string;
           content?: string;
           timestamp?: string;
+          // tool_call (paired) entries — filled in when the matching
+          // tool_result lands. id ties the pair across the pendingCalls map.
+          id?: string;
+          args?: string;
+          result?: string;
+          status?: 'success' | 'error';
+          duration_ms?: number;
+          // user text entries — sender from the unwrapped <message> attrs
+          sender?: string;
+          [key: string]: unknown;
         }> = [];
 
         const inWindow = (ts: string | undefined): boolean => {
@@ -2441,6 +2451,7 @@ You do not delegate. If something falls outside your role, say so plainly in you
           if (!input) return '';
           const s = (v: unknown, n: number): string =>
             String(v).split('\n')[0].slice(0, n);
+          // Known-shape tools — preserve today's compact summaries
           if (input.command) return s(input.command, 120);
           if (input.file_path)
             return String(input.file_path).split(/[/\\]/).pop() ?? '';
@@ -2448,13 +2459,41 @@ You do not delegate. If something falls outside your role, say so plainly in you
           if (input.path) return s(input.path, 120);
           if (input.url) return s(input.url, 120);
           if (input.query) return s(input.query, 120);
+          // mcp__* and other unrecognized shapes — JSON-stringify so the
+          // summary line carries something rather than rendering as a bare
+          // tool name. The full args still go in the expandable args field.
+          try {
+            const json = JSON.stringify(input);
+            if (json && json !== '{}') {
+              return json.length > 200 ? json.slice(0, 197) + '...' : json;
+            }
+          } catch {
+            // unstringifiable inputs are rare; falling back to empty is fine
+          }
           return '';
         };
 
+        const stringifyArgs = (
+          input: Record<string, unknown> | undefined,
+        ): string => {
+          if (!input) return '';
+          try {
+            const json = JSON.stringify(input, null, 2);
+            // Cap at 4KB so transcript payloads stay bounded. UI can still
+            // present this as expandable content without the old 500-char
+            // hardcap that dropped long inputs entirely.
+            return json.length > 4000 ? json.slice(0, 3997) + '...' : json;
+          } catch {
+            return '';
+          }
+        };
+
         const extractResultContent = (c: unknown): string => {
-          if (typeof c === 'string') return c.slice(0, 500);
-          if (Array.isArray(c)) {
-            return c
+          let raw = '';
+          if (typeof c === 'string') {
+            raw = c;
+          } else if (Array.isArray(c)) {
+            raw = c
               .filter(
                 (b: unknown): b is { type: string; text?: string } =>
                   typeof b === 'object' &&
@@ -2462,25 +2501,58 @@ You do not delegate. If something falls outside your role, say so plainly in you
                   (b as { type: string }).type === 'text',
               )
               .map((b) => b.text ?? '')
-              .join('')
-              .slice(0, 500);
+              .join('');
           }
-          return '';
+          // Cap at 4KB — old 500-char cap silently dropped Bash output and
+          // long Read results past the boundary. The UI handles its own
+          // scroll/expand on whatever the API returns.
+          return raw.length > 4000 ? raw.slice(0, 3997) + '...' : raw;
         };
 
         // The orchestrator wraps inbound user text in a <messages> envelope
-        // with sender+time metadata. For display, extract the raw message
-        // body from the innermost <message> tag when present.
-        const unwrapUserText = (raw: string): string => {
-          // Require whitespace after `message` so we don't also match `<messages>`.
-          const match = raw.match(
-            /<message\s[^>]*>([\s\S]*?)<\/message>\s*<\/messages>/i,
-          );
-          return (match?.[1] ?? raw).trim();
+        // (one <message> per included history line). The old impl anchored
+        // on </messages> and matched only the LAST <message>, dropping
+        // earlier ones from multi-message envelopes. Iterate them all and
+        // surface each as its own timeline entry (#136).
+        const unwrapUserMessages = (
+          raw: string,
+        ): Array<{ text: string; sender?: string; time?: string }> => {
+          const envelope = raw.match(/<messages>([\s\S]*?)<\/messages>/i);
+          const inner = envelope ? envelope[1] : raw;
+          const matches = [
+            ...inner.matchAll(/<message\s+([^>]*)>([\s\S]*?)<\/message>/gi),
+          ];
+          if (matches.length === 0) {
+            return [{ text: raw.trim() }];
+          }
+          return matches.map((m) => {
+            const attrs = m[1];
+            let body = m[2];
+            // Strip the quoted_context wrapper from the displayed body —
+            // it's noise in a per-message transcript view.
+            body = body.replace(
+              /<quoted_context>[\s\S]*?<\/quoted_context>/g,
+              '',
+            );
+            const senderMatch = attrs.match(/sender="([^"]*)"/);
+            const timeMatch = attrs.match(/time="([^"]*)"/);
+            return {
+              text: body.trim(),
+              sender: senderMatch?.[1],
+              time: timeMatch?.[1],
+            };
+          });
         };
 
-        // Track tool_use.id → tool name so we can label tool_result entries,
-        // which only carry a tool_use_id (not the tool name).
+        // Pending tool calls keyed by tool_use.id so a later tool_result can
+        // be merged onto the same timeline entry. Carries the use timestamp
+        // for the result-to-use duration calculation.
+        const pendingCalls = new Map<
+          string,
+          { entry: Record<string, unknown>; useTs: string }
+        >();
+        // Track tool_use.id → tool name so out-of-order or orphaned
+        // tool_result entries (no matching pending call) still get labeled.
         const toolNameById = new Map<string, string>();
 
         for (const entry of entries) {
@@ -2510,29 +2582,47 @@ You do not delegate. If something falls outside your role, say so plainly in you
                 if (block.id && block.name) {
                   toolNameById.set(block.id, block.name);
                 }
-                timeline.push({
-                  type: 'tool_use',
+                // tool_call is the paired shape — tool_result merges onto
+                // this entry below when seen, filling status / result /
+                // duration_ms. Entries that never see a matching result
+                // (run aborted mid-call, etc.) render as pending.
+                const callEntry = {
+                  type: 'tool_call',
+                  id: block.id,
                   tool: block.name,
                   summary: extractToolSummary(block.input),
+                  args: stringifyArgs(block.input),
                   timestamp: entry.timestamp,
-                });
+                };
+                timeline.push(callEntry);
+                if (block.id) {
+                  pendingCalls.set(block.id, {
+                    entry: callEntry as unknown as Record<string, unknown>,
+                    useTs: entry.timestamp,
+                  });
+                }
               }
             }
           }
 
-          if (entry.type === 'user') {
-            if (typeof content === 'string') {
-              const text = unwrapUserText(content);
+          const emitUserMessages = (raw: string): void => {
+            for (const msg of unwrapUserMessages(raw)) {
               // SDK harness reminders ("[system] You completed tool calls
               // but did not send a visible reply...") are not user turns.
-              if (text && !text.startsWith('[system]')) {
-                timeline.push({
-                  type: 'text',
-                  role: 'user',
-                  content: text.slice(0, 2000),
-                  timestamp: entry.timestamp,
-                });
-              }
+              if (!msg.text || msg.text.startsWith('[system]')) continue;
+              timeline.push({
+                type: 'text',
+                role: 'user',
+                content: msg.text.slice(0, 2000),
+                sender: msg.sender,
+                timestamp: msg.time || entry.timestamp,
+              });
+            }
+          };
+
+          if (entry.type === 'user') {
+            if (typeof content === 'string') {
+              emitUserMessages(content);
             } else if (Array.isArray(content)) {
               // User messages can carry either plain text (a real user turn)
               // or tool_result blocks (the agent's tool chain). Surface both.
@@ -2542,28 +2632,37 @@ You do not delegate. If something falls outside your role, say so plainly in you
                   textParts.push(block.text);
                 }
                 if (block.type === 'tool_result') {
-                  timeline.push({
-                    type: 'tool_result',
-                    tool:
-                      (block.tool_use_id &&
-                        toolNameById.get(block.tool_use_id)) ||
-                      block.name ||
-                      '',
-                    content: extractResultContent(block.content),
-                    timestamp: entry.timestamp,
-                  });
+                  const useId = block.tool_use_id;
+                  const pending = useId ? pendingCalls.get(useId) : undefined;
+                  const result = extractResultContent(block.content);
+                  const status: 'success' | 'error' = block.is_error
+                    ? 'error'
+                    : 'success';
+                  if (pending) {
+                    pending.entry.result = result;
+                    pending.entry.status = status;
+                    if (pending.useTs && entry.timestamp) {
+                      pending.entry.duration_ms =
+                        new Date(entry.timestamp).getTime() -
+                        new Date(pending.useTs).getTime();
+                    }
+                    pendingCalls.delete(useId!);
+                  } else {
+                    // Orphaned tool_result — no matching tool_use seen.
+                    // Emit as a standalone entry so the data isn't lost.
+                    timeline.push({
+                      type: 'tool_result',
+                      tool:
+                        (useId && toolNameById.get(useId)) || block.name || '',
+                      content: result,
+                      status,
+                      timestamp: entry.timestamp,
+                    });
+                  }
                 }
               }
               if (textParts.length) {
-                const text = unwrapUserText(textParts.join(''));
-                if (text && !text.startsWith('[system]')) {
-                  timeline.push({
-                    type: 'text',
-                    role: 'user',
-                    content: text.slice(0, 2000),
-                    timestamp: entry.timestamp,
-                  });
-                }
+                emitUserMessages(textParts.join(''));
               }
             }
           }
