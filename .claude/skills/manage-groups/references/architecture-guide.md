@@ -7,7 +7,7 @@ When a container starts, the agent sees these layers (in order):
 1. **Group CLAUDE.md** (`/workspace/group/CLAUDE.md`) — shared standards, team charter
 2. **Agent CLAUDE.md** (`/workspace/agent/CLAUDE.md`) — agent identity, specific workflows
 3. **Multi-agent context** (auto-injected) — teammate list, delegation instructions, role clarification
-4. **Container skills** (auto-loaded from `container/skills/`) — tools like agent-browser, polaris-auth
+4. **Container skills** (auto-loaded from `container/skills/`) — tools like agent-browser, credential-proxy
 
 The agent does NOT see: other agents' CLAUDE.md files, the coordinator's conversation history, or other agents' workspaces.
 

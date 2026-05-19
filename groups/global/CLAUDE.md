@@ -211,43 +211,6 @@ Use `mcp__nanoclaw__request_credential` — it opens a secure popup in the user'
 
 The `credential-proxy` skill has extended documentation: all service auth patterns, SSH forwarding, repo cloning, and detailed troubleshooting.
 
-## Polaris Browser Sessions
-
-The host maintains authenticated browser sessions for all configured Polaris environments. Sessions are refreshed automatically every 5 minutes by a keepalive process.
-
-Two session types exist:
-- **Tenant** (CO, CDEV, IM) — standard customer logins with UUID org IDs and API tokens
-- **Admin/assessor** (e.g., IM_ASSESSOR) — Keycloak master realm, `org_id: "master"`, cookie-only auth, no `organization-id` header
-
-Run `source /workspace/scripts/polaris-auth.sh --list` to see all available sessions and their types.
-
-### Browsing Polaris URLs
-
-**You MUST load the browser state before navigating to any Polaris URL.** Without this, you will hit a login wall.
-
-```bash
-agent-browser state load /workspace/global/sessions/playwright-state.json
-agent-browser open https://co.dev.polaris.blackduck.com/...
-```
-
-This injects cookies AND localStorage tokens for every configured Polaris environment. The browser sends the correct session automatically based on which domain you navigate to. No login flow needed.
-
-### Polaris API Access
-
-Use `polaris-auth.sh` — it detects the session type and handles auth automatically:
-
-```bash
-# Tenant session (API token preferred, cookie + org-id fallback)
-source /workspace/scripts/polaris-auth.sh co
-polaris_api GET /api/auth/openid-connect/userinfo
-
-# Admin/assessor session (cookie only, no org-id header)
-source /workspace/scripts/polaris-auth.sh im_assessor
-polaris_api GET /api/auth/openid-connect/admin/userinfo
-```
-
-Check `$POLARIS_SESSION_TYPE` (`"tenant"` or `"admin"`) if your code needs to branch on session type. See the `polaris-auth` skill docs for full details.
-
 ## Event Logging
 
 **Log domain events using `/workspace/scripts/event-log.sh`.** This builds the structured audit trail that enables reports and analysis.
