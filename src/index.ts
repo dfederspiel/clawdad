@@ -157,7 +157,6 @@ import {
   type SchedulerDependencies,
 } from './task-scheduler.js';
 import { XP_WEIGHTS } from './xp.js';
-import { startPolarisSessionKeepalive } from './polaris-session-keepalive.js';
 import { Agent, Channel, NewMessage, RegisteredGroup } from './types.js';
 import type { MediaArtifact } from './types.js';
 import { logger } from './logger.js';
@@ -3742,7 +3741,6 @@ async function main(): Promise<void> {
     });
   };
 
-  startPolarisSessionKeepalive();
   startIpcWatcher({
     sendMessage: (jid, rawText, threadId) => {
       const channel = findChannel(channels, jid);

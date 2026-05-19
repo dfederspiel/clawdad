@@ -192,7 +192,7 @@ Clickable buttons the user can press. Each button can open a URL, run a speciali
 
 ```json
 { "type": "action", "buttons": [
-  { "id": "review_1310", "label": "Review PR #1310", "style": "primary", "target": "thread", "target_agent": "reviewer", "action_message": "Review polaris-ui PR #1310 in detail — check the diff, call out any risky changes, and flag files that look off." },
+  { "id": "review_1310", "label": "Review PR #1310", "style": "primary", "target": "thread", "target_agent": "reviewer", "action_message": "Review PR #1310 in detail — check the diff, call out any risky changes, and flag files that look off." },
   { "id": "skip", "label": "Skip", "style": "default" }
 ] }
 ```

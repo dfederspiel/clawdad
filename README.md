@@ -212,14 +212,14 @@ Edit `groups/web_my-team/group-config.json`:
   "containerConfig": {
     "additionalMounts": [
       {
-        "hostPath": "~/code/polaris-ui",
-        "containerPath": "polaris-ui",
+        "hostPath": "~/code/my-app",
+        "containerPath": "my-app",
         "readonly": false
       },
       {
-        "hostPath": "~/code/polaris-react-composition",
-        "containerPath": "polaris-react-composition",
-        "readonly": false
+        "hostPath": "~/code/shared-lib",
+        "containerPath": "shared-lib",
+        "readonly": true
       }
     ],
     "sshAgent": true
@@ -227,7 +227,7 @@ Edit `groups/web_my-team/group-config.json`:
 }
 ```
 
-Inside the container, these appear at `/workspace/extra/polaris-ui` and `/workspace/extra/polaris-react-composition`.
+Inside the container, these appear at `/workspace/extra/my-app` and `/workspace/extra/shared-lib`.
 
 Setting `sshAgent: true` forwards your SSH agent so the agent can clone and push via SSH without private keys entering the container.
 
