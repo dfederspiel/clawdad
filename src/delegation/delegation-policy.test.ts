@@ -4,6 +4,7 @@ import { MAX_MESSAGES_PER_PROMPT } from '../config.js';
 import {
   normalizeCompletionPolicy,
   resolveDelegationHistoryLimit,
+  resolveDelegationHistoryScope,
   shouldRetriggerCoordinator,
 } from './delegation-policy.js';
 
@@ -43,5 +44,38 @@ describe('shouldRetriggerCoordinator', () => {
     expect(shouldRetriggerCoordinator('retrigger_coordinator')).toBe(true);
     expect(shouldRetriggerCoordinator('final_response')).toBe(false);
     expect(shouldRetriggerCoordinator('silent')).toBe(false);
+  });
+});
+
+describe('resolveDelegationHistoryScope', () => {
+  it('honors an explicit scope regardless of policy', () => {
+    expect(resolveDelegationHistoryScope('none', 'retrigger_coordinator')).toBe(
+      'none',
+    );
+    expect(resolveDelegationHistoryScope('full', 'final_response')).toBe(
+      'full',
+    );
+    expect(resolveDelegationHistoryScope('recent', 'silent')).toBe('recent');
+    expect(resolveDelegationHistoryScope('none', undefined)).toBe('none');
+  });
+
+  it('defaults final_response to none', () => {
+    expect(resolveDelegationHistoryScope(undefined, 'final_response')).toBe(
+      'none',
+    );
+  });
+
+  it('defaults retrigger_coordinator to recent', () => {
+    expect(
+      resolveDelegationHistoryScope(undefined, 'retrigger_coordinator'),
+    ).toBe('recent');
+  });
+
+  it('defaults silent to recent (safe fallback)', () => {
+    expect(resolveDelegationHistoryScope(undefined, 'silent')).toBe('recent');
+  });
+
+  it('defaults undefined policy to recent', () => {
+    expect(resolveDelegationHistoryScope(undefined, undefined)).toBe('recent');
   });
 });

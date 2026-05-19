@@ -12,7 +12,10 @@ import { formatDelegationResults } from './delegation/coordinator-context.js';
 import { DelegationEventBus } from './delegation/delegation-events.js';
 import { DelegationManager } from './delegation/delegation-manager.js';
 import { DelegationStore } from './delegation/delegation-store.js';
-import { resolveDelegationHistoryLimit } from './delegation/delegation-policy.js';
+import {
+  resolveDelegationHistoryLimit,
+  resolveDelegationHistoryScope,
+} from './delegation/delegation-policy.js';
 import type {
   DelegationCompletionPolicy,
   DelegationHistoryScope,
@@ -3512,10 +3515,17 @@ async function main(): Promise<void> {
       sourceAgent,
       portalTitle,
     );
-    // Honor the coordinator's per-call history_scope when provided
-    // (#137 Phase 2). Falls back to 'recent' — the same compact default
-    // Phase 1 wired in for orchestrator-initiated portal delegations.
-    const portalHistoryScope: DelegationHistoryScope = historyScope || 'recent';
+    // Honor the coordinator's per-call history_scope when provided.
+    // When unset, infer from completion_policy (#137 Phase 3): a
+    // final_response delegation is fire-and-forget — no follow-up turn,
+    // no need to spend tokens grounding the specialist in history —
+    // so default to 'none'. retrigger_coordinator gets 'recent' since
+    // the coordinator will synthesize and benefits from a coherent
+    // specialist reply.
+    const portalHistoryScope = resolveDelegationHistoryScope(
+      historyScope,
+      completionPolicy,
+    );
     delegationManager.delegate(
       {
         groupJid: chatJid,
