@@ -128,10 +128,29 @@ export function ChatInput() {
     ref.current?.focus();
   }
 
+  // #146 — accept the same MIME set the server validates (images, pdf,
+  // text, json, xml, yaml, docx). image/svg+xml is excluded because the
+  // server rejects it (XSS risk) — filtering here too gives an instant
+  // refusal instead of a round-trip error.
+  function isAcceptableUpload(file) {
+    const t = file.type || '';
+    if (t === 'image/svg+xml') return false;
+    if (t.startsWith('image/')) return true;
+    if (t.startsWith('text/')) return true;
+    if (t === 'application/pdf') return true;
+    if (t === 'application/json') return true;
+    if (t === 'application/xml') return true;
+    if (t === 'application/x-yaml' || t === 'application/yaml') return true;
+    if (
+      t ===
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    )
+      return true;
+    return false;
+  }
+
   function addFiles(fileList) {
-    const incoming = Array.from(fileList || []).filter((file) =>
-      file.type.startsWith('image/'),
-    );
+    const incoming = Array.from(fileList || []).filter(isAcceptableUpload);
     if (incoming.length === 0) return;
     setFiles((prev) => [...prev, ...incoming]);
   }
@@ -266,7 +285,7 @@ export function ChatInput() {
       <input
         ref=${fileInputRef}
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp"
+        accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,application/json,application/xml,application/x-yaml,application/yaml,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/*"
         multiple
         class="hidden"
         onChange=${(e) => addFiles(e.target.files)}
@@ -275,7 +294,7 @@ export function ChatInput() {
         type="button"
         class="shrink-0 w-9 h-9 flex items-center justify-center border border-border text-txt-2 rounded-full hover:bg-bg-hover transition-all"
         onClick=${() => fileInputRef.current?.click()}
-        title="Attach image"
+        title="Attach file"
       >
         <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
           <path d="M15.5 10.5l-5.146 5.147a3 3 0 01-4.243-4.243l6.01-6.01a2 2 0 112.829 2.828L9.646 13.53a1 1 0 01-1.414-1.414l4.597-4.596.707.707-.707-.707a.5.5 0 10-.707-.707l-4.596 4.596a2 2 0 102.828 2.829l5.147-5.147.707.707-.707-.707a4 4 0 11-5.657 5.657L4.404 10.11a5 5 0 017.071-7.07l.707.707-.707-.707a6 6 0 00-8.485 8.485l5.44 5.44a5 5 0 007.07-7.072z"/>
@@ -290,10 +309,12 @@ export function ChatInput() {
         onInput=${onInput}
         onKeyDown=${onKeyDown}
         onPaste=${(e) => {
+          // Mirror the addFiles MIME filter so the paste handler doesn't
+          // accept files the upload endpoint would reject (#146).
           const clipboardFiles = Array.from(e.clipboardData?.items || [])
-            .filter((item) => item.type.startsWith('image/'))
-            .map((item) => item.getAsFile())
-            .filter(Boolean);
+            .map((item) => ({ type: item.type, file: item.getAsFile() }))
+            .filter(({ file, type }) => file && isAcceptableUpload({ type }))
+            .map(({ file }) => file);
           if (clipboardFiles.length > 0) {
             e.preventDefault();
             addFiles(clipboardFiles);

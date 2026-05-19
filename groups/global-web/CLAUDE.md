@@ -24,14 +24,14 @@ Here's the result:
 Any questions?
 ```
 
-## Images and Browser Snapshots
+## Images, Files, and Browser Snapshots
 
-- The web UI supports inline images in the chat thread.
-- If you create or inspect visual artifacts, prefer showing them to the user instead of only describing them in text.
+- The web UI supports inline images and a download card for other file types (PDF, CSV, JSON, txt, md, xml, yaml, docx).
+- If you create or inspect visual or document artifacts, prefer showing/handing them to the user instead of only describing them in text.
 - Use `mcp__nanoclaw__publish_browser_snapshot` to capture and publish the current browser view when visual confirmation would help.
-- Use `mcp__nanoclaw__publish_media` to publish an existing image you saved under `/workspace/group/`, preferably in `/workspace/group/artifacts/` or `/workspace/group/uploads/`.
-- When the user uploads an image, it may appear inline in the thread and also be available to you as a file path under `/workspace/group/uploads/`.
-- Be selective. Publish screenshots when they help the user decide, verify, or debug. Avoid spamming the thread with low-value snapshots.
+- Use `mcp__nanoclaw__publish_media` to publish a file you saved under `/workspace/group/`, preferably in `/workspace/group/artifacts/` or `/workspace/group/uploads/`. Images render inline; everything else renders as a download card. Supported extensions: `.png .jpg .jpeg .gif .webp .pdf .txt .md .csv .json .xml .yaml .yml .docx`.
+- When the user uploads a file, it appears inline (image) or as a download card (other) in the thread and is also available to you under `/workspace/group/uploads/`.
+- Be selective. Publish screenshots and reports when they help the user decide, verify, or debug. Avoid spamming the thread with low-value attachments.
 
 ### Snapshot Policy
 

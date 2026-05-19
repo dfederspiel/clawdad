@@ -252,6 +252,27 @@ Inline image display.
 { "type": "image", "src": "/api/media/group/artifacts/screenshot.png", "alt": "Screenshot" }
 ```
 
+## file
+
+Download card for non-image artifacts — PDF, CSV, JSON, TXT, MD, XML, YAML, DOCX. Use this when handing the user a generated file they should save (reports, data exports, configs).
+
+```json
+{ "type": "file", "src": "/api/media/<artifact-id>", "filename": "weekly-report.pdf", "mimeType": "application/pdf", "caption": "Q3 metrics summary" }
+```
+
+**When to use:** publish a file you saved under `/workspace/group/` (typically `/workspace/group/artifacts/`) via `mcp__nanoclaw__publish_media`. The host classifies the artifact by MIME and emits either an `image` block (for images) or a `file` block (for everything else) — you don't usually construct `file` blocks by hand, you just call `publish_media` and let the host decide.
+
+If you do construct one manually (e.g. referencing an artifact emitted earlier), the `src` must point at a `/api/media/<id>` URL — the server adds `Content-Disposition: attachment` for non-image media so the click downloads the file rather than rendering it inline.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `src` | yes | URL to the file (typically `/api/media/<artifact-id>`) |
+| `filename` | yes | Display name + suggested download name |
+| `mimeType` | no | MIME — used to pick the type badge (PDF, CSV, JSON, etc.) |
+| `caption` | no | Muted text below the card |
+
+**Supported extensions on `publish_media`:** `.png .jpg .jpeg .gif .webp .pdf .txt .md .csv .json .xml .yaml .yml .docx`. SVG is intentionally excluded.
+
 ## sound
 
 Play a notification tone inline in the message.

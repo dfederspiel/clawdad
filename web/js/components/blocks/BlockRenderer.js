@@ -11,6 +11,7 @@ import { DiffBlock } from './DiffBlock.js';
 import { FormBlock } from './FormBlock.js';
 import { SoundBlock } from './SoundBlock.js';
 import { ImageBlock } from './ImageBlock.js';
+import { FileBlock } from './FileBlock.js';
 
 const RENDERERS = {
   text: TextBlock,
@@ -26,6 +27,7 @@ const RENDERERS = {
   form: FormBlock,
   sound: SoundBlock,
   image: ImageBlock,
+  file: FileBlock,
 };
 
 export function BlockRenderer({ block, messageId, messageTimestamp, blockIndex }) {

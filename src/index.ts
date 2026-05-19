@@ -204,22 +204,40 @@ function broadcastUsage(
   }
 }
 
+// Allowed file extensions for publish_media + uploads (#146). image/svg+xml
+// is intentionally excluded — SVG embeds executable script and would let
+// an agent or a malicious upload smuggle XSS into the chat. Kept in lock-
+// step with the allowlists in src/channels/web.ts (uploads) and
+// container/agent-runner/src/ipc-mcp-stdio.ts (publish_media tool).
+const ALLOWED_MEDIA_EXTS: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.csv': 'text/csv',
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.yaml': 'application/x-yaml',
+  '.yml': 'application/x-yaml',
+  '.docx':
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+};
+
 function getMimeTypeForPath(filePath: string): string {
-  switch (path.extname(filePath).toLowerCase()) {
-    case '.png':
-      return 'image/png';
-    case '.jpg':
-    case '.jpeg':
-      return 'image/jpeg';
-    case '.gif':
-      return 'image/gif';
-    case '.webp':
-      return 'image/webp';
-    case '.pdf':
-      return 'application/pdf';
-    default:
-      return 'application/octet-stream';
-  }
+  return (
+    ALLOWED_MEDIA_EXTS[path.extname(filePath).toLowerCase()] ||
+    'application/octet-stream'
+  );
+}
+
+function classifyMediaType(mimeType: string): 'image' | 'pdf' | 'file' {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType === 'application/pdf') return 'pdf';
+  return 'file';
 }
 
 function isPathInside(parentDir: string, candidatePath: string): boolean {
@@ -3900,10 +3918,10 @@ async function main(): Promise<void> {
       }
 
       const ext = path.extname(hostPath).toLowerCase();
-      if (!['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) {
+      if (!(ext in ALLOWED_MEDIA_EXTS)) {
         logger.warn(
           { hostPath, ext },
-          'Media publish rejected: unsupported media type in phase 1',
+          'Media publish rejected: unsupported file type',
         );
         return;
       }
@@ -3914,14 +3932,15 @@ async function main(): Promise<void> {
       const destPath = path.join(mediaDir, `${artifactId}${ext}`);
       fs.copyFileSync(hostPath, destPath);
 
+      const mimeType = getMimeTypeForPath(destPath);
       const artifact: MediaArtifact = {
         id: artifactId,
         chat_jid: request.chatJid,
         thread_id: request.threadId,
         created_at: new Date().toISOString(),
         source: request.source || 'agent_browser',
-        media_type: 'image',
-        mime_type: getMimeTypeForPath(destPath),
+        media_type: classifyMediaType(mimeType),
+        mime_type: mimeType,
         path: destPath,
         agent_name: request.sender,
         caption: request.caption,
@@ -3933,11 +3952,12 @@ async function main(): Promise<void> {
         artifact,
         request.sender,
       );
+      const label = artifact.media_type === 'image' ? 'image' : 'attachment';
       broadcastProgress(request.chatJid, {
         tool: 'media',
         summary: request.threadId
-          ? 'Published image in thread'
-          : 'Published image to chat',
+          ? `Published ${label} in thread`
+          : `Published ${label} to chat`,
         timestamp: new Date().toISOString(),
       });
     },

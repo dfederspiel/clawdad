@@ -52,6 +52,7 @@ For full documentation with JSON examples and field tables: `Read references/blo
 | `action` | `buttons: [{ id, label, style?, url? }]` | Clickable buttons — open a URL, run a portal specialist, or send `[action: id]` |
 | `form` | `id`, `fields`, `title?`, `submitLabel?` | Multi-field input collection — submits send `[form: id]` |
 | `image` | `src`, `alt?` | Inline images |
+| `file` | `src`, `filename`, `mimeType?`, `caption?` | Download card for non-image artifacts (PDF, CSV, JSON, txt, docx, etc.) |
 | `sound` | `tone`, `label?` | Notification tones |
 
 ## Combining Blocks

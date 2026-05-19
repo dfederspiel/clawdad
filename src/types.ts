@@ -84,7 +84,7 @@ export interface MediaArtifact {
   thread_id?: string;
   created_at: string;
   source: 'agent_browser' | 'agent_output' | 'user_upload';
-  media_type: 'image' | 'pdf';
+  media_type: 'image' | 'pdf' | 'file';
   mime_type: string;
   path: string;
   width?: number;

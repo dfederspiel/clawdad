@@ -118,7 +118,7 @@ function formatCost(usd) {
 
 function renderToolLabel(tool) {
   if (tool === 'media') {
-    return 'image';
+    return 'attachment';
   }
   return tool || '>';
 }

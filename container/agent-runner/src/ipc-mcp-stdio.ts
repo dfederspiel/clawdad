@@ -109,19 +109,35 @@ server.tool(
   },
 );
 
+// Allowed extensions for publish_media (#146). Images render inline via
+// ImageBlock; everything else renders as a download card via FileBlock.
+// Kept in lock-step with src/index.ts ALLOWED_MEDIA_EXTS and the upload
+// allowlist in src/channels/web.ts. SVG is intentionally excluded — it
+// embeds executable script and would be an XSS vector.
+const PUBLISH_MEDIA_EXTS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp',
+  'pdf',
+  'txt', 'md', 'csv',
+  'json', 'xml', 'yaml', 'yml',
+  'docx',
+]);
+
 server.tool(
   'publish_media',
-  `Publish an image from /workspace/group/ into the web chat thread. Use this when you want the user to see a screenshot or visual artifact inline in the conversation.
+  `Publish a file from /workspace/group/ into the web chat thread. Images render inline; PDFs, text files, JSON, CSV, XML, YAML, and docx render as a download card the user can click.
 
 Important:
 - The file MUST already exist under /workspace/group/
 - This is currently intended for the web UI
-- Prefer a dedicated subdirectory like /workspace/group/artifacts/screenshots/ instead of cluttering the group root
-- For screenshots, save them under /workspace/group/artifacts/screenshots/ first, then call publish_media`,
+- Prefer a dedicated subdirectory like /workspace/group/artifacts/ instead of cluttering the group root
+- For screenshots, save them under /workspace/group/artifacts/screenshots/ first, then call publish_media
+- For generated reports / data exports, save under /workspace/group/artifacts/ then publish
+
+Supported extensions: .png .jpg .jpeg .gif .webp .pdf .txt .md .csv .json .xml .yaml .yml .docx`,
   {
-    path: z.string().describe('Absolute path to a file under /workspace/group/ (for example /workspace/group/artifacts/screenshots/debug.png).'),
+    path: z.string().describe('Absolute path to a file under /workspace/group/ (e.g. /workspace/group/artifacts/report.pdf).'),
     caption: z.string().optional().describe('Optional user-facing caption to show above the media.'),
-    alt: z.string().optional().describe('Optional alt text describing the image for accessibility and context.'),
+    alt: z.string().optional().describe('Optional alt text or description (used as the download filename for non-image artifacts).'),
     thread_id: z.string().optional().describe('Optional thread ID when publishing inside a thread.'),
   },
   async (args) => {
@@ -129,22 +145,23 @@ Important:
       return {
         content: [{
           type: 'text' as const,
-          text: 'publish_media only supports files under /workspace/group/ in phase 1.',
+          text: 'publish_media only supports files under /workspace/group/.',
         }],
         isError: true,
       };
     }
 
-    const ext = args.path.toLowerCase().match(/\.(png|jpg|jpeg|gif|webp)$/);
-    if (!ext) {
+    const extMatch = args.path.toLowerCase().match(/\.([a-z0-9]+)$/);
+    const extName = extMatch?.[1];
+    if (!extName || !PUBLISH_MEDIA_EXTS.has(extName)) {
       return {
         content: [{
           type: 'text' as const,
-          text: 'publish_media only supports image files (.png, .jpg, .jpeg, .gif, .webp) in phase 1. PDFs and other media are not yet renderable in chat.',
+          text: `publish_media doesn't support .${extName ?? '(none)'} files. Supported: ${[...PUBLISH_MEDIA_EXTS].map((e) => '.' + e).join(' ')}`,
         }],
         isError: true,
-        };
-      }
+      };
+    }
 
     publishMediaRequest({
       path: args.path,

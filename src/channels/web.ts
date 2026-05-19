@@ -448,33 +448,36 @@ export class WebChannel implements Channel {
     options?: { fileLabel?: string; agentPath?: string },
   ): string {
     const lines: string[] = [];
-    if (options?.fileLabel)
-      lines.push(`Uploaded image \`${options.fileLabel}\`.`);
+    const isImage = artifact.media_type === 'image';
+    const noun = isImage ? 'image' : 'file';
+    if (options?.fileLabel) {
+      lines.push(`Uploaded ${noun} \`${options.fileLabel}\`.`);
+    }
     if (options?.agentPath) {
       lines.push(`File available to agents at \`${options.agentPath}\`.`);
     }
     if (lines.length > 0) lines.push('');
-    lines.push(
-      ':::blocks',
-      JSON.stringify(
-        [
-          {
-            type: 'image',
-            artifactId: artifact.id,
-            src: `/api/media/${artifact.id}`,
-            alt:
-              artifact.alt ||
-              artifact.caption ||
-              options?.fileLabel ||
-              'Uploaded image',
-            caption: artifact.caption || '',
-          },
-        ],
-        null,
-        2,
-      ),
-      ':::',
-    );
+    const block = isImage
+      ? {
+          type: 'image',
+          artifactId: artifact.id,
+          src: `/api/media/${artifact.id}`,
+          alt:
+            artifact.alt ||
+            artifact.caption ||
+            options?.fileLabel ||
+            'Uploaded image',
+          caption: artifact.caption || '',
+        }
+      : {
+          type: 'file',
+          artifactId: artifact.id,
+          src: `/api/media/${artifact.id}`,
+          filename: artifact.alt || options?.fileLabel || 'file',
+          mimeType: artifact.mime_type,
+          caption: artifact.caption || '',
+        };
+    lines.push(':::blocks', JSON.stringify([block], null, 2), ':::');
     return lines.join('\n');
   }
 
@@ -636,10 +639,23 @@ export class WebChannel implements Channel {
         return this.json(res, 404, { error: 'Media not found' });
       }
 
-      res.writeHead(200, {
+      // Non-image artifacts always download — never inline-render. This is
+      // the XSS firebreak for text/html, application/xml, etc that an
+      // agent or user might upload (#146). Images stay inline so the
+      // ImageBlock can render them. Filename is the artifact alt (set to
+      // the original upload filename) or a UUID-based fallback.
+      const headers: Record<string, string> = {
         'Content-Type': artifact.mime_type,
         'Cache-Control': 'private, max-age=3600',
-      });
+      };
+      if (artifact.media_type !== 'image') {
+        const fname = (artifact.alt || `file-${artifact.id}`).replace(
+          /[^A-Za-z0-9._-]/g,
+          '_',
+        );
+        headers['Content-Disposition'] = `attachment; filename="${fname}"`;
+      }
+      res.writeHead(200, headers);
       fs.createReadStream(artifact.path).pipe(res);
       return;
     }
@@ -660,9 +676,27 @@ export class WebChannel implements Channel {
       if (!group) {
         return this.json(res, 404, { error: 'Group not registered' });
       }
-      if (!String(mime_type).startsWith('image/')) {
+      // MIME allowlist (#146). image/svg+xml is excluded — SVG can carry
+      // embedded script and would let an upload smuggle XSS into the
+      // chat. text/html stays on the allowlist because /api/media serves
+      // non-image artifacts with Content-Disposition: attachment, which
+      // forces download instead of inline render.
+      const mimeStr = String(mime_type);
+      const isAllowedMime =
+        mimeStr === 'image/svg+xml'
+          ? false
+          : mimeStr.startsWith('image/') ||
+            mimeStr.startsWith('text/') ||
+            mimeStr === 'application/json' ||
+            mimeStr === 'application/pdf' ||
+            mimeStr === 'application/xml' ||
+            mimeStr === 'application/x-yaml' ||
+            mimeStr === 'application/yaml' ||
+            mimeStr ===
+              'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      if (!isAllowedMime) {
         return this.json(res, 400, {
-          error: 'Only image uploads are supported',
+          error: `Unsupported file type: ${mimeStr || '(missing)'}.`,
         });
       }
 
@@ -671,13 +705,26 @@ export class WebChannel implements Channel {
         'image/jpeg': '.jpg',
         'image/gif': '.gif',
         'image/webp': '.webp',
+        'application/pdf': '.pdf',
+        'application/json': '.json',
+        'application/xml': '.xml',
+        'application/x-yaml': '.yaml',
+        'application/yaml': '.yaml',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+          '.docx',
+        'text/plain': '.txt',
+        'text/markdown': '.md',
+        'text/csv': '.csv',
       };
       const ext =
-        mimeToExt[String(mime_type)] ||
+        mimeToExt[mimeStr] ||
         path.extname(String(filename)).toLowerCase() ||
         '.bin';
-      if (!['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) {
-        return this.json(res, 400, { error: 'Unsupported image type' });
+      // Don't allow path traversal or hidden weirdness in the synthesized
+      // extension — anything outside the known set falls back to the
+      // filename's extension, but we still guard the result.
+      if (!/^\.[A-Za-z0-9]{1,8}$/.test(ext)) {
+        return this.json(res, 400, { error: 'Invalid file extension' });
       }
 
       let buffer: Buffer;
@@ -705,14 +752,21 @@ export class WebChannel implements Channel {
       fs.writeFileSync(agentHostPath, buffer);
       const agentPath = `/workspace/group/uploads/${agentFileName}`;
 
+      // Infer media_type from MIME for #146 — image gets the inline
+      // ImageBlock; pdf/file types render as a download card via FileBlock.
+      const mediaType: 'image' | 'pdf' | 'file' = mimeStr.startsWith('image/')
+        ? 'image'
+        : mimeStr === 'application/pdf'
+          ? 'pdf'
+          : 'file';
       const artifact: MediaArtifact = {
         id: artifactId,
         chat_jid: jid,
         thread_id: thread_id || undefined,
         created_at: new Date().toISOString(),
         source: 'user_upload',
-        media_type: 'image',
-        mime_type: String(mime_type),
+        media_type: mediaType,
+        mime_type: mimeStr,
         path: storedMediaPath,
         caption: caption || undefined,
         alt: String(filename),
