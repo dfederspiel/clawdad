@@ -12,7 +12,11 @@ import { formatDelegationResults } from './delegation/coordinator-context.js';
 import { DelegationEventBus } from './delegation/delegation-events.js';
 import { DelegationManager } from './delegation/delegation-manager.js';
 import { DelegationStore } from './delegation/delegation-store.js';
-import type { DelegationCompletionPolicy } from './delegation/types.js';
+import { resolveDelegationHistoryLimit } from './delegation/delegation-policy.js';
+import type {
+  DelegationCompletionPolicy,
+  DelegationHistoryScope,
+} from './delegation/types.js';
 import { setActiveAgentName, clearActiveAgentName } from './agent-state.js';
 import { getTriggeredAgentsForMessages } from './agent-routing.js';
 import {
@@ -844,6 +848,9 @@ async function executeAutomationActions(
             agent.runtime,
           ).delegationTimeoutMs;
           const batchId = `automation-${trace.ruleId}-${randomUUID()}`;
+          // Rule-routed one-shot: the routing note carries the intent, so
+          // only a little context is needed (#137).
+          const automationHistoryScope: DelegationHistoryScope = 'recent';
           delegationManager.delegate(
             {
               groupJid: chatJid,
@@ -856,6 +863,7 @@ async function executeAutomationActions(
               visibility: 'main_chat',
               completionPolicy: 'final_response',
               batchId,
+              historyScope: automationHistoryScope,
             },
             async (runId) => {
               const lease = beginDeliveryLease(chatJid, batchId);
@@ -871,7 +879,7 @@ async function executeAutomationActions(
                 chatJid,
                 '',
                 ASSISTANT_NAME,
-                MAX_MESSAGES_PER_PROMPT,
+                resolveDelegationHistoryLimit(automationHistoryScope),
                 true,
               );
               const conversationCtx = formatMessages(recentMessages, TIMEZONE);
@@ -1435,6 +1443,9 @@ async function processGroupMessages(
             completionPolicy: 'final_response',
             batchId,
             threadId,
+            // The prompt is the user's actual @-mention, already condensed —
+            // the callback runs it directly without re-fetching history (#137).
+            historyScope: 'recent',
           },
           async (runId) => {
             const lease = beginDeliveryLease(responseJid, batchId);
@@ -3467,6 +3478,7 @@ async function main(): Promise<void> {
       sourceAgent,
       portalTitle,
     );
+    const portalHistoryScope: DelegationHistoryScope = 'recent';
     delegationManager.delegate(
       {
         groupJid: chatJid,
@@ -3478,6 +3490,9 @@ async function main(): Promise<void> {
         completionPolicy: completionPolicy || 'retrigger_coordinator',
         batchId,
         threadId: portalThreadId,
+        // The coordinator already condensed intent into the delegation
+        // message; a few messages of context is enough (#137).
+        historyScope: portalHistoryScope,
       },
       async (runId) => {
         const lease = beginDeliveryLease(chatJid, batchId);
@@ -3495,7 +3510,7 @@ async function main(): Promise<void> {
           chatJid,
           '',
           ASSISTANT_NAME,
-          MAX_MESSAGES_PER_PROMPT,
+          resolveDelegationHistoryLimit(portalHistoryScope),
           true,
         );
         const conversationCtx = formatMessages(recentMessages, TIMEZONE);
