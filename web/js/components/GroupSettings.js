@@ -5,6 +5,50 @@ import * as api from '../api.js';
 import { groups, loadGroups, usage, deleteGroup } from '../app.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 
+// #74 Phase 4 — role-based presets that seed both tool and skill picks
+// in one click. tools/skills = null means "use role default" (clears
+// override). Picking a preset stages the edits; the user still clicks
+// Save tools / Save skills to persist.
+const AGENT_PRESETS = {
+  Coordinator: {
+    description: 'Full access — orchestrates work and delegates to specialists.',
+    tools: null,
+    skills: null,
+  },
+  Specialist: {
+    description: 'Minimal — speak to the chat and update status, nothing else.',
+    tools: [
+      'mcp__nanoclaw__send_message',
+      'mcp__nanoclaw__set_agent_status',
+    ],
+    skills: ['status'],
+  },
+  Researcher: {
+    description: 'Browse, search, and read — no shell, no writes.',
+    tools: [
+      'mcp__nanoclaw__send_message',
+      'mcp__nanoclaw__set_agent_status',
+      'WebSearch',
+      'WebFetch',
+      'Read',
+      'Glob',
+      'Grep',
+    ],
+    skills: ['agent-browser', 'rich-output', 'status'],
+  },
+  Reviewer: {
+    description: 'Read-only inspector — read files, grep, no shell or writes.',
+    tools: [
+      'mcp__nanoclaw__send_message',
+      'mcp__nanoclaw__set_agent_status',
+      'Read',
+      'Grep',
+      'Glob',
+    ],
+    skills: ['rich-output', 'status'],
+  },
+};
+
 export function GroupSettings({ group: groupProp, open, onClose }) {
   // The parent caches the group object at gear-click time and passes it as a
   // prop. After loadGroups() refreshes the `groups` signal (e.g. after saving
@@ -44,6 +88,12 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
   //   override=true + selected=[] → explicit "no tools" opt-out
   const [agentToolEdits, setAgentToolEdits] = useState({});
   const [toolsExpanded, setToolsExpanded] = useState({});
+  // Phase 3 UI completion (#74) — per-agent skill allowlist mirroring the
+  // tool picker. skillRegistry is the catalog from /api/skills; edits map
+  // mirrors agentToolEdits shape ({ override, selected[] }).
+  const [skillRegistry, setSkillRegistry] = useState([]);
+  const [agentSkillEdits, setAgentSkillEdits] = useState({});
+  const [skillsExpanded, setSkillsExpanded] = useState({});
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // { [key]: true } — keys flagged here render a transient "✓ Saved" indicator
@@ -88,6 +138,8 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
     setAgentToolEdits({});
     setToolsExpanded({});
     setToolsByRuntimeKey({});
+    setAgentSkillEdits({});
+    setSkillsExpanded({});
     // Fetch Ollama models (best-effort)
     api.getOllamaModels().then((data) => {
       setOllamaModels(data.models || []);
@@ -100,6 +152,9 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
     api.getTools().then((data) => {
       setToolRegistry(data.tools || []);
     }).catch(() => setToolRegistry([]));
+    api.getSkills().then((data) => {
+      setSkillRegistry(data.skills || []);
+    }).catch(() => setSkillRegistry([]));
     // Prefetch a runtime-filtered list per distinct agent runtime in the
     // group. Lets the picker drop the parallel source-based heuristic and
     // ask the backend authoritatively which tools each agent can invoke.
@@ -277,6 +332,80 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
     if (edit.selected.length !== persistedSelected.length) return true;
     const persistedSet = new Set(persistedSelected);
     return edit.selected.some((t) => !persistedSet.has(t));
+  }
+
+  // Stage a role preset onto both the tool and skill edit slots for an
+  // agent. Doesn't save — the user still clicks Save tools / Save skills
+  // and can tweak the selections in between. null tools/skills clears the
+  // override (back to role default).
+  function applyPresetToAgent(name, presetName) {
+    const preset = AGENT_PRESETS[presetName];
+    if (!preset) return;
+    setAgentToolEdits((prev) => ({
+      ...prev,
+      [name]: preset.tools === null
+        ? { override: false, selected: [] }
+        : { override: true, selected: [...preset.tools] },
+    }));
+    setAgentSkillEdits((prev) => ({
+      ...prev,
+      [name]: preset.skills === null
+        ? { override: false, selected: [] }
+        : { override: true, selected: [...preset.skills] },
+    }));
+    // Open both expandos so the user can see what was staged.
+    setToolsExpanded((prev) => ({ ...prev, [name]: true }));
+    setSkillsExpanded((prev) => ({ ...prev, [name]: true }));
+  }
+
+  function getAgentSkillsEdit(name) {
+    if (agentSkillEdits[name]) return agentSkillEdits[name];
+    const agent = (group.agents || []).find((a) => a.name === name);
+    const persisted = agent?.skills;
+    return {
+      override: Array.isArray(persisted),
+      selected: Array.isArray(persisted) ? [...persisted] : [],
+    };
+  }
+
+  function setAgentSkillsEdit(name, next) {
+    setAgentSkillEdits((prev) => ({ ...prev, [name]: next }));
+  }
+
+  function agentSkillsDirty(name) {
+    const edit = agentSkillEdits[name];
+    if (!edit) return false;
+    const agent = (group.agents || []).find((a) => a.name === name);
+    const persistedOverride = Array.isArray(agent?.skills);
+    if (edit.override !== persistedOverride) return true;
+    if (!edit.override) return false;
+    const persistedSelected = agent?.skills ?? [];
+    if (edit.selected.length !== persistedSelected.length) return true;
+    const persistedSet = new Set(persistedSelected);
+    return edit.selected.some((s) => !persistedSet.has(s));
+  }
+
+  async function handleSaveAgentSkills(name) {
+    if (agentBusy) return;
+    const edit = getAgentSkillsEdit(name);
+    setAgentBusy(true);
+    setAgentError('');
+    try {
+      await api.updateGroupAgent(folderName, name, {
+        skills: edit.override ? edit.selected : null,
+      });
+      await loadGroups();
+      setAgentSkillEdits((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      flashSaved(`agent:${name}:skills`);
+    } catch (err) {
+      setAgentError(err.message || 'Failed to update agent skills');
+    } finally {
+      setAgentBusy(false);
+    }
   }
 
   async function handleSaveAgentTools(name) {
@@ -666,6 +795,97 @@ export function GroupSettings({ group: groupProp, open, onClose }) {
                         </div>
                       `;
                     })()}
+                    ${(() => {
+                      const edit = getAgentSkillsEdit(agent.name);
+                      const expanded = !!skillsExpanded[agent.name];
+                      const dirty = agentSkillsDirty(agent.name);
+                      const summary = !edit.override
+                        ? `Skills: role default`
+                        : edit.selected.length === 0
+                          ? `Skills: none (explicit)`
+                          : `Skills: ${edit.selected.length} selected`;
+                      return html`
+                        <div class="mt-1.5">
+                          <button
+                            class="text-xs text-txt-muted hover:text-txt flex items-center gap-1"
+                            onClick=${() => setSkillsExpanded((prev) => ({ ...prev, [agent.name]: !prev[agent.name] }))}
+                          >
+                            <span>${expanded ? '▼' : '▶'}</span>
+                            <span>${summary}</span>
+                            ${dirty && html`<span class="text-accent">• unsaved</span>`}
+                          </button>
+                          ${expanded && html`
+                            <div class="mt-2 border border-border rounded-lg p-2 flex flex-col gap-2">
+                              <label class="flex items-center gap-2 text-xs text-txt-2">
+                                <input
+                                  type="checkbox"
+                                  checked=${edit.override}
+                                  onChange=${(e) => setAgentSkillsEdit(agent.name, {
+                                    override: e.target.checked,
+                                    selected: e.target.checked
+                                      ? (edit.selected.length > 0 ? edit.selected : skillRegistry.map((s) => s.name))
+                                      : [],
+                                  })}
+                                />
+                                <span>Override role default</span>
+                              </label>
+                              ${edit.override && html`
+                                <div class="grid grid-cols-1 gap-y-1">
+                                  ${skillRegistry.map((skill) => html`
+                                    <label class="flex items-start gap-1.5 text-xs text-txt-2" title=${skill.description}>
+                                      <input
+                                        type="checkbox"
+                                        class="mt-0.5 shrink-0"
+                                        checked=${edit.selected.includes(skill.name)}
+                                        onChange=${(e) => {
+                                          const selected = e.target.checked
+                                            ? [...edit.selected, skill.name]
+                                            : edit.selected.filter((n) => n !== skill.name);
+                                          setAgentSkillsEdit(agent.name, { override: true, selected });
+                                        }}
+                                      />
+                                      <span class="flex-1 min-w-0">
+                                        <span class="font-mono">${skill.name}</span>
+                                        ${skill.description && html`<span class="text-txt-muted"> — ${skill.description}</span>`}
+                                      </span>
+                                    </label>
+                                  `)}
+                                  ${skillRegistry.length === 0 && html`
+                                    <div class="text-[10px] text-txt-muted italic">No skills registered.</div>
+                                  `}
+                                </div>
+                              `}
+                              ${savedFlash[`agent:${agent.name}:skills`]
+                                ? html`<span class="text-xs text-green-400 self-start">✓ Saved</span>`
+                                : html`<button
+                                    class="px-2 py-1 text-xs bg-bg-3 border border-border rounded text-txt-2 hover:border-accent disabled:opacity-50 self-start"
+                                    onClick=${() => handleSaveAgentSkills(agent.name)}
+                                    disabled=${agentBusy || !dirty}
+                                  >Save skills</button>`}
+                            </div>
+                          `}
+                        </div>
+                      `;
+                    })()}
+                    <div class="mt-1.5 flex items-center gap-1.5 text-[11px] text-txt-muted">
+                      <span>Apply preset:</span>
+                      <select
+                        class="bg-bg border border-border rounded px-1 py-0.5 text-[11px] text-txt focus:outline-none focus:border-accent"
+                        value=""
+                        onChange=${(e) => {
+                          if (e.target.value) {
+                            applyPresetToAgent(agent.name, e.target.value);
+                            e.target.value = '';
+                          }
+                        }}
+                        title="Stage a tools+skills profile. You still click Save to persist."
+                      >
+                        <option value="">…</option>
+                        ${Object.entries(AGENT_PRESETS).map(([name, p]) => html`
+                          <option value=${name} title=${p.description}>${name}</option>
+                        `)}
+                      </select>
+                    </div>
                   </div>
                   <button
                     class="px-2 py-1 text-xs border border-border rounded-md text-txt-2 hover:border-red-400 hover:text-red-300 disabled:opacity-50"

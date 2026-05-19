@@ -913,7 +913,7 @@ export class WebChannel implements Channel {
         agentName,
       );
       const body = await this.readBody(req);
-      const { displayName, trigger, runtime, tools } = body as {
+      const { displayName, trigger, runtime, tools, skills } = body as {
         displayName?: string;
         trigger?: string;
         runtime?: {
@@ -924,6 +924,7 @@ export class WebChannel implements Channel {
           maxTokens?: number;
         } | null;
         tools?: string[] | null;
+        skills?: string[] | null;
       };
 
       if (!fs.existsSync(agentDir)) {
@@ -992,6 +993,39 @@ export class WebChannel implements Channel {
         } else {
           return this.json(res, 400, {
             error: 'tools must be an array of strings or null',
+          });
+        }
+      }
+
+      if (skills !== undefined) {
+        if (skills === null) {
+          delete config.skills;
+        } else if (Array.isArray(skills)) {
+          const cleanSkills = skills.filter(
+            (s: unknown): s is string => typeof s === 'string' && s.length > 0,
+          );
+          // Validate against the live skill directory so we don't persist a
+          // typo that would silently filter to zero skills at container spawn.
+          const skillsDir = path.join(process.cwd(), 'container', 'skills');
+          const known = new Set<string>(
+            fs.existsSync(skillsDir)
+              ? fs
+                  .readdirSync(skillsDir)
+                  .filter((d) =>
+                    fs.statSync(path.join(skillsDir, d)).isDirectory(),
+                  )
+              : [],
+          );
+          const unknown = cleanSkills.filter((s) => !known.has(s));
+          if (unknown.length > 0) {
+            return this.json(res, 400, {
+              error: `Skills (${unknown.join(', ')}) are not available. Known: ${[...known].join(', ') || '(none)'}.`,
+            });
+          }
+          config.skills = cleanSkills;
+        } else {
+          return this.json(res, 400, {
+            error: 'skills must be an array of strings or null',
           });
         }
       }
@@ -1161,6 +1195,39 @@ export class WebChannel implements Channel {
         });
       }
       return this.json(res, 200, { tools: listAvailableTools() });
+    }
+
+    // GET /api/skills — list available container-level skills for per-agent
+    // allowlists (#74 Phase 3 UI completion). Reads container/skills/* and
+    // pulls name + description from each SKILL.md's frontmatter so the UI
+    // can render a meaningful checklist.
+    if (method === 'GET' && url.pathname === '/api/skills') {
+      const skillsDir = path.join(process.cwd(), 'container', 'skills');
+      const skills: Array<{ name: string; description: string }> = [];
+      if (fs.existsSync(skillsDir)) {
+        for (const dir of fs.readdirSync(skillsDir)) {
+          const skillPath = path.join(skillsDir, dir);
+          if (!fs.statSync(skillPath).isDirectory()) continue;
+          const md = path.join(skillPath, 'SKILL.md');
+          if (!fs.existsSync(md)) continue;
+          // Frontmatter is YAML-ish; pull the two fields the UI needs
+          // without taking a yaml dep. SKILL.md frontmatter is validated
+          // by scripts/validate-skills.mjs so the format is stable.
+          const head = fs.readFileSync(md, 'utf-8').slice(0, 2000);
+          const fm = head.match(/^---\n([\s\S]*?)\n---/);
+          let nameVal = dir;
+          let descVal = '';
+          if (fm) {
+            const nameMatch = fm[1].match(/^name:\s*(.+)$/m);
+            const descMatch = fm[1].match(/^description:\s*(.+)$/m);
+            if (nameMatch) nameVal = nameMatch[1].trim();
+            if (descMatch) descVal = descMatch[1].trim();
+          }
+          skills.push({ name: nameVal, description: descVal });
+        }
+      }
+      skills.sort((a, b) => a.name.localeCompare(b.name));
+      return this.json(res, 200, { skills });
     }
 
     // GET /api/ollama/models — list locally available Ollama models

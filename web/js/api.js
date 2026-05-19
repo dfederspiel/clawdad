@@ -215,6 +215,7 @@ export const getTools = (runtime) => {
   const suffix = qs.length ? `?${qs.join('&')}` : '';
   return fetchJson(`/api/tools${suffix}`);
 };
+export const getSkills = () => fetchJson('/api/skills');
 export const getTranscript = (groupFolder, runId) => {
   const qs = runId != null ? `&run_id=${encodeURIComponent(runId)}` : '';
   return fetchJson(`/api/transcript?group=${encodeURIComponent(groupFolder)}${qs}`);
