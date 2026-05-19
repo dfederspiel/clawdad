@@ -88,6 +88,7 @@ import {
   getMessageById,
   getMessagesSince,
   getNewMessages,
+  getRecentScheduledTaskMessages,
   getRouterState,
   initDatabase,
   setRegisteredGroup,
@@ -101,6 +102,7 @@ import {
   setGroupSubtitle,
   storeMediaArtifact,
   storeMessage,
+  tagMessageWithTask,
   upsertBlockState,
 } from './db.js';
 import { GroupQueue, MessageCheckMode } from './group-queue.js';
@@ -1156,6 +1158,28 @@ async function processGroupMessages(
     !isThreadReply, // excludeThreaded — but include thread replies when processing a thread agent
     isMultiAgent, // keepPortalThreads — coordinators need delegation output
   );
+  // #28 — scheduled-task output floor. Forcibly include the most recent
+  // task-tagged bot messages from the last 24h, even when the sliding
+  // MAX_MESSAGES_PER_PROMPT window has already scrolled past them. Without
+  // this the agent forgets task results once a few interactive turns push
+  // them out of the cursor window, and follow-up questions about a task's
+  // findings come back about the wrong topic. Dedupe by message id against
+  // what's already in missedMessages, then merge + re-sort chronologically.
+  const SCHEDULED_TASK_FLOOR = 5;
+  const taskFloor = getRecentScheduledTaskMessages(
+    chatJid,
+    SCHEDULED_TASK_FLOOR,
+  );
+  if (taskFloor.length > 0) {
+    const existingIds = new Set(missedMessages.map((m) => m.id));
+    const supplements = taskFloor.filter((m) => !existingIds.has(m.id));
+    if (supplements.length > 0) {
+      missedMessages.unshift(...supplements);
+      missedMessages.sort((a, b) =>
+        a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0,
+      );
+    }
+  }
   // #140 — resolve quote-reply windows in place before any formatter sees
   // the messages, so the XML and structured paths both render the same
   // context. No-op when no message carries reply_to_message_id.
@@ -3203,7 +3227,7 @@ async function main(): Promise<void> {
         groupFolder,
         agentName,
       ),
-    sendMessage: async (jid, rawText) => {
+    sendMessage: async (jid, rawText, fromTaskId) => {
       const channel = findChannel(channels, jid);
       if (!channel) {
         logger.warn({ jid }, 'No channel owns JID, cannot send message');
@@ -3226,7 +3250,14 @@ async function main(): Promise<void> {
         channel.name === 'web'
           ? stripped
           : formatOutbound(stripped, channel.name as ChannelType);
-      if (text) await channel.sendMessage(jid, text);
+      if (text) {
+        const messageId = await channel.sendMessage(jid, text);
+        // Tag scheduled-task output so the next interactive turn can
+        // surface it past the sliding context window (#28).
+        if (fromTaskId && messageId) {
+          tagMessageWithTask(messageId, fromTaskId);
+        }
+      }
     },
     setTyping: async (jid, isTyping) => {
       const channel = findChannel(channels, jid);

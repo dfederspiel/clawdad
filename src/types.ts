@@ -66,6 +66,10 @@ export interface NewMessage {
   // #140: quote-reply anchor. Persisted in DB; references another message in
   // the same chat_jid. Validated at /api/send.
   reply_to_message_id?: string | null;
+  // #28: scheduled-task tag. Populated when the message was emitted by
+  // task-scheduler. Read by getRecentScheduledTaskMessages to surface
+  // task output past the sliding MAX_MESSAGES_PER_PROMPT window.
+  from_task_id?: string | null;
   // In-memory only — populated by processGroupMessages before formatMessages
   // runs. Rendered as a nested <quoted_context> block inside the message
   // element; the text variant is prepended to the structured-message content

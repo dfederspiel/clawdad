@@ -220,6 +220,20 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // #28 — tag bot messages produced by scheduled tasks so the prompt
+  // builder can always include the most recent ones, even after the
+  // sliding MAX_MESSAGES_PER_PROMPT window has scrolled past them.
+  // Without the floor, the agent forgets task output once a few
+  // interactive turns push it out of the window.
+  try {
+    database.exec(`ALTER TABLE messages ADD COLUMN from_task_id TEXT`);
+    database.exec(
+      `CREATE INDEX IF NOT EXISTS idx_messages_from_task ON messages(chat_jid, from_task_id, timestamp)`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // One-shot backfill: link pre-existing bot messages to their agent_runs row
   // by emulating what attachUsageToLastBotMessage does live — for each run in
   // chronological order, claim the most recent orphan bot message in the same
@@ -843,7 +857,7 @@ export function getMessagesSince(
   }
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, usage, run_id, reply_to_message_id
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, usage, run_id, reply_to_message_id, from_task_id
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
         ${botFilter}
@@ -857,6 +871,47 @@ export function getMessagesSince(
     ? [chatJid, sinceTimestamp, limit]
     : [chatJid, sinceTimestamp, `${botPrefix}:%`, limit];
   return db.prepare(sql).all(...params) as NewMessage[];
+}
+
+/**
+ * Tag a bot message as scheduled-task output (#28). Used by the
+ * scheduler's sendMessage wrapper so the prompt-floor query can
+ * always include the latest task results regardless of the sliding
+ * MAX_MESSAGES_PER_PROMPT window.
+ */
+export function tagMessageWithTask(messageId: string, taskId: string): void {
+  db.prepare(`UPDATE messages SET from_task_id = ? WHERE id = ?`).run(
+    taskId,
+    messageId,
+  );
+}
+
+/**
+ * Most-recent scheduled-task bot messages for a chat (#28). Used as
+ * a prompt-context floor — appended to the normal getMessagesSince
+ * window so the agent doesn't lose visibility into task output once
+ * interactive turns push it out of the cursor window.
+ */
+export function getRecentScheduledTaskMessages(
+  chatJid: string,
+  limit: number,
+  hoursAgo: number = 24,
+): NewMessage[] {
+  if (limit <= 0) return [];
+  const since = new Date(Date.now() - hoursAgo * 60 * 60 * 1000).toISOString();
+  const rows = db
+    .prepare(
+      `SELECT * FROM (
+         SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_id, usage, run_id, reply_to_message_id, from_task_id
+         FROM messages
+         WHERE chat_jid = ? AND from_task_id IS NOT NULL AND timestamp > ?
+           AND content != '' AND content IS NOT NULL
+         ORDER BY timestamp DESC
+         LIMIT ?
+       ) ORDER BY timestamp`,
+    )
+    .all(chatJid, since, limit) as NewMessage[];
+  return rows;
 }
 
 export function getLastBotMessageTimestamp(

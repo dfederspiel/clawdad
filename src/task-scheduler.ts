@@ -92,7 +92,11 @@ export interface SchedulerDependencies {
     groupFolder: string,
     agentName: string,
   ) => void;
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (
+    jid: string,
+    text: string,
+    fromTaskId?: string,
+  ) => Promise<void>;
   setTyping?: (jid: string, isTyping: boolean) => Promise<void>;
   onProgress?: (jid: string, event: ProgressEvent) => void;
   getMainChatJid?: () => string | undefined;
@@ -247,8 +251,10 @@ export async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          // Forward result to user (sendMessage handles formatting).
+          // Pass task.id so the stored row is tagged for the prompt-context
+          // floor on later interactive turns (#28).
+          await deps.sendMessage(task.chat_jid, streamedOutput.result, task.id);
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
